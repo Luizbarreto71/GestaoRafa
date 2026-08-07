@@ -5,9 +5,19 @@ import type { Request } from 'express';
 // Em produção as variáveis vêm da Vercel; local, do arquivo .env.
 dotenv.config();
 
-if (!process.env.DATABASE_URL) {
-  throw new Error(
-    'Falta a variável DATABASE_URL. Copie o .env.example para .env e cole a URL do Supabase.',
+/**
+ * Sem DATABASE_URL o sistema não funciona — mas derrubar o processo aqui
+ * faria a Vercel devolver só "FUNCTION_INVOCATION_FAILED", que não ajuda
+ * ninguém a descobrir o que houve. Em vez disso seguimos de pé e o `app.ts`
+ * responde explicando o que falta configurar.
+ */
+export const bancoConfigurado = Boolean(process.env.DATABASE_URL);
+
+if (!bancoConfigurado) {
+  console.error(
+    '[banco] DATABASE_URL não está definida. ' +
+      'Local: copie .env.example para .env. ' +
+      'Na Vercel: Settings → Environment Variables.',
   );
 }
 
@@ -18,7 +28,14 @@ const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
 
 export const db =
   globalForPrisma.prisma ??
-  new PrismaClient({ log: process.env.NODE_ENV === 'production' ? ['error'] : ['error', 'warn'] });
+  new PrismaClient({
+    log: process.env.NODE_ENV === 'production' ? ['error'] : ['error', 'warn'],
+    datasources: {
+      // Endereço inválido de propósito quando falta configuração: a conexão
+      // falha de forma controlada, sem quebrar a criação do cliente.
+      db: { url: process.env.DATABASE_URL || 'postgresql://sem-configuracao/postgres' },
+    },
+  });
 
 if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = db;
 

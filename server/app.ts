@@ -5,7 +5,7 @@ import { rotasAuth } from './auth';
 import { rotasCategorias, rotasClientes, rotasFornecedores, rotasUsuarios } from './cadastros';
 import { rota, tratarErros } from './core';
 import { rotasDashboard } from './dashboard';
-import { db } from './db';
+import { bancoConfigurado, db } from './db';
 import { rotasMovimentacoes } from './movimentacoes';
 import { rotasFotos, rotasProdutos } from './produtos';
 import { rotasRelatorios } from './relatorios';
@@ -25,13 +25,37 @@ export function createApp(): Application {
 
   app.use(helmet({ contentSecurityPolicy: false, crossOriginResourcePolicy: false }));
   app.use(compression());
-  // O limite acomoda as fotos, que chegam junto com o produto.
-  app.use(express.json({ limit: '12mb' }));
-  app.use(express.urlencoded({ extended: true }));
+
+  /**
+   * Leitura do corpo da requisição.
+   *
+   * Na Vercel o corpo já chega lido e convertido antes do Express ver a
+   * requisição. Se o `express.json()` tentar ler de novo, ele fica esperando
+   * dados que nunca vêm e a função só termina quando estoura o tempo limite
+   * — foi o que derrubava o login em produção. Por isso só analisamos o
+   * corpo quando ninguém analisou antes.
+   */
+  const lerJson = express.json({ limit: '12mb' }); // o limite acomoda as fotos
+  const lerFormulario = express.urlencoded({ extended: true });
+
+  app.use((req, res, next) => {
+    if (req.body !== undefined) return next();
+    lerJson(req, res, (erro) => (erro ? next(erro) : lerFormulario(req, res, next)));
+  });
 
   app.get(
     '/api/health',
     rota(async (_req, res) => {
+      if (!bancoConfigurado) {
+        res.status(503).json({
+          status: 'sem configuração',
+          database: 'DATABASE_URL não definida',
+          comoResolver:
+            'Vercel → Settings → Environment Variables → adicione DATABASE_URL e faça o redeploy.',
+        });
+        return;
+      }
+
       try {
         await db.$queryRaw`SELECT 1`;
         res.json({ status: 'ok', database: 'conectado' });
@@ -44,6 +68,16 @@ export function createApp(): Application {
       }
     }),
   );
+
+  // Sem banco não adianta seguir: responde algo legível em vez de quebrar.
+  app.use('/api', (_req, res, next) => {
+    if (bancoConfigurado) return next();
+    res.status(503).json({
+      error:
+        'O sistema está sem conexão com o banco: falta a variável DATABASE_URL. ' +
+        'Configure em Vercel → Settings → Environment Variables e refaça o deploy.',
+    });
+  });
 
   app.use('/api/auth', rotasAuth);
   app.use('/api/dashboard', rotasDashboard);

@@ -31,24 +31,54 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
-/** Extrai a mensagem de erro amigável enviada pela API. */
+/**
+ * Transforma qualquer erro numa frase que a pessoa consegue entender.
+ *
+ * Precisa dar conta de três formatos diferentes: o da nossa API
+ * (`{error: "texto"}`), o da Vercel quando a função quebra
+ * (`{error: {code, message}}`) e páginas de erro em HTML. Sem isso, a tela
+ * acaba mostrando "[object Object]".
+ */
 export function getErrorMessage(error: unknown): string {
-  if (axios.isAxiosError(error)) {
-    const data = error.response?.data as
-      | { error?: string; details?: { field: string; message: string }[] }
-      | undefined;
-
-    if (data?.details?.length) {
-      return data.details.map((d) => d.message).join(' · ');
-    }
-    if (data?.error) return data.error;
-    if (error.code === 'ERR_NETWORK') {
-      return 'Sem conexão com o servidor. Verifique sua internet.';
-    }
-    if (error.code === 'ECONNABORTED') return 'A requisição demorou demais. Tente novamente.';
+  if (!axios.isAxiosError(error)) {
+    return error instanceof Error ? error.message : 'Ocorreu um erro inesperado';
   }
-  if (error instanceof Error) return error.message;
-  return 'Ocorreu um erro inesperado';
+
+  const dados = error.response?.data as
+    | {
+        error?: string | { code?: string; message?: string };
+        details?: { field: string; message: string }[];
+      }
+    | string
+    | undefined;
+
+  // Falhas de validação: junta as mensagens de cada campo.
+  if (typeof dados === 'object' && dados?.details?.length) {
+    return dados.details.map((d) => d.message).filter(Boolean).join(' · ');
+  }
+
+  // Formato da nossa API.
+  if (typeof dados === 'object' && typeof dados?.error === 'string') return dados.error;
+
+  // Formato da Vercel quando a função serverless falha.
+  if (typeof dados === 'object' && dados?.error && typeof dados.error === 'object') {
+    const codigo = String(dados.error.code ?? '');
+    if (codigo.includes('TIMEOUT')) {
+      return 'O servidor demorou demais para responder. Tente novamente.';
+    }
+    return `O servidor falhou${codigo ? ` (${codigo})` : ''}. Veja os logs da Vercel.`;
+  }
+
+  if (error.code === 'ERR_NETWORK') return 'Sem conexão com o servidor. Verifique sua internet.';
+  if (error.code === 'ECONNABORTED') return 'A requisição demorou demais. Tente novamente.';
+
+  const status = error.response?.status;
+  if (status === 404) return 'Endereço da API não encontrado (404).';
+  if (status === 413) return 'Envio grande demais. Reduza as fotos e tente de novo.';
+  if (status && status >= 500) return `Erro no servidor (${status}). Veja os logs da Vercel.`;
+  if (status) return `A requisição falhou (${status}).`;
+
+  return error.message || 'Ocorreu um erro inesperado';
 }
 
 let refreshing: Promise<string | null> | null = null;
