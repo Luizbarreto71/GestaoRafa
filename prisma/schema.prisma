@@ -4,9 +4,9 @@
 generator client {
   provider      = "prisma-client-js"
   // "rhel-openssl-3.0.x" é o runtime das funções serverless da Vercel.
-  // "native" = sua máquina. Os "rhel-*" são os do servidor da Vercel —
-  // sem eles, a API sobe mas não fala com o banco.
-  binaryTargets = ["native", "rhel-openssl-3.0.x", "rhel-openssl-1.0.x"]
+  // "native" = sua máquina. "rhel-openssl-3.0.x" = servidor da Vercel
+  // (Node 22, fixado no package.json). Sem ele, a API não fala com o banco.
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
 }
 
 datasource db {

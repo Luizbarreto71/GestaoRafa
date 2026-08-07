@@ -1,4 +1,4 @@
-import { google, sheets_v4 } from 'googleapis';
+import type { sheets_v4 } from 'googleapis';
 
 /**
  * Integração opcional com o Google Sheets.
@@ -63,11 +63,18 @@ export const statusPlanilha = () => {
 let cliente: sheets_v4.Sheets | null = null;
 let cabecalhoOk = false;
 
-function conectar(): sheets_v4.Sheets | null {
+/**
+ * O `googleapis` é um pacote enorme e a integração é opcional — carregar
+ * só quando alguém realmente usa deixa a função da API bem mais leve e
+ * rápida para iniciar.
+ */
+async function conectar(): Promise<sheets_v4.Sheets | null> {
   if (!planilhaConfigurada()) return null;
   if (cliente) return cliente;
 
   const c = conf();
+  const { google } = await import('googleapis');
+
   cliente = google.sheets({
     version: 'v4',
     auth: new google.auth.JWT({
@@ -132,7 +139,7 @@ export function enviarParaPlanilha(linhas: Linha | Linha[]): void {
   if (!lista.length) return;
 
   void (async () => {
-    const sheets = conectar();
+    const sheets = await conectar();
     if (!sheets) return;
     const c = conf();
 
@@ -153,7 +160,7 @@ export function enviarParaPlanilha(linhas: Linha | Linha[]): void {
 
 /** Reescreve a planilha inteira a partir do histórico do banco. */
 export async function reescreverPlanilha(linhas: Linha[]): Promise<number> {
-  const sheets = conectar();
+  const sheets = await conectar();
   if (!sheets) throw new Error('Integração com Google Sheets não configurada');
   const c = conf();
 
