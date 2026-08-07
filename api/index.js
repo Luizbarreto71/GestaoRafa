@@ -54,6 +54,19 @@ function tratarErros(erro, _req, res, _next) {
       return;
     }
   }
+  const texto3 = erro instanceof Error ? erro.message : "";
+  if (/max clients reached|too many connections|EMAXCONN/i.test(texto3)) {
+    res.status(503).json({
+      error: "O banco atingiu o limite de conex\xF5es. Troque a DATABASE_URL para a URL do Transaction pooler (porta 6543) nas vari\xE1veis da Vercel e refa\xE7a o deploy."
+    });
+    return;
+  }
+  if (/Can't reach database server|ECONNREFUSED|ETIMEDOUT/i.test(texto3)) {
+    res.status(503).json({
+      error: "Sem conex\xE3o com o banco de dados no momento. Tente de novo em instantes."
+    });
+    return;
+  }
   console.error("[erro]", erro);
   res.status(500).json({
     error: "Erro interno do servidor",
@@ -139,15 +152,30 @@ if (!bancoConfigurado) {
 }
 var erroDoBanco = null;
 var globalForPrisma = globalThis;
+function prepararUrl(url) {
+  try {
+    const endereco = new URL(url);
+    if (!endereco.searchParams.has("connection_limit")) {
+      endereco.searchParams.set("connection_limit", "1");
+    }
+    if (!endereco.searchParams.has("pool_timeout")) {
+      endereco.searchParams.set("pool_timeout", "20");
+    }
+    if (endereco.port === "6543" && !endereco.searchParams.has("pgbouncer")) {
+      endereco.searchParams.set("pgbouncer", "true");
+    }
+    return endereco.toString();
+  } catch {
+    return url;
+  }
+}
 function criarCliente() {
+  const url = process.env.DATABASE_URL || "postgresql://sem-configuracao/postgres";
+  const endereco = process.env.VERCEL ? prepararUrl(url) : url;
   try {
     return new PrismaClient({
       log: process.env.NODE_ENV === "production" ? ["error"] : ["error", "warn"],
-      datasources: {
-        // Endereço inválido de propósito quando falta configuração: a conexão
-        // falha de forma controlada, sem quebrar a criação do cliente.
-        db: { url: process.env.DATABASE_URL || "postgresql://sem-configuracao/postgres" }
-      }
+      datasources: { db: { url: endereco } }
     });
   } catch (erro) {
     erroDoBanco = erro instanceof Error ? erro.message : String(erro);

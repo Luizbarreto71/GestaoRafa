@@ -36,15 +36,49 @@ export let erroDoBanco: string | null = null;
 // do Postgres.
 const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
 
+/**
+ * Ajusta a URL de conexão para o ambiente serverless.
+ *
+ * Por padrão o Prisma abre várias conexões por instância (proporcional aos
+ * núcleos da máquina). Na Vercel isso multiplica: cada instância da função
+ * segura o seu punhado, e o pooler do Supabase — que aceita 15 clientes em
+ * modo sessão — estoura em poucos acessos, derrubando o sistema com
+ * "max clients reached".
+ *
+ * Uma conexão por instância resolve. E no pooler de transação (porta 6543)
+ * é preciso avisar o Prisma para não usar prepared statements.
+ */
+function prepararUrl(url: string): string {
+  try {
+    const endereco = new URL(url);
+
+    if (!endereco.searchParams.has('connection_limit')) {
+      endereco.searchParams.set('connection_limit', '1');
+    }
+    if (!endereco.searchParams.has('pool_timeout')) {
+      endereco.searchParams.set('pool_timeout', '20');
+    }
+    if (endereco.port === '6543' && !endereco.searchParams.has('pgbouncer')) {
+      endereco.searchParams.set('pgbouncer', 'true');
+    }
+
+    return endereco.toString();
+  } catch {
+    return url; // URL fora do padrão: usa como veio
+  }
+}
+
 function criarCliente(): PrismaClient | null {
+  const url = process.env.DATABASE_URL || 'postgresql://sem-configuracao/postgres';
+
+  // Fora do serverless não há multiplicação de instâncias: mantemos o
+  // comportamento normal do Prisma, que é mais rápido em desenvolvimento.
+  const endereco = process.env.VERCEL ? prepararUrl(url) : url;
+
   try {
     return new PrismaClient({
       log: process.env.NODE_ENV === 'production' ? ['error'] : ['error', 'warn'],
-      datasources: {
-        // Endereço inválido de propósito quando falta configuração: a conexão
-        // falha de forma controlada, sem quebrar a criação do cliente.
-        db: { url: process.env.DATABASE_URL || 'postgresql://sem-configuracao/postgres' },
-      },
+      datasources: { db: { url: endereco } },
     });
   } catch (erro) {
     erroDoBanco = erro instanceof Error ? erro.message : String(erro);

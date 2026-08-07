@@ -56,6 +56,24 @@ export function tratarErros(erro: unknown, _req: Request, res: Response, _next: 
     }
   }
 
+  // Erros de conexão têm causa conhecida e solução objetiva: vale explicar
+  // em vez de devolver o genérico "erro interno".
+  const texto = erro instanceof Error ? erro.message : '';
+  if (/max clients reached|too many connections|EMAXCONN/i.test(texto)) {
+    res.status(503).json({
+      error:
+        'O banco atingiu o limite de conexões. Troque a DATABASE_URL para a URL do ' +
+        'Transaction pooler (porta 6543) nas variáveis da Vercel e refaça o deploy.',
+    });
+    return;
+  }
+  if (/Can't reach database server|ECONNREFUSED|ETIMEDOUT/i.test(texto)) {
+    res.status(503).json({
+      error: 'Sem conexão com o banco de dados no momento. Tente de novo em instantes.',
+    });
+    return;
+  }
+
   console.error('[erro]', erro);
   res.status(500).json({
     error: 'Erro interno do servidor',
