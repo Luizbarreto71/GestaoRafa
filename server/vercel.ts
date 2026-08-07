@@ -1,18 +1,20 @@
 import type { Application } from 'express';
 import type { IncomingMessage, ServerResponse } from 'http';
-// IMPORTANTE: este import precisa ser estático.
-//
-// É ele que faz a Vercel empacotar a pasta `server/` junto com a função.
-// Com `await import('../server/app')` o empacotador não enxerga a
-// dependência, publica só este arquivo e a função quebra em produção com
-// "Cannot find module '/var/task/server/app'".
-import { createApp } from '../server/app';
+import { createApp } from './app';
 
 /**
  * Ponto de entrada da API na Vercel.
  *
- * O `vercel.json` redireciona `/api/*` para cá; o Express recebe a URL
- * original (ex.: `/api/products`) e faz o roteamento normalmente.
+ * Este arquivo NÃO é publicado direto: o `npm run build` o empacota, junto
+ * com todo o `server/`, em `api/index.js`.
+ *
+ * O motivo é que o empacotador da Vercel não leva a pasta `server/` junto
+ * com a função — a publicação sai só com o arquivo de entrada e a função
+ * quebra com "Cannot find module". Gerando o pacote aqui, com tudo dentro,
+ * não sobra nada para ele resolver.
+ *
+ * O `vercel.json` redireciona `/api/*` para a função; o Express recebe a
+ * URL original (ex.: `/api/products`) e faz o roteamento normalmente.
  */
 let app: Application | null = null;
 let erroDeCarga: string | null = null;

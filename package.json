@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "vite",
     "dev:api": "tsx watch server/local.ts",
-    "build": "prisma generate && vite build",
+    "build": "prisma generate && vite build && npm run build:api",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.server.json",
     "postinstall": "prisma generate",
@@ -17,7 +17,8 @@
     "db:seed": "tsx prisma/seed.ts",
     "db:exemplos": "tsx prisma/seed.ts --exemplos",
     "criar-admin": "tsx prisma/criar-admin.ts",
-    "db:studio": "prisma studio"
+    "db:studio": "prisma studio",
+    "build:api": "esbuild server/vercel.ts --bundle --platform=node --target=node22 --format=esm --packages=external --outfile=api/index.js --banner:js=\"// GERADO por 'npm run build:api' a partir de server/vercel.ts — não edite à mão.\""
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
@@ -67,7 +68,8 @@
     "tailwindcss": "^3.4.16",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3",
-    "vite": "^5.4.11"
+    "vite": "^5.4.11",
+    "esbuild": "^0.24.0"
   },
   "engines": {
     "node": "22.x"
