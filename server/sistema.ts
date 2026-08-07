@@ -1,0 +1,365 @@
+import ExcelJS from 'exceljs';
+import { Router } from 'express';
+import multer from 'multer';
+import { Readable } from 'stream';
+import { autenticar, somenteAdmin } from './auth';
+import { AppError, limpar, numero, rota } from './core';
+import { db, registrarLog } from './db';
+import { linhaDaPlanilha, STATUS_LABEL, TIPO_LABEL } from './movimentacoes';
+import { enviarParaPlanilha, planilhaConfigurada, reescreverPlanilha, statusPlanilha } from './planilha';
+
+/** Importação de planilha, backup e integração com o Google Sheets. */
+
+export const rotasSistema = Router();
+rotasSistema.use(autenticar);
+
+// ---------------------------------------------------------------- Planilha
+
+rotasSistema.get(
+  '/sheets/status',
+  rota(async (_req, res) => {
+    res.json(statusPlanilha());
+  }),
+);
+
+/** Reescreve a planilha inteira a partir do histórico do banco. */
+rotasSistema.post(
+  '/sheets/sync',
+  somenteAdmin,
+  rota(async (req, res) => {
+    if (!planilhaConfigurada()) {
+      throw new AppError('Integração com Google Sheets não configurada. Preencha as variáveis GOOGLE_* no .env.');
+    }
+
+    const movimentos = await db.movement.findMany({
+      orderBy: { createdAt: 'asc' },
+      include: {
+        user: { select: { name: true } },
+        product: { include: { category: true, supplier: true } },
+      },
+    });
+
+    const total = await reescreverPlanilha(
+      movimentos.map((m) => ({
+        data: m.createdAt,
+        categoria: m.product?.category.name ?? '—',
+        produto: m.productName ?? m.product?.name ?? '—',
+        marca: m.product?.brand ?? '',
+        modelo: m.product?.model ?? '',
+        quantidade: m.quantity,
+        custo: numero(m.product?.costPrice),
+        venda: numero(m.product?.salePrice),
+        fornecedor: m.product?.supplier?.name ?? '',
+        status: m.product ? (STATUS_LABEL[m.product.status] ?? m.product.status) : 'Excluído',
+        tipo: TIPO_LABEL[m.type],
+        usuario: m.user?.name ?? '',
+      })),
+    );
+
+    await registrarLog({ acao: 'SHEETS_SYNC', entidade: 'Setting', req });
+    res.json({ message: `${total} movimentação(ões) sincronizadas com a planilha.`, synced: total });
+  }),
+);
+
+// ------------------------------------------------------------------ Backup
+
+rotasSistema.get(
+  '/backup',
+  somenteAdmin,
+  rota(async (req, res) => {
+    const [categorias, fornecedores, clientes, produtos, vendas, movimentos, usuarios] = await Promise.all([
+      db.category.findMany(),
+      db.supplier.findMany(),
+      db.customer.findMany(),
+      // As imagens ficam de fora: o backup viraria centenas de megabytes.
+      db.product.findMany(),
+      db.sale.findMany(),
+      db.movement.findMany(),
+      db.user.findMany({ select: { id: true, name: true, email: true, role: true, active: true, createdAt: true } }),
+    ]);
+
+    const backup = limpar({
+      generatedAt: new Date().toISOString(),
+      system: 'Controle Rafa Multimarcas',
+      counts: {
+        categories: categorias.length,
+        suppliers: fornecedores.length,
+        customers: clientes.length,
+        products: produtos.length,
+        sales: vendas.length,
+        movements: movimentos.length,
+        users: usuarios.length,
+      },
+      data: {
+        categories: categorias,
+        suppliers: fornecedores,
+        customers: clientes,
+        products: produtos,
+        sales: vendas,
+        movements: movimentos,
+        users: usuarios,
+      },
+    });
+
+    await registrarLog({ acao: 'BACKUP', entidade: 'Setting', req });
+
+    const carimbo = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="backup-rafa-${carimbo}.json"`);
+    res.send(JSON.stringify(backup, null, 2));
+  }),
+);
+
+// -------------------------------------------------------------- Importação
+
+const CABECALHOS = [
+  'Categoria',
+  'Nome',
+  'Marca',
+  'Modelo',
+  'Cor',
+  'Capacidade',
+  'Quantidade',
+  'Preço de Custo',
+  'Preço de Venda',
+  'Fornecedor',
+  'IMEI',
+  'Número de Série',
+  'Lote',
+  'Observações',
+];
+
+/** Cabeçalho da planilha → campo do produto. */
+const DE_PARA: Record<string, string> = {
+  categoria: 'category',
+  nome: 'name',
+  produto: 'name',
+  marca: 'brand',
+  modelo: 'model',
+  cor: 'color',
+  capacidade: 'capacity',
+  quantidade: 'quantity',
+  qtd: 'quantity',
+  'preco de custo': 'costPrice',
+  'preço de custo': 'costPrice',
+  custo: 'costPrice',
+  'preco de venda': 'salePrice',
+  'preço de venda': 'salePrice',
+  venda: 'salePrice',
+  fornecedor: 'supplier',
+  imei: 'imei',
+  'numero de serie': 'serialNumber',
+  'número de série': 'serialNumber',
+  serie: 'serialNumber',
+  lote: 'lote',
+  'lote da caixa': 'lote',
+  'codigo de barras': 'barcode',
+  'código de barras': 'barcode',
+  observacoes: 'notes',
+  observações: 'notes',
+  obs: 'notes',
+};
+
+const semAcento = (v: string) =>
+  v
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase();
+
+/** Aceita "1.234,56", "R$ 99,90" e 1234.56. */
+function paraNumero(v: unknown): number {
+  if (v === null || v === undefined || v === '') return 0;
+  if (typeof v === 'number') return v;
+  const n = Number(String(v).replace(/[R$\s]/g, '').replace(/\./g, '').replace(',', '.'));
+  return Number.isFinite(n) ? n : 0;
+}
+
+function textoDaCelula(celula: ExcelJS.Cell): string {
+  const v = celula.value;
+  if (v === null || v === undefined) return '';
+  if (typeof v === 'object' && 'text' in v) return String(v.text ?? '').trim();
+  if (typeof v === 'object' && 'result' in v) return String(v.result ?? '').trim();
+  return String(v).trim();
+}
+
+const planilhaUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024, files: 1 },
+  fileFilter: (_req, arquivo, cb) => {
+    if (!/\.(xlsx|xls|csv)$/i.test(arquivo.originalname)) {
+      return cb(new AppError('Envie um arquivo .xlsx, .xls ou .csv'));
+    }
+    cb(null, true);
+  },
+});
+
+/** Modelo de planilha para preencher. */
+rotasSistema.get(
+  '/import/template',
+  rota(async (_req, res) => {
+    const arquivo = new ExcelJS.Workbook();
+    const aba = arquivo.addWorksheet('Produtos');
+
+    aba.columns = CABECALHOS.map((h) => ({ header: h, key: h, width: 20 }));
+    aba.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    aba.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
+
+    aba.addRow([
+      'Celulares',
+      'iPhone 13',
+      'Apple',
+      '13',
+      'Meia-noite',
+      '128GB',
+      2,
+      3200,
+      4199,
+      'Distribuidora Tech SP',
+      '356938035643809',
+      '',
+      '',
+      'Exemplo — apague esta linha',
+    ]);
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename="modelo-importacao-produtos.xlsx"');
+    await arquivo.xlsx.write(res);
+    res.end();
+  }),
+);
+
+rotasSistema.post(
+  '/import/products',
+  somenteAdmin,
+  planilhaUpload.single('file'),
+  rota(async (req, res) => {
+    if (!req.file) throw new AppError('Envie a planilha no campo "file"');
+
+    const arquivo = new ExcelJS.Workbook();
+    if (req.file.originalname.toLowerCase().endsWith('.csv')) {
+      await arquivo.csv.read(Readable.from(req.file.buffer.toString('utf8')));
+    } else {
+      await arquivo.xlsx.load(req.file.buffer as unknown as ArrayBuffer);
+    }
+
+    const aba = arquivo.worksheets[0];
+    if (!aba) throw new AppError('A planilha está vazia');
+
+    // Descobre qual coluna é qual pelo cabeçalho.
+    const colunas = new Map<number, string>();
+    aba.getRow(1).eachCell((celula, indice) => {
+      const campo = DE_PARA[textoDaCelula(celula).toLowerCase().replace(/\s+/g, ' ')];
+      if (campo) colunas.set(indice, campo);
+    });
+
+    if (![...colunas.values()].includes('name')) {
+      throw new AppError('Não encontrei a coluna "Nome". Baixe o modelo e mantenha os cabeçalhos.');
+    }
+
+    const [categorias, fornecedores] = await Promise.all([
+      db.category.findMany(),
+      db.supplier.findMany(),
+    ]);
+
+    const porCategoria = new Map(categorias.map((c) => [semAcento(c.name), c]));
+    categorias.forEach((c) => porCategoria.set(semAcento(c.slug), c));
+    const porFornecedor = new Map(fornecedores.map((f) => [semAcento(f.name), f]));
+
+    const erros: { row: number; message: string }[] = [];
+    let importados = 0;
+    let processadas = 0;
+
+    for (let n = 2; n <= aba.rowCount; n += 1) {
+      const linha = aba.getRow(n);
+      const dados: Record<string, string> = {};
+      colunas.forEach((campo, indice) => {
+        dados[campo] = textoDaCelula(linha.getCell(indice));
+      });
+
+      if (!dados.name) continue; // linha em branco
+      processadas += 1;
+
+      const categoria = porCategoria.get(semAcento(dados.category ?? ''));
+      if (!categoria) {
+        erros.push({
+          row: n,
+          message: `Categoria "${dados.category || '(vazia)'}" não encontrada. Use: ${categorias.map((c) => c.name).join(', ')}`,
+        });
+        continue;
+      }
+
+      // Fornecedor que ainda não existe é criado na hora.
+      let fornecedorId: string | null = null;
+      if (dados.supplier) {
+        const chave = semAcento(dados.supplier);
+        let fornecedor = porFornecedor.get(chave);
+        if (!fornecedor) {
+          fornecedor = await db.supplier.create({ data: { name: dados.supplier.trim() } });
+          porFornecedor.set(chave, fornecedor);
+        }
+        fornecedorId = fornecedor.id;
+      }
+
+      const quantidade = Math.max(0, Math.trunc(paraNumero(dados.quantity)));
+
+      try {
+        const produto = await db.product.create({
+          data: {
+            name: dados.name,
+            brand: dados.brand || null,
+            model: dados.model || null,
+            color: dados.color || null,
+            capacity: dados.capacity || null,
+            quantity: quantidade,
+            costPrice: paraNumero(dados.costPrice),
+            salePrice: paraNumero(dados.salePrice),
+            imei: dados.imei || null,
+            serialNumber: dados.serialNumber || null,
+            lote: dados.lote || null,
+            barcode: dados.barcode || null,
+            notes: dados.notes || null,
+            categoryId: categoria.id,
+            supplierId: fornecedorId,
+          },
+          include: { category: true, supplier: true },
+        });
+
+        if (quantidade > 0) {
+          await db.movement.create({
+            data: {
+              type: 'ENTRADA',
+              quantity: quantidade,
+              balanceAfter: quantidade,
+              reason: 'Importação de planilha',
+              productId: produto.id,
+              productName: produto.name,
+              userId: req.usuario?.id ?? null,
+            },
+          });
+          enviarParaPlanilha(
+            linhaDaPlanilha(produto, 'ENTRADA', quantidade, req.usuario?.nome, quantidade),
+          );
+        }
+
+        importados += 1;
+      } catch (erro) {
+        erros.push({ row: n, message: (erro as Error).message });
+      }
+    }
+
+    await registrarLog({
+      acao: 'IMPORT',
+      entidade: 'Product',
+      alteracoes: { importados, erros: erros.length },
+      req,
+    });
+
+    res.json({
+      processed: processadas,
+      imported: importados,
+      errors: erros,
+      message: `${importados} produto(s) importados com sucesso.`,
+    });
+  }),
+);

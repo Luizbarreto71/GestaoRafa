@@ -1,0 +1,269 @@
+import { Badge } from '@/components/ui/Badge';
+import { Button } from '@/components/ui/Button';
+import { Input, Select, Textarea } from '@/components/ui/Field';
+import { Modal } from '@/components/ui/Modal';
+import { useToast } from '@/contexts/ToastContext';
+import { useCreateSale } from '@/hooks/queries';
+import { formatCurrency, PAYMENT_OPTIONS, toInputDate } from '@/lib/format';
+import type { Product } from '@/types';
+import { AlertTriangle, ShoppingCart } from 'lucide-react';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
+
+interface SaleModalProps {
+  open: boolean;
+  onClose: () => void;
+  product: Product | null;
+}
+
+interface FormState {
+  customerName: string;
+  customerPhone: string;
+  quantity: string;
+  unitPrice: string;
+  paymentMethod: string;
+  saleDate: string;
+  notes: string;
+}
+
+export function SaleModal({ open, onClose, product }: SaleModalProps) {
+  const [form, setForm] = useState<FormState>({
+    customerName: '',
+    customerPhone: '',
+    quantity: '1',
+    unitPrice: '',
+    paymentMethod: 'PIX',
+    saleDate: toInputDate(new Date()),
+    notes: '',
+  });
+  const [errors, setErrors] = useState<Partial<Record<keyof FormState, string>>>({});
+
+  const toast = useToast();
+  const createSale = useCreateSale();
+
+  useEffect(() => {
+    if (!open || !product) return;
+    setForm({
+      customerName: '',
+      customerPhone: '',
+      quantity: '1',
+      unitPrice: String(product.salePrice ?? ''),
+      paymentMethod: 'PIX',
+      saleDate: toInputDate(new Date()),
+      notes: '',
+    });
+    setErrors({});
+  }, [open, product]);
+
+  const set = (field: keyof FormState) => (value: string) => {
+    setForm((current) => ({ ...current, [field]: value }));
+    setErrors((current) => ({ ...current, [field]: undefined }));
+  };
+
+  const quantity = Number(form.quantity) || 0;
+  const unitPrice = Number(form.unitPrice) || 0;
+  const total = quantity * unitPrice;
+
+  const profit = useMemo(() => {
+    if (!product) return 0;
+    return total - Number(product.costPrice) * quantity;
+  }, [product, total, quantity]);
+
+  const remaining = (product?.quantity ?? 0) - quantity;
+
+  function validate(): boolean {
+    const next: Partial<Record<keyof FormState, string>> = {};
+
+    if (form.customerName.trim().length < 2) next.customerName = 'Informe o nome do cliente';
+    if (quantity < 1) next.quantity = 'Quantidade mínima: 1';
+    if (product && quantity > product.quantity) {
+      next.quantity = `Estoque disponível: ${product.quantity}`;
+    }
+    if (unitPrice < 0) next.unitPrice = 'Valor inválido';
+    if (!form.paymentMethod) next.paymentMethod = 'Selecione a forma de pagamento';
+
+    setErrors(next);
+    return Object.keys(next).length === 0;
+  }
+
+  async function handleSubmit(event: FormEvent) {
+    event.preventDefault();
+    if (!product || !validate()) return;
+
+    try {
+      await createSale.mutateAsync({
+        productId: product.id,
+        customerName: form.customerName.trim(),
+        customerPhone: form.customerPhone.trim() || null,
+        quantity,
+        unitPrice,
+        paymentMethod: form.paymentMethod,
+        saleDate: form.saleDate ? new Date(`${form.saleDate}T12:00:00`).toISOString() : undefined,
+        notes: form.notes.trim() || null,
+      });
+
+      toast.success(
+        'Venda registrada!',
+        `${quantity}× ${product.name} · ${formatCurrency(total)} — estoque atualizado.`,
+      );
+      onClose();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Erro ao registrar venda';
+
+      if (message === 'OFFLINE_QUEUED') {
+        toast.warning('Venda salva offline', 'Será enviada assim que a internet voltar.');
+        onClose();
+        return;
+      }
+      toast.error('Não foi possível registrar a venda', message);
+    }
+  }
+
+  if (!product) return null;
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Registrar venda"
+      description="O estoque será baixado automaticamente"
+      size="md"
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={createSale.isPending}>
+            Cancelar
+          </Button>
+          <Button
+            type="submit"
+            form="sale-form"
+            variant="success"
+            loading={createSale.isPending}
+            icon={<ShoppingCart className="h-4 w-4" />}
+          >
+            Confirmar venda
+          </Button>
+        </>
+      }
+    >
+      <form id="sale-form" onSubmit={handleSubmit} className="space-y-5">
+        {/* Produto selecionado */}
+        <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-navy-700 dark:bg-navy-800">
+          {product.photos?.[0] ? (
+            <img
+              src={product.photos[0]}
+              alt={product.name}
+              className="h-14 w-14 shrink-0 rounded-lg object-cover"
+            />
+          ) : (
+            <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-lg bg-slate-200 text-slate-400 dark:bg-navy-700">
+              <ShoppingCart className="h-5 w-5" />
+            </div>
+          )}
+
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm font-bold text-navy-900 dark:text-slate-100">{product.name}</p>
+            <p className="truncate text-xs text-slate-500 dark:text-slate-400">
+              {[product.brand, product.model, product.capacity, product.color].filter(Boolean).join(' · ')}
+            </p>
+            {product.imei && (
+              <p className="truncate text-[11px] text-slate-400">IMEI: {product.imei}</p>
+            )}
+          </div>
+
+          <Badge tone={product.quantity > 0 ? 'success' : 'danger'}>{product.quantity} em estoque</Badge>
+        </div>
+
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <Input
+            label="Cliente"
+            required
+            value={form.customerName}
+            onChange={(e) => set('customerName')(e.target.value)}
+            placeholder="Nome completo"
+            error={errors.customerName}
+            autoFocus
+          />
+          <Input
+            label="Telefone"
+            value={form.customerPhone}
+            onChange={(e) => set('customerPhone')(e.target.value)}
+            placeholder="(11) 98888-7777"
+            inputMode="tel"
+          />
+        </div>
+
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+          <Input
+            label="Quantidade"
+            required
+            type="number"
+            min={1}
+            max={product.quantity}
+            value={form.quantity}
+            onChange={(e) => set('quantity')(e.target.value)}
+            error={errors.quantity}
+          />
+          <Input
+            label="Valor unitário"
+            required
+            type="number"
+            min={0}
+            step="0.01"
+            value={form.unitPrice}
+            onChange={(e) => set('unitPrice')(e.target.value)}
+            error={errors.unitPrice}
+          />
+          <Select
+            label="Forma de pagamento"
+            required
+            value={form.paymentMethod}
+            onChange={(e) => set('paymentMethod')(e.target.value)}
+            options={PAYMENT_OPTIONS}
+            error={errors.paymentMethod}
+          />
+        </div>
+
+        <Input
+          label="Data da venda"
+          type="date"
+          value={form.saleDate}
+          onChange={(e) => set('saleDate')(e.target.value)}
+        />
+
+        {/* Resumo */}
+        <div className="rounded-xl border border-success/25 bg-success-bg/60 p-4 dark:bg-success/10">
+          <div className="flex items-end justify-between">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-success">Valor total</p>
+              <p className="text-2xl font-extrabold text-success">{formatCurrency(total)}</p>
+            </div>
+            <div className="text-right text-xs text-slate-600 dark:text-slate-400">
+              <p>
+                Lucro estimado:{' '}
+                <strong className={profit >= 0 ? 'text-success' : 'text-danger'}>
+                  {formatCurrency(profit)}
+                </strong>
+              </p>
+              <p>
+                Estoque após a venda: <strong>{Math.max(0, remaining)} un.</strong>
+              </p>
+            </div>
+          </div>
+
+          {remaining === 0 && quantity > 0 && (
+            <p className="mt-2 flex items-center gap-1.5 text-xs font-medium text-warning">
+              <AlertTriangle className="h-3.5 w-3.5" />
+              Este produto ficará sem estoque e será marcado como vendido.
+            </p>
+          )}
+        </div>
+
+        <Textarea
+          label="Observações"
+          value={form.notes}
+          onChange={(e) => set('notes')(e.target.value)}
+          placeholder="Garantia, troca, acessórios, condições combinadas…"
+        />
+      </form>
+    </Modal>
+  );
+}

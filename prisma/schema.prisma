@@ -1,0 +1,250 @@
+// Controle Rafa Multimarcas — banco de dados
+// Uma única variável de ambiente: DATABASE_URL
+
+generator client {
+  provider      = "prisma-client-js"
+  // "rhel-openssl-3.0.x" é o runtime das funções serverless da Vercel.
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ADMIN
+  OPERADOR
+}
+
+enum ProductStatus {
+  EM_ESTOQUE
+  RESERVADO
+  VENDIDO
+}
+
+enum MovementType {
+  ENTRADA
+  SAIDA
+  AJUSTE
+  EXCLUSAO
+}
+
+enum PaymentMethod {
+  PIX
+  DINHEIRO
+  DEBITO
+  CREDITO
+  TRANSFERENCIA
+}
+
+model User {
+  id        String   @id @default(uuid())
+  name      String
+  email     String   @unique
+  password  String
+  role      UserRole @default(OPERADOR)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  movements Movement[]
+  sales     Sale[]
+  auditLogs AuditLog[]
+
+  @@map("users")
+}
+
+model Category {
+  id     String  @id @default(uuid())
+  name   String  @unique
+  slug   String  @unique
+  color  String?
+  /// Quais campos aparecem no formulário desta categoria.
+  /// Editável em Configurações → Categorias.
+  campos Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  products Product[]
+
+  @@map("categories")
+}
+
+model Supplier {
+  id        String   @id @default(uuid())
+  name      String
+  phone     String?
+  email     String?
+  document  String?
+  address   String?
+  notes     String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  products Product[]
+
+  @@index([name])
+  @@map("suppliers")
+}
+
+model Customer {
+  id        String   @id @default(uuid())
+  name      String
+  phone     String?
+  email     String?
+  document  String?
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sales Sale[]
+
+  @@index([name])
+  @@index([phone])
+  @@map("customers")
+}
+
+model Product {
+  id           String        @id @default(uuid())
+  name         String
+  brand        String?
+  model        String?
+  color        String?
+  capacity     String?
+  lote         String?
+  quantity     Int           @default(0)
+  minQuantity  Int           @default(1)
+  costPrice    Decimal       @default(0) @db.Decimal(12, 2)
+  salePrice    Decimal       @default(0) @db.Decimal(12, 2)
+  imei         String?
+  serialNumber String?
+  barcode      String?
+  notes        String?
+  status       ProductStatus @default(EM_ESTOQUE)
+  entryDate    DateTime      @default(now())
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  categoryId String
+  category   Category @relation(fields: [categoryId], references: [id])
+
+  supplierId String?
+  supplier   Supplier? @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+
+  photos    ProductPhoto[]
+  sales     Sale[]
+  movements Movement[]
+
+  @@index([name])
+  @@index([brand])
+  @@index([model])
+  @@index([imei])
+  @@index([serialNumber])
+  @@index([lote])
+  @@index([status])
+  @@index([categoryId])
+  @@index([supplierId])
+  @@map("products")
+}
+
+/// A imagem fica no próprio banco — evita configurar serviço de arquivos.
+/// O navegador reduz a foto antes de enviar, então cada linha é pequena.
+model ProductPhoto {
+  id        String   @id @default(uuid())
+  data      Bytes
+  mimeType  String   @default("image/jpeg")
+  createdAt DateTime @default(now())
+
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId])
+  @@map("product_photos")
+}
+
+model Sale {
+  id            String        @id @default(uuid())
+  quantity      Int
+  unitPrice     Decimal       @db.Decimal(12, 2)
+  totalPrice    Decimal       @db.Decimal(12, 2)
+  costAtSale    Decimal       @default(0) @db.Decimal(12, 2)
+  paymentMethod PaymentMethod
+  saleDate      DateTime      @default(now())
+  notes         String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+
+  customerId String?
+  customer   Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  // Cópia dos dados do cliente no momento da venda
+  customerName  String?
+  customerPhone String?
+
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  movements Movement[]
+
+  @@index([saleDate])
+  @@index([productId])
+  @@index([customerId])
+  @@map("sales")
+}
+
+model Movement {
+  id           String       @id @default(uuid())
+  type         MovementType
+  quantity     Int
+  reason       String?
+  balanceAfter Int?
+  createdAt    DateTime     @default(now())
+
+  productId   String?
+  product     Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  productName String?
+
+  saleId String?
+  sale   Sale?   @relation(fields: [saleId], references: [id], onDelete: SetNull)
+
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([type])
+  @@index([productId])
+  @@map("movements")
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  action    String
+  entity    String
+  entityId  String?
+  changes   Json?
+  ip        String?
+  createdAt DateTime @default(now())
+
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([entity])
+  @@map("audit_logs")
+}
+
+/// Chave/valor interno — guarda, entre outras coisas, o segredo do login
+/// gerado automaticamente na primeira execução.
+model Setting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+
+  @@map("settings")
+}

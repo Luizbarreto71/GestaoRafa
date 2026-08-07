@@ -1,0 +1,16 @@
+node_modules/
+dist/
+build/
+.env
+.env.local
+.env.*.local
+*.log
+npm-debug.log*
+.DS_Store
+coverage/
+.vscode/
+.idea/
+uploads/
+.vercel
+.turbo
+google-credentials.json
