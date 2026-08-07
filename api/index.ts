@@ -1,24 +1,26 @@
 import type { Application } from 'express';
 import type { IncomingMessage, ServerResponse } from 'http';
+// IMPORTANTE: este import precisa ser estático.
+//
+// É ele que faz a Vercel empacotar a pasta `server/` junto com a função.
+// Com `await import('../server/app')` o empacotador não enxerga a
+// dependência, publica só este arquivo e a função quebra em produção com
+// "Cannot find module '/var/task/server/app'".
+import { createApp } from '../server/app';
 
 /**
  * Ponto de entrada da API na Vercel.
  *
  * O `vercel.json` redireciona `/api/*` para cá; o Express recebe a URL
  * original (ex.: `/api/products`) e faz o roteamento normalmente.
- *
- * A montagem é preguiçosa e protegida. E o diagnóstico de `/api/health`
- * mora aqui, fora do servidor — se o servidor não carregar, é justamente
- * quando mais precisamos saber o porquê.
  */
 let app: Application | null = null;
 let erroDeCarga: string | null = null;
 
-async function obterApp(): Promise<Application | null> {
+function obterApp(): Application | null {
   if (app || erroDeCarga) return app;
 
   try {
-    const { createApp } = await import('../server/app');
     app = createApp();
   } catch (erro) {
     erroDeCarga = erro instanceof Error ? (erro.stack ?? erro.message) : String(erro);
@@ -43,34 +45,26 @@ function responderJson(res: ServerResponse, status: number, corpo: unknown): voi
   res.end(JSON.stringify(corpo, null, 2));
 }
 
-export default async function handler(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const servidor = await obterApp();
-  const ehDiagnostico = (req.url ?? '').startsWith('/api/health');
+export default function handler(req: IncomingMessage, res: ServerResponse): void {
+  const servidor = obterApp();
 
-  // Servidor não carregou: só o diagnóstico tem o que dizer.
   if (!servidor) {
     responderJson(res, 503, {
       status: 'falha ao carregar',
-      problema: 'O código do servidor não pôde ser carregado nesta função.',
-      // É este texto que diz o motivo real — copie e mande junto ao pedir ajuda.
+      problema: 'O servidor não pôde ser montado nesta função.',
+      // É este texto que diz o motivo real.
       detalhe: erroDeCarga,
       ambiente: ambiente(),
-      comoResolver: [
-        'Se falar em "@prisma/client did not initialize": refaça o deploy sem cache (Deployments → ⋯ → Redeploy → desmarque "Use existing Build Cache").',
-        'Se falar em "Cannot find module": algum arquivo não foi empacotado junto com a função.',
-        'Se falar em DATABASE_URL: adicione a variável em Settings → Environment Variables.',
-      ],
     });
     return;
   }
 
-  // Carregou, mas ainda assim vale confirmar o básico no diagnóstico.
-  if (ehDiagnostico && !process.env.DATABASE_URL) {
+  if ((req.url ?? '').startsWith('/api/health') && !process.env.DATABASE_URL) {
     responderJson(res, 503, {
       status: 'sem configuração',
       problema: 'A variável DATABASE_URL não está definida nesta função.',
       comoResolver:
-        'Vercel → Settings → Environment Variables → adicione DATABASE_URL (marcando Production) → Deployments → Redeploy.',
+        'Vercel → Settings → Environment Variables → adicione DATABASE_URL (marque Production) → Deployments → Redeploy.',
       ambiente: ambiente(),
     });
     return;
