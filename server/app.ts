@@ -5,7 +5,7 @@ import { rotasAuth } from './auth';
 import { rotasCategorias, rotasClientes, rotasFornecedores, rotasUsuarios } from './cadastros';
 import { rota, tratarErros } from './core';
 import { rotasDashboard } from './dashboard';
-import { bancoConfigurado, db } from './db';
+import { bancoConfigurado, bancoIniciado, db, erroDoBanco } from './db';
 import { rotasMovimentacoes } from './movimentacoes';
 import { rotasFotos, rotasProdutos } from './produtos';
 import { rotasRelatorios } from './relatorios';
@@ -43,27 +43,55 @@ export function createApp(): Application {
     lerJson(req, res, (erro) => (erro ? next(erro) : lerFormulario(req, res, next)));
   });
 
+  /**
+   * Diagnóstico. Abrir /api/health no navegador diz exatamente o que está
+   * quebrado — sem precisar caçar nos logs da Vercel.
+   */
   app.get(
     '/api/health',
     rota(async (_req, res) => {
+      const ambiente = {
+        node: process.version,
+        plataforma: `${process.platform}-${process.arch}`,
+        producao: process.env.NODE_ENV === 'production',
+        naVercel: Boolean(process.env.VERCEL),
+      };
+
       if (!bancoConfigurado) {
         res.status(503).json({
           status: 'sem configuração',
-          database: 'DATABASE_URL não definida',
+          problema: 'A variável DATABASE_URL não está definida.',
           comoResolver:
-            'Vercel → Settings → Environment Variables → adicione DATABASE_URL e faça o redeploy.',
+            'Vercel → Settings → Environment Variables → adicione DATABASE_URL, depois Deployments → Redeploy.',
+          ambiente,
+        });
+        return;
+      }
+
+      if (!bancoIniciado) {
+        res.status(503).json({
+          status: 'falha ao iniciar',
+          problema: 'O cliente do banco (Prisma) não pôde ser criado.',
+          detalhe: erroDoBanco,
+          comoResolver:
+            'Costuma ser o motor do Prisma faltando no pacote da função. Refaça o deploy sem cache: Deployments → ⋯ → Redeploy → desmarque "Use existing Build Cache".',
+          ambiente,
         });
         return;
       }
 
       try {
         await db.$queryRaw`SELECT 1`;
-        res.json({ status: 'ok', database: 'conectado' });
+        const [produtos, usuarios] = await Promise.all([db.product.count(), db.user.count()]);
+        res.json({ status: 'ok', database: 'conectado', produtos, usuarios, ambiente });
       } catch (erro) {
         res.status(503).json({
           status: 'degradado',
-          database: 'desconectado',
-          error: (erro as Error).message,
+          problema: 'Conectou o cliente, mas a consulta ao banco falhou.',
+          detalhe: (erro as Error).message,
+          comoResolver:
+            'Confira a DATABASE_URL: use a URL do Session pooler (porta 5432) e codifique caracteres especiais da senha (@ vira %40, # vira %23).',
+          ambiente,
         });
       }
     }),

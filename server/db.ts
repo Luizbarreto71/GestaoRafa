@@ -21,23 +21,60 @@ if (!bancoConfigurado) {
   );
 }
 
+/**
+ * Motivo pelo qual o Prisma não subiu, quando é o caso.
+ *
+ * Criar o cliente pode falhar em produção — o caso clássico é o motor do
+ * Prisma não ter sido empacotado junto com a função. Se isso acontecer no
+ * carregamento do arquivo, a função morre sem mensagem. Guardando o erro,
+ * `/api/health` consegue dizer exatamente o que houve.
+ */
+export let erroDoBanco: string | null = null;
+
 // Reaproveita a conexão entre recarregamentos em dev e entre invocações da
 // função serverless — abrir conexão nova a cada requisição estoura o limite
 // do Postgres.
 const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
 
-export const db =
-  globalForPrisma.prisma ??
-  new PrismaClient({
-    log: process.env.NODE_ENV === 'production' ? ['error'] : ['error', 'warn'],
-    datasources: {
-      // Endereço inválido de propósito quando falta configuração: a conexão
-      // falha de forma controlada, sem quebrar a criação do cliente.
-      db: { url: process.env.DATABASE_URL || 'postgresql://sem-configuracao/postgres' },
-    },
-  });
+function criarCliente(): PrismaClient | null {
+  try {
+    return new PrismaClient({
+      log: process.env.NODE_ENV === 'production' ? ['error'] : ['error', 'warn'],
+      datasources: {
+        // Endereço inválido de propósito quando falta configuração: a conexão
+        // falha de forma controlada, sem quebrar a criação do cliente.
+        db: { url: process.env.DATABASE_URL || 'postgresql://sem-configuracao/postgres' },
+      },
+    });
+  } catch (erro) {
+    erroDoBanco = erro instanceof Error ? erro.message : String(erro);
+    console.error('[banco] falha ao iniciar o Prisma:', erroDoBanco);
+    return null;
+  }
+}
 
-if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = db;
+const cliente = globalForPrisma.prisma ?? criarCliente();
+
+if (cliente && process.env.NODE_ENV !== 'production') globalForPrisma.prisma = cliente;
+
+/**
+ * Quando o Prisma não sobe, qualquer uso vira um erro explicado em vez de
+ * um "undefined is not a function" perdido no meio da pilha.
+ */
+export const db: PrismaClient =
+  cliente ??
+  (new Proxy(
+    {},
+    {
+      get() {
+        throw new Error(
+          `O banco de dados não pôde ser iniciado: ${erroDoBanco ?? 'motivo desconhecido'}`,
+        );
+      },
+    },
+  ) as PrismaClient);
+
+export const bancoIniciado = cliente !== null;
 
 // ------------------------------------------------------------------ Auditoria
 
