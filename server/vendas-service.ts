@@ -33,6 +33,7 @@ export interface DadosDaVenda {
   notes?: string | null;
   /** Quem vendeu (para comissão). Pode ser o próprio caixa. */
   sellerId?: string | null;
+  sellerName?: string | null;
   /** Quem recebeu o pagamento. */
   cashierId?: string | null;
   cashierName?: string | null;
@@ -126,6 +127,16 @@ export async function registrarVenda(dados: DadosDaVenda) {
     // sem vínculo em vez de criar uma ficha vazia — um cadastro sem nome
     // suja a lista de clientes e não serve para nada depois.
     const nome = dados.customerName?.trim() || null;
+
+    // Quem vendeu: o nome digitado manda; sem ele, o do usuário escolhido.
+    let vendedorNome = dados.sellerName?.trim() || null;
+    if (!vendedorNome && dados.sellerId) {
+      const vendedor = await tx.user.findUnique({
+        where: { id: dados.sellerId },
+        select: { name: true },
+      });
+      vendedorNome = vendedor?.name ?? null;
+    }
     let clienteId = dados.customerId ?? null;
 
     if (!clienteId && (nome || dados.customerPhone || dados.customerDocument)) {
@@ -197,6 +208,10 @@ export async function registrarVenda(dados: DadosDaVenda) {
         customerPhone: dados.customerPhone ?? null,
         customerDocument: dados.customerDocument ?? null,
         sellerId: dados.sellerId ?? null,
+        // Guarda o nome também quando o vendedor tem login: relatório e
+        // fechamento continuam mostrando quem vendeu mesmo se o usuário
+        // for desativado ou apagado depois.
+        sellerName: vendedorNome,
         cashierId: dados.cashierId ?? null,
         cashRegisterId: turno?.id ?? null,
         preSaleId: dados.preSaleId ?? null,

@@ -403,10 +403,12 @@ model Sale {
   preSale   PreSale? @relation(fields: [preSaleId], references: [id], onDelete: SetNull)
 
   /// Quem vendeu (para comissão) e quem recebeu (caixa).
-  sellerId  String?
-  seller    User?   @relation("vendedor", fields: [sellerId], references: [id], onDelete: SetNull)
-  cashierId String?
-  cashier   User?   @relation("caixa", fields: [cashierId], references: [id], onDelete: SetNull)
+  sellerId   String?
+  seller     User?   @relation("vendedor", fields: [sellerId], references: [id], onDelete: SetNull)
+  /// Nome digitado no balcão, para quem vende mas não tem login.
+  sellerName String?
+  cashierId  String?
+  cashier    User?   @relation("caixa", fields: [cashierId], references: [id], onDelete: SetNull)
 
   cashRegisterId String?
   cashRegister   CashRegister? @relation(fields: [cashRegisterId], references: [id], onDelete: SetNull)

@@ -236,7 +236,7 @@ rotasCaixa.get(
       v.items.map((i) => ({
         code: v.code,
         data: dataHoraBR(v.saleDate),
-        vendedor: v.seller?.name ?? '—',
+        vendedor: v.seller?.name ?? v.sellerName ?? '—',
         cliente: v.customerName ?? '—',
         produto: i.productName ?? '—',
         imei: i.imei ?? '—',

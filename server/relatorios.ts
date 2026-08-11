@@ -200,7 +200,7 @@ rotasRelatorios.get(
         profit: total - numero(i.costPrice) * i.quantity,
         payment: PAGAMENTO_LABEL[i.sale.paymentMethod] ?? i.sale.paymentMethod,
         installments: i.sale.installments,
-        seller: i.sale.seller?.name ?? '—',
+        seller: i.sale.seller?.name ?? i.sale.sellerName ?? '—',
         cashier: i.sale.cashier?.name ?? '—',
       };
     });

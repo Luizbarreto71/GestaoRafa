@@ -162,6 +162,14 @@ const vendaSchema = z.object({
   customerId: z.string().uuid().optional().nullable(),
   /** Vendedor que atendeu, para a comissão. Vazio = o próprio caixa. */
   sellerId: z.string().uuid().optional().nullable(),
+  /**
+   * Nome digitado no balcão.
+   *
+   * Nem todo vendedor tem login: a loja tem gente no salão que nunca entra
+   * no sistema. Sem isto, a venda ficaria no nome do caixa e a comissão
+   * apontaria para a pessoa errada.
+   */
+  sellerName: z.string().trim().max(120).optional().nullable(),
   notes: z.string().trim().max(1000).optional().nullable(),
   saleDate: z.coerce.date().optional(),
 });
@@ -173,17 +181,34 @@ rotasVendas.post(
   rota(async (req, res) => {
     const dados = validar(vendaSchema, req.body);
 
+    // Quem leva a comissão.
+    //
+    // O nome digitado manda: se bate com alguém que tem login, a venda é
+    // dele; se é alguém de fora do sistema, fica sem usuário em vez de cair
+    // no colo do caixa — senão a comissão iria para quem só recebeu o
+    // dinheiro. Resolver aqui, e não na tela, evita registro contraditório.
+    let vendedorId: string | null = dados.sellerId ?? req.usuario!.id;
+
+    if (dados.sellerName?.trim()) {
+      const encontrado = await db.user.findFirst({
+        where: { name: { equals: dados.sellerName.trim(), mode: 'insensitive' } },
+        select: { id: true },
+      });
+      vendedorId = encontrado?.id ?? null;
+    }
+
     const venda = await registrarVenda({
       itens: dados.items,
       unitId: dados.unitId,
       paymentMethod: dados.paymentMethod as never,
       installments: dados.installments,
       customerName: dados.customerName,
+      sellerName: dados.sellerName,
       customerPhone: dados.customerPhone,
       customerDocument: dados.customerDocument,
       customerId: dados.customerId,
       notes: dados.notes,
-      sellerId: dados.sellerId ?? req.usuario!.id,
+      sellerId: vendedorId,
       cashierId: req.usuario!.id,
       cashierName: req.usuario!.nome,
       saleDate: dados.saleDate,

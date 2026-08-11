@@ -2923,7 +2923,7 @@ rotasRelatorios.get(
         profit: total - numero(i.costPrice) * i.quantity,
         payment: PAGAMENTO_LABEL[i.sale.paymentMethod] ?? i.sale.paymentMethod,
         installments: i.sale.installments,
-        seller: i.sale.seller?.name ?? "\u2014",
+        seller: i.sale.seller?.name ?? i.sale.sellerName ?? "\u2014",
         cashier: i.sale.cashier?.name ?? "\u2014"
       };
     });
@@ -3851,6 +3851,14 @@ async function registrarVenda(dados) {
       }
     }
     const nome = dados.customerName?.trim() || null;
+    let vendedorNome = dados.sellerName?.trim() || null;
+    if (!vendedorNome && dados.sellerId) {
+      const vendedor = await tx.user.findUnique({
+        where: { id: dados.sellerId },
+        select: { name: true }
+      });
+      vendedorNome = vendedor?.name ?? null;
+    }
     let clienteId = dados.customerId ?? null;
     if (!clienteId && (nome || dados.customerPhone || dados.customerDocument)) {
       const existente = (dados.customerPhone ? await tx.customer.findFirst({ where: { phone: dados.customerPhone } }) : null) ?? (dados.customerDocument ? await tx.customer.findFirst({ where: { document: dados.customerDocument } }) : null) ?? (nome ? await tx.customer.findFirst({ where: { name: { equals: nome, mode: "insensitive" } } }) : null);
@@ -3898,6 +3906,10 @@ async function registrarVenda(dados) {
         customerPhone: dados.customerPhone ?? null,
         customerDocument: dados.customerDocument ?? null,
         sellerId: dados.sellerId ?? null,
+        // Guarda o nome também quando o vendedor tem login: relatório e
+        // fechamento continuam mostrando quem vendeu mesmo se o usuário
+        // for desativado ou apagado depois.
+        sellerName: vendedorNome,
         cashierId: dados.cashierId ?? null,
         cashRegisterId: turno?.id ?? null,
         preSaleId: dados.preSaleId ?? null,
@@ -4126,7 +4138,7 @@ rotasCaixa.get(
       (v) => v.items.map((i) => ({
         code: v.code,
         data: dataHoraBR(v.saleDate),
-        vendedor: v.seller?.name ?? "\u2014",
+        vendedor: v.seller?.name ?? v.sellerName ?? "\u2014",
         cliente: v.customerName ?? "\u2014",
         produto: i.productName ?? "\u2014",
         imei: i.imei ?? "\u2014",
@@ -4927,6 +4939,14 @@ var vendaSchema = z11.object({
   customerId: z11.string().uuid().optional().nullable(),
   /** Vendedor que atendeu, para a comissão. Vazio = o próprio caixa. */
   sellerId: z11.string().uuid().optional().nullable(),
+  /**
+   * Nome digitado no balcão.
+   *
+   * Nem todo vendedor tem login: a loja tem gente no salão que nunca entra
+   * no sistema. Sem isto, a venda ficaria no nome do caixa e a comissão
+   * apontaria para a pessoa errada.
+   */
+  sellerName: z11.string().trim().max(120).optional().nullable(),
   notes: z11.string().trim().max(1e3).optional().nullable(),
   saleDate: z11.coerce.date().optional()
 });
@@ -4935,17 +4955,26 @@ rotasVendas.post(
   exigir("pdv"),
   rota(async (req, res) => {
     const dados = validar(vendaSchema, req.body);
+    let vendedorId = dados.sellerId ?? req.usuario.id;
+    if (dados.sellerName?.trim()) {
+      const encontrado = await db.user.findFirst({
+        where: { name: { equals: dados.sellerName.trim(), mode: "insensitive" } },
+        select: { id: true }
+      });
+      vendedorId = encontrado?.id ?? null;
+    }
     const venda = await registrarVenda({
       itens: dados.items,
       unitId: dados.unitId,
       paymentMethod: dados.paymentMethod,
       installments: dados.installments,
       customerName: dados.customerName,
+      sellerName: dados.sellerName,
       customerPhone: dados.customerPhone,
       customerDocument: dados.customerDocument,
       customerId: dados.customerId,
       notes: dados.notes,
-      sellerId: dados.sellerId ?? req.usuario.id,
+      sellerId: vendedorId,
       cashierId: req.usuario.id,
       cashierName: req.usuario.nome,
       saleDate: dados.saleDate

@@ -297,6 +297,8 @@ export interface Sale {
   seller?: { id: string; name: string } | null;
   cashier?: { id: string; name: string } | null;
   preSale?: { id: string; code: string } | null;
+  /** Nome digitado no balcão, quando o vendedor não tem login. */
+  sellerName?: string | null;
 }
 
 export interface Movement {

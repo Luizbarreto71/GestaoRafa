@@ -174,14 +174,19 @@ export default function SalesPage() {
       key: 'seller',
       header: 'Vendedor / Caixa',
       hideOnMobile: true,
-      render: (sale) => (
-        <span className="block text-sm text-slate-600 dark:text-slate-400">
-          {sale.seller?.name ?? '—'}
-          {sale.cashier && sale.cashier.name !== sale.seller?.name && (
-            <span className="block text-xs text-slate-400">caixa: {sale.cashier.name}</span>
-          )}
-        </span>
-      ),
+      render: (sale) => {
+        // Quem vendeu pode não ter login: nesse caso vale o nome digitado.
+        const vendedor = sale.seller?.name ?? sale.sellerName ?? null;
+
+        return (
+          <span className="block text-sm text-slate-600 dark:text-slate-400">
+            {vendedor ?? '—'}
+            {sale.cashier && sale.cashier.name !== vendedor && (
+              <span className="block text-xs text-slate-400">caixa: {sale.cashier.name}</span>
+            )}
+          </span>
+        );
+      },
     },
     ...(isAdmin
       ? [

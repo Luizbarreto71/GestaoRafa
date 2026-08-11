@@ -544,12 +544,18 @@ function VendaDireta() {
     unitId: '',
     paymentMethod: 'PIX',
     installments: '1',
-    sellerId: '',
+    vendedor: '',
     notes: '',
   });
 
   const unidade = form.unitId || unidades[0]?.id || '';
-  const vendedores = (usuarios?.data ?? []).filter((u) => u.role === 'VENDEDOR' || u.role === 'CAIXA');
+  // Sugestão, não restrição: quem vende no salão muitas vezes não tem login,
+  // e filtrar por perfil deixava a lista praticamente vazia.
+  const sugestoes = (usuarios?.data ?? []).map((u) => u.name).sort((a, b) => a.localeCompare(b, 'pt-BR'));
+
+  /** Liga a venda ao usuário quando o nome digitado bate com um cadastrado. */
+  const usuarioDoNome = (nome: string) =>
+    (usuarios?.data ?? []).find((u) => u.name.trim().toLowerCase() === nome.trim().toLowerCase());
 
   async function enviar(evento: FormEvent) {
     evento.preventDefault();
@@ -572,7 +578,9 @@ function VendaDireta() {
         customerName: form.customerName.trim() || null,
         customerPhone: form.customerPhone.trim() || null,
         customerDocument: form.customerDocument.trim() || null,
-        sellerId: form.sellerId || user?.id,
+        // Só o nome. Quem liga ao usuário (e à comissão) é o servidor —
+        // assim a tela não consegue gravar venda com dono contraditório.
+        sellerName: form.vendedor.trim() || null,
         notes: form.notes.trim() || null,
       });
 
@@ -649,14 +657,27 @@ function VendaDireta() {
               value={form.installments}
               onChange={(e) => setForm((f) => ({ ...f, installments: e.target.value }))}
             />
-            <Select
-              label="Vendedor"
-              value={form.sellerId}
-              onChange={(e) => setForm((f) => ({ ...f, sellerId: e.target.value }))}
-              options={vendedores.map((u) => ({ value: u.id, label: u.name }))}
-              placeholder="Eu mesmo"
-              hint="Para a comissão"
-            />
+            <div>
+              <Input
+                label="Vendedor"
+                value={form.vendedor}
+                onChange={(e) => setForm((f) => ({ ...f, vendedor: e.target.value }))}
+                placeholder={user?.name ?? 'Eu mesmo'}
+                list="vendedores-pdv"
+                hint={
+                  form.vendedor.trim()
+                    ? usuarioDoNome(form.vendedor)
+                      ? 'Vendedor cadastrado — entra na comissão dele'
+                      : 'Nome livre — fica registrado na venda'
+                    : 'Em branco = você mesmo'
+                }
+              />
+              <datalist id="vendedores-pdv">
+                {sugestoes.map((nome) => (
+                  <option key={nome} value={nome} />
+                ))}
+              </datalist>
+            </div>
           </div>
 
           <Textarea
