@@ -307,6 +307,18 @@ const finalizarSchema = z.object({
   unitId: z.string().uuid('Informe de qual unidade o produto saiu'),
   paymentMethod: z.enum(PAGAMENTOS),
   installments: z.coerce.number().int().min(1).max(24).default(1),
+  /** Pagamento dividido, igual ao do balcão. */
+  payments: z
+    .array(
+      z.object({
+        method: z.enum(PAGAMENTOS),
+        amount: z.coerce.number().min(0.01, 'Informe o valor desta forma'),
+        installments: z.coerce.number().int().min(1).max(24).default(1),
+        notes: z.string().trim().max(120).optional().nullable(),
+      }),
+    )
+    .max(6, 'No máximo 6 formas na mesma venda')
+    .optional(),
   notes: z.string().trim().max(1000).optional().nullable(),
   /** O caixa pode corrigir valor e identificadores antes de fechar. */
   items: z.array(itemSchema.extend({ id: z.string().uuid().optional() })).optional(),
@@ -351,6 +363,7 @@ rotasPreVendas.post(
       unitId: dados.unitId,
       paymentMethod: dados.paymentMethod as never,
       installments: dados.installments,
+      pagamentos: dados.payments,
       customerName: preVenda.customerName,
       customerPhone: preVenda.customerPhone,
       customerDocument: preVenda.customerDocument,

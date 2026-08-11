@@ -5,6 +5,12 @@ import { Input, Select, Textarea } from '@/components/ui/Field';
 import { Modal } from '@/components/ui/Modal';
 import { StatCard } from '@/components/ui/StatCard';
 import { CarrinhoDeItens, totalDosItens } from '@/components/vendas/CarrinhoDeItens';
+import {
+  FormasDePagamento,
+  paraApi,
+  somaDasFormas,
+  type FormaDePagamento,
+} from '@/components/vendas/FormasDePagamento';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/contexts/ToastContext';
 import { useUnit } from '@/contexts/UnitContext';
@@ -23,7 +29,7 @@ import { downloadFile } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import { DEFEITO_ROTULO, SITUACAO_IMEI_ROTULO } from '@shared/trocas';
 import { caixaService } from '@/services';
-import { formatCurrency, formatDateTime, PAYMENT_OPTIONS, PRE_SALE_LABEL } from '@/lib/format';
+import { formatCurrency, formatDateTime, PRE_SALE_LABEL } from '@/lib/format';
 import type { ItemVenda, PreSale } from '@/types';
 import {
   Ban,
@@ -267,7 +273,15 @@ function ConferenciaDaPreVenda({
 
   const [itens, setItens] = useState<ItemVenda[]>([]);
   const [confirmando, setConfirmando] = useState(false);
+  const [dividido, setDividido] = useState(false);
+  const [formas, setFormas] = useState<FormaDePagamento[]>([]);
   const [form, setForm] = useState({ unitId: '', paymentMethod: 'PIX', installments: '1', notes: '' });
+
+  // O que o cliente paga: os itens menos a troca que ele entregou.
+  const totalAReceber = Math.max(
+    0,
+    totalDosItens(itens) - Number(detalhe?.tradeIn?.valorAvaliado ?? 0),
+  );
 
   // Assume o atendimento ao abrir: evita dois caixas na mesma pré-venda.
   useEffect(() => {
@@ -292,6 +306,14 @@ function ConferenciaDaPreVenda({
   const semSaldo = itens.some((i) => i.disponivel != null && i.quantity > i.disponivel);
 
   async function confirmar() {
+    if (dividido && Math.abs(somaDasFormas(formas) - totalAReceber) >= 0.01) {
+      setConfirmando(false);
+      return toast.warning(
+        'As formas não fecham com o total',
+        'Ajuste os valores até não sobrar nem faltar.',
+      );
+    }
+
     try {
       const r = await finalizar.mutateAsync({
         id: preVenda!.id,
@@ -299,6 +321,7 @@ function ConferenciaDaPreVenda({
           unitId: form.unitId,
           paymentMethod: form.paymentMethod,
           installments: Number(form.installments) || 1,
+          payments: paraApi(dividido, formas),
           notes: form.notes.trim() || null,
           items: itens.map((i) => ({
             productId: i.productId,
@@ -453,31 +476,26 @@ function ConferenciaDaPreVenda({
             </p>
           )}
 
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-            <Select
-              label="Unidade de saída"
-              required
-              value={form.unitId}
-              onChange={(e) => setForm((f) => ({ ...f, unitId: e.target.value }))}
-              options={unidades.map((u) => ({ value: u.id, label: u.name }))}
-              hint="De onde o produto sai"
-            />
-            <Select
-              label="Forma de pagamento"
-              required
-              value={form.paymentMethod}
-              onChange={(e) => setForm((f) => ({ ...f, paymentMethod: e.target.value }))}
-              options={PAYMENT_OPTIONS}
-            />
-            <Input
-              label="Parcelas"
-              type="number"
-              min={1}
-              max={24}
-              value={form.installments}
-              onChange={(e) => setForm((f) => ({ ...f, installments: e.target.value }))}
-            />
-          </div>
+          <Select
+            label="Unidade de saída"
+            required
+            value={form.unitId}
+            onChange={(e) => setForm((f) => ({ ...f, unitId: e.target.value }))}
+            options={unidades.map((u) => ({ value: u.id, label: u.name }))}
+            hint="De onde o produto sai"
+          />
+
+          <FormasDePagamento
+            dividido={dividido}
+            aoDividir={setDividido}
+            formas={formas}
+            aoMudarFormas={setFormas}
+            formaUnica={form.paymentMethod}
+            aoMudarFormaUnica={(v) => setForm((f) => ({ ...f, paymentMethod: v }))}
+            parcelas={form.installments}
+            aoMudarParcelas={(v) => setForm((f) => ({ ...f, installments: v }))}
+            total={totalAReceber}
+          />
 
           <Textarea
             label="Observação"
@@ -537,6 +555,8 @@ function VendaDireta() {
   const { data: usuarios } = useUsers({ pageSize: 100 }, true);
 
   const [itens, setItens] = useState<ItemVenda[]>([]);
+  const [dividido, setDividido] = useState(false);
+  const [formas, setFormas] = useState<FormaDePagamento[]>([]);
   const [form, setForm] = useState({
     customerName: '',
     customerPhone: '',
@@ -549,6 +569,7 @@ function VendaDireta() {
   });
 
   const unidade = form.unitId || unidades[0]?.id || '';
+  const total = totalDosItens(itens);
   // Sugestão, não restrição: quem vende no salão muitas vezes não tem login,
   // e filtrar por perfil deixava a lista praticamente vazia.
   const sugestoes = (usuarios?.data ?? []).map((u) => u.name).sort((a, b) => a.localeCompare(b, 'pt-BR'));
@@ -563,6 +584,13 @@ function VendaDireta() {
     // se identificar, e a fila anda.
     if (!itens.length) return toast.warning('Adicione ao menos um produto');
 
+    if (dividido && Math.abs(somaDasFormas(formas) - total) >= 0.01) {
+      return toast.warning(
+        'As formas não fecham com o total',
+        'Ajuste os valores até não sobrar nem faltar.',
+      );
+    }
+
     try {
       await criar.mutateAsync({
         items: itens.map((i) => ({
@@ -575,6 +603,7 @@ function VendaDireta() {
         unitId: unidade,
         paymentMethod: form.paymentMethod,
         installments: Number(form.installments) || 1,
+        payments: paraApi(dividido, formas),
         customerName: form.customerName.trim() || null,
         customerPhone: form.customerPhone.trim() || null,
         customerDocument: form.customerDocument.trim() || null,
@@ -587,6 +616,8 @@ function VendaDireta() {
       toast.success('Venda registrada', 'Estoque atualizado e movimentação gerada.');
       setItens([]);
       setForm((f) => ({ ...f, customerName: '', customerPhone: '', customerDocument: '', notes: '' }));
+      setDividido(false);
+      setFormas([]);
     } catch (erro) {
       const m = erro instanceof Error ? erro.message : 'Erro ao registrar';
       if (m === 'OFFLINE_QUEUED') {
@@ -634,28 +665,25 @@ function VendaDireta() {
 
           <CarrinhoDeItens itens={itens} aoMudar={setItens} unidadeId={unidade} />
 
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
+          <FormasDePagamento
+            dividido={dividido}
+            aoDividir={setDividido}
+            formas={formas}
+            aoMudarFormas={setFormas}
+            formaUnica={form.paymentMethod}
+            aoMudarFormaUnica={(v) => setForm((f) => ({ ...f, paymentMethod: v }))}
+            parcelas={form.installments}
+            aoMudarParcelas={(v) => setForm((f) => ({ ...f, installments: v }))}
+            total={total}
+          />
+
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <Select
               label="Unidade de saída"
               required
               value={unidade}
               onChange={(e) => setForm((f) => ({ ...f, unitId: e.target.value }))}
               options={unidades.map((u) => ({ value: u.id, label: u.name }))}
-            />
-            <Select
-              label="Forma de pagamento"
-              required
-              value={form.paymentMethod}
-              onChange={(e) => setForm((f) => ({ ...f, paymentMethod: e.target.value }))}
-              options={PAYMENT_OPTIONS}
-            />
-            <Input
-              label="Parcelas"
-              type="number"
-              min={1}
-              max={24}
-              value={form.installments}
-              onChange={(e) => setForm((f) => ({ ...f, installments: e.target.value }))}
             />
             <div>
               <Input
@@ -767,6 +795,14 @@ function Fechamento() {
           }
         />
         <CardBody className="space-y-2">
+          {/* Número de caixa errado sem aviso é pior que caixa sem número. */}
+          {Boolean(resumo.divergencia) && (
+            <p className="rounded-lg bg-danger-bg px-3 py-2 text-sm font-semibold text-danger dark:bg-danger/15">
+              As formas de pagamento não somam o total do turno — diferença de{' '}
+              {formatCurrency(Math.abs(resumo.divergencia))}. Avise o administrador antes de fechar.
+            </p>
+          )}
+
           {resumo.porPagamento.map((p) => (
             <div
               key={p.forma}

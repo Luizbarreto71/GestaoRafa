@@ -36,6 +36,7 @@ const COM_TUDO = {
   seller: { select: { id: true, name: true } },
   cashier: { select: { id: true, name: true } },
   preSale: { select: { id: true, code: true } },
+  payments: { orderBy: { amount: 'desc' } as const },
 } satisfies Prisma.SaleInclude;
 
 const filtrosSchema = z.object({
@@ -150,6 +151,23 @@ const vendaSchema = z.object({
   paymentMethod: z.enum(PAGAMENTOS),
   installments: z.coerce.number().int().min(1).max(24).default(1),
   /**
+   * Pagamento dividido: parte no PIX, parte no cartão, e por aí.
+   *
+   * Vazio = a venda inteira em `paymentMethod`. A soma tem de fechar com
+   * o total, e isso é conferido dentro da transação.
+   */
+  payments: z
+    .array(
+      z.object({
+        method: z.enum(PAGAMENTOS),
+        amount: z.coerce.number().min(0.01, 'Informe o valor desta forma'),
+        installments: z.coerce.number().int().min(1).max(24).default(1),
+        notes: z.string().trim().max(120).optional().nullable(),
+      }),
+    )
+    .max(6, 'No máximo 6 formas na mesma venda')
+    .optional(),
+  /**
    * Opcional na venda de balcão.
    *
    * No caixa a fila anda, e exigir nome e CPF de quem paga R$ 60 num cabo
@@ -202,6 +220,7 @@ rotasVendas.post(
       unitId: dados.unitId,
       paymentMethod: dados.paymentMethod as never,
       installments: dados.installments,
+      pagamentos: dados.payments,
       customerName: dados.customerName,
       sellerName: dados.sellerName,
       customerPhone: dados.customerPhone,

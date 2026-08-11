@@ -26,6 +26,13 @@ export interface DadosDaVenda {
   unitId: string;
   paymentMethod: PaymentMethod;
   installments?: number;
+  /**
+   * Rateio quando o cliente paga de mais de um jeito.
+   *
+   * Vazio = a venda inteira na forma acima. Quem chama não precisa montar
+   * a lista para o caso comum.
+   */
+  pagamentos?: { method: PaymentMethod; amount: number; installments?: number; notes?: string | null }[];
   customerName?: string | null;
   customerPhone?: string | null;
   customerDocument?: string | null;
@@ -128,6 +135,7 @@ export async function registrarVenda(dados: DadosDaVenda) {
     // suja a lista de clientes e não serve para nada depois.
     const nome = dados.customerName?.trim() || null;
 
+
     // Quem vendeu: o nome digitado manda; sem ele, o do usuário escolhido.
     let vendedorNome = dados.sellerName?.trim() || null;
     if (!vendedorNome && dados.sellerId) {
@@ -185,6 +193,37 @@ export async function registrarVenda(dados: DadosDaVenda) {
       new Prisma.Decimal(0),
     );
 
+    // Toda venda guarda o rateio, mesmo com forma única: o fechamento soma
+    // sempre da mesma tabela, sem caso especial.
+    const rateio = dados.pagamentos?.length
+      ? dados.pagamentos.map((p) => ({
+          method: p.method,
+          amount: new Prisma.Decimal(p.amount),
+          installments: p.installments ?? 1,
+          notes: p.notes?.trim() || null,
+        }))
+      : [
+          {
+            method: dados.paymentMethod,
+            amount: total,
+            installments: dados.installments ?? 1,
+            notes: null,
+          },
+        ];
+
+    const somaDoRateio = rateio.reduce((s, p) => s.add(p.amount), new Prisma.Decimal(0));
+    if (!somaDoRateio.equals(total)) {
+      throw new AppError(
+        `As formas de pagamento somam R$ ${somaDoRateio.toFixed(2)}, mas a venda é de R$ ${total.toFixed(2)}.`,
+      );
+    }
+
+    // A forma "principal" é a de maior valor: é ela que aparece nas telas
+    // que mostram uma só.
+    const formaPrincipal = rateio.reduce((maior, p) =>
+      p.amount.greaterThan(maior.amount) ? p : maior,
+    ).method;
+
     // Vincula ao turno de caixa aberto, se houver.
     const turno = dados.cashierId
       ? await tx.cashRegister.findFirst({
@@ -198,8 +237,11 @@ export async function registrarVenda(dados: DadosDaVenda) {
         code: await proximoCodigo('venda', 'VD', tx),
         totalAmount: total,
         costAmount: custo,
-        paymentMethod: dados.paymentMethod,
+        // A forma "principal" continua na venda para as telas simples: é a
+        // de maior valor quando o pagamento foi dividido.
+        paymentMethod: formaPrincipal,
         installments: dados.installments ?? 1,
+        payments: { create: rateio },
         saleDate: dados.saleDate ?? new Date(),
         notes: dados.notes ?? null,
         unitId: dados.unitId,

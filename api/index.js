@@ -3887,6 +3887,28 @@ async function registrarVenda(dados) {
       (soma, i) => soma.add(i.costPrice.mul(i.quantity)),
       new Prisma3.Decimal(0)
     );
+    const rateio = dados.pagamentos?.length ? dados.pagamentos.map((p) => ({
+      method: p.method,
+      amount: new Prisma3.Decimal(p.amount),
+      installments: p.installments ?? 1,
+      notes: p.notes?.trim() || null
+    })) : [
+      {
+        method: dados.paymentMethod,
+        amount: total,
+        installments: dados.installments ?? 1,
+        notes: null
+      }
+    ];
+    const somaDoRateio = rateio.reduce((s, p) => s.add(p.amount), new Prisma3.Decimal(0));
+    if (!somaDoRateio.equals(total)) {
+      throw new AppError(
+        `As formas de pagamento somam R$ ${somaDoRateio.toFixed(2)}, mas a venda \xE9 de R$ ${total.toFixed(2)}.`
+      );
+    }
+    const formaPrincipal = rateio.reduce(
+      (maior, p) => p.amount.greaterThan(maior.amount) ? p : maior
+    ).method;
     const turno = dados.cashierId ? await tx.cashRegister.findFirst({
       where: { cashierId: dados.cashierId, status: "ABERTO" },
       orderBy: { openedAt: "desc" }
@@ -3896,8 +3918,11 @@ async function registrarVenda(dados) {
         code: await proximoCodigo("venda", "VD", tx),
         totalAmount: total,
         costAmount: custo,
-        paymentMethod: dados.paymentMethod,
+        // A forma "principal" continua na venda para as telas simples: é a
+        // de maior valor quando o pagamento foi dividido.
+        paymentMethod: formaPrincipal,
         installments: dados.installments ?? 1,
+        payments: { create: rateio },
         saleDate: dados.saleDate ?? /* @__PURE__ */ new Date(),
         notes: dados.notes ?? null,
         unitId: dados.unitId,
@@ -3974,23 +3999,40 @@ var PAGAMENTO_LABEL2 = {
 async function resumoDoTurno(where) {
   const [vendas, porPagamento, itens] = await Promise.all([
     db.sale.aggregate({ where, _sum: { totalAmount: true, costAmount: true }, _count: true }),
-    db.sale.groupBy({ by: ["paymentMethod"], where, _sum: { totalAmount: true }, _count: true }),
+    // Soma pelo rateio, não pela venda: com pagamento dividido, jogar o
+    // total inteiro na forma "principal" faria a gaveta não bater com o
+    // extrato da maquininha no fim do dia.
+    db.salePayment.groupBy({
+      by: ["method"],
+      where: { sale: where },
+      _sum: { amount: true },
+      _count: true
+    }),
     db.saleItem.aggregate({ where: { sale: where }, _sum: { quantity: true } })
   ]);
   const total = numero(vendas._sum.totalAmount);
+  const somaDasFormas = porPagamento.reduce((s, p) => s + numero(p._sum.amount), 0);
   return {
     quantidadeDeVendas: vendas._count,
     itensVendidos: itens._sum.quantity ?? 0,
     total,
     lucro: total - numero(vendas._sum.costAmount),
     ticketMedio: vendas._count ? total / vendas._count : 0,
+    /**
+     * Diferença entre o total do turno e a soma das formas.
+     *
+     * Deve ser sempre zero. Se não for, alguma venda ficou sem rateio, e é
+     * melhor a tela dizer isso do que apresentar uma quebra de caixa que
+     * não existe.
+     */
+    divergencia: Math.abs(total - somaDasFormas) < 0.01 ? 0 : total - somaDasFormas,
     porPagamento: Object.keys(PAGAMENTO_LABEL2).map((forma) => {
-      const linha = porPagamento.find((p) => p.paymentMethod === forma);
+      const linha = porPagamento.find((p) => p.method === forma);
       return {
         forma,
         rotulo: PAGAMENTO_LABEL2[forma],
         quantidade: linha?._count ?? 0,
-        total: numero(linha?._sum.totalAmount)
+        total: numero(linha?._sum.amount)
       };
     })
   };
@@ -4405,6 +4447,15 @@ var finalizarSchema = z9.object({
   unitId: z9.string().uuid("Informe de qual unidade o produto saiu"),
   paymentMethod: z9.enum(PAGAMENTOS),
   installments: z9.coerce.number().int().min(1).max(24).default(1),
+  /** Pagamento dividido, igual ao do balcão. */
+  payments: z9.array(
+    z9.object({
+      method: z9.enum(PAGAMENTOS),
+      amount: z9.coerce.number().min(0.01, "Informe o valor desta forma"),
+      installments: z9.coerce.number().int().min(1).max(24).default(1),
+      notes: z9.string().trim().max(120).optional().nullable()
+    })
+  ).max(6, "No m\xE1ximo 6 formas na mesma venda").optional(),
   notes: z9.string().trim().max(1e3).optional().nullable(),
   /** O caixa pode corrigir valor e identificadores antes de fechar. */
   items: z9.array(itemSchema.extend({ id: z9.string().uuid().optional() })).optional()
@@ -4438,6 +4489,7 @@ rotasPreVendas.post(
       unitId: dados.unitId,
       paymentMethod: dados.paymentMethod,
       installments: dados.installments,
+      pagamentos: dados.payments,
       customerName: preVenda.customerName,
       customerPhone: preVenda.customerPhone,
       customerDocument: preVenda.customerDocument,
@@ -4829,7 +4881,8 @@ var COM_TUDO3 = {
   unit: { select: { id: true, name: true } },
   seller: { select: { id: true, name: true } },
   cashier: { select: { id: true, name: true } },
-  preSale: { select: { id: true, code: true } }
+  preSale: { select: { id: true, code: true } },
+  payments: { orderBy: { amount: "desc" } }
 };
 var filtrosSchema2 = z11.object({
   page: z11.coerce.number().int().min(1).optional(),
@@ -4927,6 +4980,20 @@ var vendaSchema = z11.object({
   paymentMethod: z11.enum(PAGAMENTOS2),
   installments: z11.coerce.number().int().min(1).max(24).default(1),
   /**
+   * Pagamento dividido: parte no PIX, parte no cartão, e por aí.
+   *
+   * Vazio = a venda inteira em `paymentMethod`. A soma tem de fechar com
+   * o total, e isso é conferido dentro da transação.
+   */
+  payments: z11.array(
+    z11.object({
+      method: z11.enum(PAGAMENTOS2),
+      amount: z11.coerce.number().min(0.01, "Informe o valor desta forma"),
+      installments: z11.coerce.number().int().min(1).max(24).default(1),
+      notes: z11.string().trim().max(120).optional().nullable()
+    })
+  ).max(6, "No m\xE1ximo 6 formas na mesma venda").optional(),
+  /**
    * Opcional na venda de balcão.
    *
    * No caixa a fila anda, e exigir nome e CPF de quem paga R$ 60 num cabo
@@ -4968,6 +5035,7 @@ rotasVendas.post(
       unitId: dados.unitId,
       paymentMethod: dados.paymentMethod,
       installments: dados.installments,
+      pagamentos: dados.payments,
       customerName: dados.customerName,
       sellerName: dados.sellerName,
       customerPhone: dados.customerPhone,

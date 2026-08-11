@@ -40,11 +40,20 @@ const PAGAMENTO_LABEL: Record<PaymentMethod, string> = {
 async function resumoDoTurno(where: Prisma.SaleWhereInput) {
   const [vendas, porPagamento, itens] = await Promise.all([
     db.sale.aggregate({ where, _sum: { totalAmount: true, costAmount: true }, _count: true }),
-    db.sale.groupBy({ by: ['paymentMethod'], where, _sum: { totalAmount: true }, _count: true }),
+    // Soma pelo rateio, não pela venda: com pagamento dividido, jogar o
+    // total inteiro na forma "principal" faria a gaveta não bater com o
+    // extrato da maquininha no fim do dia.
+    db.salePayment.groupBy({
+      by: ['method'],
+      where: { sale: where },
+      _sum: { amount: true },
+      _count: true,
+    }),
     db.saleItem.aggregate({ where: { sale: where }, _sum: { quantity: true } }),
   ]);
 
   const total = numero(vendas._sum.totalAmount);
+  const somaDasFormas = porPagamento.reduce((s, p) => s + numero(p._sum.amount), 0);
 
   return {
     quantidadeDeVendas: vendas._count,
@@ -52,13 +61,21 @@ async function resumoDoTurno(where: Prisma.SaleWhereInput) {
     total,
     lucro: total - numero(vendas._sum.costAmount),
     ticketMedio: vendas._count ? total / vendas._count : 0,
+    /**
+     * Diferença entre o total do turno e a soma das formas.
+     *
+     * Deve ser sempre zero. Se não for, alguma venda ficou sem rateio, e é
+     * melhor a tela dizer isso do que apresentar uma quebra de caixa que
+     * não existe.
+     */
+    divergencia: Math.abs(total - somaDasFormas) < 0.01 ? 0 : total - somaDasFormas,
     porPagamento: (Object.keys(PAGAMENTO_LABEL) as PaymentMethod[]).map((forma) => {
-      const linha = porPagamento.find((p) => p.paymentMethod === forma);
+      const linha = porPagamento.find((p) => p.method === forma);
       return {
         forma,
         rotulo: PAGAMENTO_LABEL[forma],
         quantidade: linha?._count ?? 0,
-        total: numero(linha?._sum.totalAmount),
+        total: numero(linha?._sum.amount),
       };
     }),
   };

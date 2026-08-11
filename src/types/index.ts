@@ -275,6 +275,8 @@ export interface ResumoDoCaixa {
   total: number;
   lucro: number;
   ticketMedio: number;
+  /** Diferença entre o total do turno e a soma das formas. Zero = tudo certo. */
+  divergencia: number;
   porPagamento: { forma: PaymentMethod; rotulo: string; quantidade: number; total: number }[];
 }
 
@@ -299,6 +301,14 @@ export interface Sale {
   preSale?: { id: string; code: string } | null;
   /** Nome digitado no balcão, quando o vendedor não tem login. */
   sellerName?: string | null;
+  /** Rateio quando o cliente pagou de mais de um jeito. */
+  payments?: {
+    id: string;
+    method: PaymentMethod;
+    amount: number;
+    installments: number;
+    notes?: string | null;
+  }[];
 }
 
 export interface Movement {

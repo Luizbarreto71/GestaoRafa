@@ -430,6 +430,7 @@ model Sale {
   commissionAmount Decimal? @db.Decimal(12, 2)
 
   items     SaleItem[]
+  payments  SalePayment[]
   tradeIn   TradeIn?
   movements StockMovement[]
 
@@ -442,6 +443,29 @@ model Sale {
 }
 
 /// Cada produto dentro de uma venda.
+/// Uma das formas de pagamento de uma venda.
+///
+/// Existe sempre — inclusive quando a venda tem forma única. Assim o
+/// fechamento do caixa soma por aqui e nunca precisa decidir se olha a
+/// venda ou o rateio.
+model SalePayment {
+  id           String        @id @default(uuid())
+  method       PaymentMethod
+  amount       Decimal       @db.Decimal(12, 2)
+  installments Int           @default(1)
+  /// Bandeira, número da maquininha, quem transferiu…
+  notes        String?
+
+  saleId String
+  sale   Sale   @relation(fields: [saleId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([saleId])
+  @@index([method])
+  @@map("sale_payments")
+}
+
 model SaleItem {
   id       String @id @default(uuid())
   quantity Int

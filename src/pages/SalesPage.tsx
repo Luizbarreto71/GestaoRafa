@@ -168,7 +168,27 @@ export default function SalesPage() {
     {
       key: 'payment',
       header: 'Pagamento',
-      render: (sale) => <PaymentBadge method={sale.paymentMethod} />,
+      render: (sale) => {
+        // Mostrar só a forma principal esconderia metade do dinheiro de
+        // uma venda dividida — quem confere a maquininha precisa ver tudo.
+        const divididas = (sale.payments ?? []).length > 1;
+
+        if (!divididas) return <PaymentBadge method={sale.paymentMethod} />;
+
+        return (
+          <div className="space-y-1">
+            {sale.payments!.map((p) => (
+              <div key={p.id} className="flex items-center gap-1.5">
+                <PaymentBadge method={p.method} />
+                <span className="text-xs font-medium text-slate-600 dark:text-slate-400">
+                  {formatCurrency(p.amount)}
+                  {p.installments > 1 ? ` · ${p.installments}x` : ''}
+                </span>
+              </div>
+            ))}
+          </div>
+        );
+      },
     },
     {
       key: 'seller',
@@ -358,8 +378,17 @@ export default function SalesPage() {
                 <span className="text-xs text-slate-500 dark:text-slate-400">
                   {formatDateTime(sale.saleDate)}
                 </span>
-                <div className="flex items-center gap-2">
-                  <PaymentBadge method={sale.paymentMethod} />
+                <div className="flex flex-wrap items-center gap-2">
+                  {(sale.payments ?? []).length > 1 ? (
+                    sale.payments!.map((p) => (
+                      <span key={p.id} className="flex items-center gap-1">
+                        <PaymentBadge method={p.method} />
+                        <span className="text-xs text-slate-500">{formatCurrency(p.amount)}</span>
+                      </span>
+                    ))
+                  ) : (
+                    <PaymentBadge method={sale.paymentMethod} />
+                  )}
                   {isAdmin && (
                     <button
                       type="button"
