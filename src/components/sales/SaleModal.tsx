@@ -4,6 +4,7 @@ import { Input, Select, Textarea } from '@/components/ui/Field';
 import { Modal } from '@/components/ui/Modal';
 import { useToast } from '@/contexts/ToastContext';
 import { useCreateSale } from '@/hooks/queries';
+import { cn } from '@/lib/cn';
 import { formatCurrency, PAYMENT_OPTIONS, toInputDate } from '@/lib/format';
 import { useAuth } from '@/contexts/AuthContext';
 import { useUnit } from '@/contexts/UnitContext';
@@ -247,16 +248,36 @@ export function SaleModal({ open, onClose, product }: SaleModalProps) {
             onChange={(e) => set('quantity')(e.target.value)}
             error={errors.quantity}
           />
-          <Input
-            label="Valor unitário"
-            required
-            type="number"
-            min={0}
-            step="0.01"
-            value={form.unitPrice}
-            onChange={(e) => set('unitPrice')(e.target.value)}
-            error={errors.unitPrice}
-          />
+          <div>
+            <Input
+              label="Valor unitário"
+              required
+              type="number"
+              min={0}
+              step="0.01"
+              value={form.unitPrice}
+              onChange={(e) => set('unitPrice')(e.target.value)}
+              error={errors.unitPrice}
+            />
+
+            {/* Atalhos: preenchem o valor sem impedir um preço combinado. */}
+            {product.wholesalePrice != null && (
+              <div className="mt-1.5 flex gap-1.5">
+                <BotaoDePreco
+                  rotulo="Varejo"
+                  valor={product.salePrice}
+                  escolhido={Number(form.unitPrice) === product.salePrice}
+                  aoEscolher={() => set('unitPrice')(String(product.salePrice))}
+                />
+                <BotaoDePreco
+                  rotulo="Atacado"
+                  valor={product.wholesalePrice}
+                  escolhido={Number(form.unitPrice) === product.wholesalePrice}
+                  aoEscolher={() => set('unitPrice')(String(product.wholesalePrice))}
+                />
+              </div>
+            )}
+          </div>
           <Select
             label="Forma de pagamento"
             required
@@ -311,5 +332,34 @@ export function SaleModal({ open, onClose, product }: SaleModalProps) {
         />
       </form>
     </Modal>
+  );
+}
+
+/** Atalho para preencher o valor com o preço de varejo ou de atacado. */
+function BotaoDePreco({
+  rotulo,
+  valor,
+  escolhido,
+  aoEscolher,
+}: {
+  rotulo: string;
+  valor: number;
+  escolhido: boolean;
+  aoEscolher: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={aoEscolher}
+      className={cn(
+        'flex-1 rounded-md border px-2 py-1 text-[11px] font-semibold transition',
+        escolhido
+          ? 'border-accent bg-accent/10 text-accent'
+          : 'border-slate-300 text-slate-600 hover:bg-slate-50 dark:border-navy-600 dark:text-slate-400 dark:hover:bg-navy-800',
+      )}
+    >
+      {rotulo}
+      <span className="block font-normal">{formatCurrency(valor)}</span>
+    </button>
   );
 }

@@ -117,6 +117,8 @@ export interface Product {
   minQuantity: number;
   costPrice: number;
   salePrice: number;
+  /** Preço de atacado; vazio quando o produto só é vendido no varejo. */
+  wholesalePrice?: number | null;
   imei?: string | null;
   serialNumber?: string | null;
   barcode?: string | null;

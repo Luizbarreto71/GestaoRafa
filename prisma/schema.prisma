@@ -169,27 +169,29 @@ model Customer {
 }
 
 model Product {
-  id           String        @id @default(uuid())
-  name         String
-  brand        String?
-  model        String?
-  color        String?
-  capacity     String?
-  lote         String?
+  id             String        @id @default(uuid())
+  name           String
+  brand          String?
+  model          String?
+  color          String?
+  capacity       String?
+  lote           String?
   /// Estado do aparelho: Lacrado, Vitrine, Seminovo…
-  condicao     String?
+  condicao       String?
   /// Estoque mínimo por unidade — abaixo disso entra no alerta.
-  minQuantity  Int           @default(1)
-  costPrice    Decimal       @default(0) @db.Decimal(12, 2)
-  salePrice    Decimal       @default(0) @db.Decimal(12, 2)
-  imei         String?
-  serialNumber String?
-  barcode      String?
-  notes        String?
-  status       ProductStatus @default(EM_ESTOQUE)
-  entryDate    DateTime      @default(now())
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
+  minQuantity    Int           @default(1)
+  costPrice      Decimal       @default(0) @db.Decimal(12, 2)
+  salePrice      Decimal       @default(0) @db.Decimal(12, 2)
+  /// Preço para atacado. Vazio = o produto só é vendido no varejo.
+  wholesalePrice Decimal?      @db.Decimal(12, 2)
+  imei           String?
+  serialNumber   String?
+  barcode        String?
+  notes          String?
+  status         ProductStatus @default(EM_ESTOQUE)
+  entryDate      DateTime      @default(now())
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
 
   categoryId String
   category   Category @relation(fields: [categoryId], references: [id])

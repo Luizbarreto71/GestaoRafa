@@ -103,6 +103,7 @@ const produtoSchema = z.object({
   minQuantity: z.coerce.number().int().min(0).default(1),
   costPrice: dinheiro.default(0),
   salePrice: dinheiro.default(0),
+  wholesalePrice: dinheiro.optional().nullable(),
   imei: texto,
   serialNumber: texto,
   barcode: texto,

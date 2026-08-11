@@ -290,8 +290,15 @@ export default function StockPage() {
       sortKey: 'salePrice',
       align: 'right',
       render: (product) => (
-        <span className="font-semibold text-navy-900 dark:text-slate-100">
-          {formatCurrency(product.salePrice)}
+        <span className="block">
+          <span className="font-semibold text-navy-900 dark:text-slate-100">
+            {formatCurrency(product.salePrice)}
+          </span>
+          {product.wholesalePrice != null && (
+            <span className="block text-xs text-slate-500 dark:text-slate-400">
+              atacado {formatCurrency(product.wholesalePrice)}
+            </span>
+          )}
         </span>
       ),
     },

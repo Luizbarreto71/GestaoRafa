@@ -33,6 +33,7 @@ const VAZIO: Record<ChaveCampo, string> = {
   minimo: '1',
   custo: '',
   venda: '',
+  atacado: '',
   fornecedor: '',
   status: 'EM_ESTOQUE',
   entrada: toInputDate(new Date()),
@@ -76,6 +77,7 @@ export function ProductFormModal({ open, onClose, product }: ProductFormModalPro
         minimo: String(product.minQuantity),
         custo: String(product.costPrice),
         venda: String(product.salePrice),
+        atacado: product.wholesalePrice != null ? String(product.wholesalePrice) : '',
         fornecedor: product.supplierId ?? '',
         status: product.status,
         entrada: toInputDate(product.entryDate),
@@ -118,9 +120,15 @@ export function ProductFormModal({ open, onClose, product }: ProductFormModalPro
   const margem = useMemo(() => {
     const custo = Number(valores.custo) || 0;
     const venda = Number(valores.venda) || 0;
-    if (!venda) return null;
-    return { valor: venda - custo, percentual: profitMargin(custo, venda) };
-  }, [valores.custo, valores.venda]);
+    const atacado = Number(valores.atacado) || 0;
+    if (!venda && !atacado) return null;
+
+    return {
+      varejo: venda ? { valor: venda - custo, percentual: profitMargin(custo, venda) } : null,
+      atacado: atacado ? { valor: atacado - custo, percentual: profitMargin(custo, atacado) } : null,
+      total: (venda || 0) * (Number(valores.quantidade) || 0),
+    };
+  }, [valores.custo, valores.venda, valores.atacado, valores.quantidade]);
 
   function validar(): boolean {
     const novos: Partial<Record<ChaveCampo, string>> = {};
@@ -169,6 +177,7 @@ export function ProductFormModal({ open, onClose, product }: ProductFormModalPro
       minQuantity: mostra('minimo') ? Number(valores.minimo) || 0 : 1,
       costPrice: Number(valores.custo) || 0,
       salePrice: Number(valores.venda) || 0,
+      wholesalePrice: mostra('atacado') && valores.atacado !== '' ? Number(valores.atacado) : null,
       status: mostra('status') ? valores.status : undefined,
       entryDate: mostra('entrada') && valores.entrada
         ? new Date(`${valores.entrada}T12:00:00`).toISOString()
@@ -385,22 +394,26 @@ export function ProductFormModal({ open, onClose, product }: ProductFormModalPro
 
           {margem && (
             <div className="flex flex-wrap items-center gap-x-6 gap-y-1 rounded-lg bg-slate-50 px-4 py-2.5 text-xs dark:bg-navy-800">
-              <span className="text-slate-500 dark:text-slate-400">
-                Lucro por unidade:{' '}
-                <strong className={margem.valor >= 0 ? 'text-success' : 'text-danger'}>
-                  {formatCurrency(margem.valor)}
-                </strong>
-              </span>
-              <span className="text-slate-500 dark:text-slate-400">
-                Margem:{' '}
-                <strong className={margem.percentual >= 0 ? 'text-success' : 'text-danger'}>
-                  {margem.percentual.toFixed(1)}%
-                </strong>
-              </span>
+              {margem.varejo && (
+                <span className="text-slate-500 dark:text-slate-400">
+                  Lucro no varejo:{' '}
+                  <strong className={margem.varejo.valor >= 0 ? 'text-success' : 'text-danger'}>
+                    {formatCurrency(margem.varejo.valor)} ({margem.varejo.percentual.toFixed(1)}%)
+                  </strong>
+                </span>
+              )}
+              {margem.atacado && (
+                <span className="text-slate-500 dark:text-slate-400">
+                  Lucro no atacado:{' '}
+                  <strong className={margem.atacado.valor >= 0 ? 'text-success' : 'text-danger'}>
+                    {formatCurrency(margem.atacado.valor)} ({margem.atacado.percentual.toFixed(1)}%)
+                  </strong>
+                </span>
+              )}
               <span className="text-slate-500 dark:text-slate-400">
                 Total em estoque:{' '}
                 <strong className="text-navy-900 dark:text-slate-200">
-                  {formatCurrency((Number(valores.venda) || 0) * (Number(valores.quantidade) || 0))}
+                  {formatCurrency(margem.total)}
                 </strong>
               </span>
             </div>

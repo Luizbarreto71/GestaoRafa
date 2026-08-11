@@ -416,7 +416,18 @@ var CATALOGO = {
     ajuda: "Abaixo disso o produto entra no alerta"
   },
   custo: { rotulo: "Pre\xE7o de custo", tipo: "dinheiro", coluna: "costPrice", essencial: true },
-  venda: { rotulo: "Pre\xE7o de venda", tipo: "dinheiro", coluna: "salePrice", essencial: true },
+  venda: {
+    rotulo: "Pre\xE7o de venda (varejo)",
+    tipo: "dinheiro",
+    coluna: "salePrice",
+    essencial: true
+  },
+  atacado: {
+    rotulo: "Pre\xE7o de atacado",
+    tipo: "dinheiro",
+    coluna: "wholesalePrice",
+    ajuda: "Deixe vazio se n\xE3o vende no atacado"
+  },
   fornecedor: { rotulo: "Fornecedor", tipo: "fornecedor", coluna: "supplierId" },
   status: { rotulo: "Status", tipo: "status", coluna: "status" },
   entrada: { rotulo: "Data de entrada", tipo: "data", coluna: "entryDate" },
@@ -438,6 +449,7 @@ var PADROES = {
     { campo: "quantidade" },
     { campo: "custo" },
     { campo: "venda" },
+    { campo: "atacado" },
     { campo: "fornecedor" },
     { campo: "fotos" },
     { campo: "observacoes" }
@@ -449,6 +461,7 @@ var PADROES = {
     { campo: "quantidade", rotulo: "Quantidade de caixas" },
     { campo: "custo", rotulo: "Pre\xE7o de compra" },
     { campo: "venda", rotulo: "Pre\xE7o de venda" },
+    { campo: "atacado" },
     { campo: "fornecedor" },
     { campo: "fotos" },
     { campo: "observacoes" }
@@ -461,6 +474,7 @@ var PADROES = {
     { campo: "quantidade" },
     { campo: "custo" },
     { campo: "venda" },
+    { campo: "atacado" },
     { campo: "fornecedor" },
     { campo: "fotos" },
     { campo: "observacoes" }
@@ -475,6 +489,7 @@ var PADROES = {
     { campo: "quantidade" },
     { campo: "custo" },
     { campo: "venda" },
+    { campo: "atacado" },
     { campo: "fornecedor" },
     { campo: "fotos" },
     { campo: "observacoes" }
@@ -489,6 +504,7 @@ var PADROES = {
     { campo: "quantidade" },
     { campo: "custo" },
     { campo: "venda" },
+    { campo: "atacado" },
     { campo: "fornecedor" },
     { campo: "fotos" },
     { campo: "observacoes" }
@@ -503,6 +519,7 @@ var PADROES = {
     { campo: "quantidade" },
     { campo: "custo" },
     { campo: "venda" },
+    { campo: "atacado" },
     { campo: "fornecedor" },
     { campo: "fotos" },
     { campo: "observacoes" }
@@ -2101,6 +2118,7 @@ var produtoSchema = z5.object({
   minQuantity: z5.coerce.number().int().min(0).default(1),
   costPrice: dinheiro.default(0),
   salePrice: dinheiro.default(0),
+  wholesalePrice: dinheiro.optional().nullable(),
   imei: texto2,
   serialNumber: texto2,
   barcode: texto2,
@@ -2688,6 +2706,7 @@ rotasRelatorios.get(
       quantity,
       costPrice: numero(p.costPrice),
       salePrice: numero(p.salePrice),
+      wholesalePrice: p.wholesalePrice != null ? numero(p.wholesalePrice) : null,
       totalCost: numero(p.costPrice) * quantity,
       totalSale: numero(p.salePrice) * quantity,
       supplier: p.supplier?.name ?? "\u2014",
@@ -2710,6 +2729,13 @@ rotasRelatorios.get(
         qtd("Qtd", "quantity", 6),
         money("Custo", "costPrice", 10),
         money("Venda", "salePrice", 10),
+        {
+          header: "Atacado",
+          key: "wholesalePrice",
+          width: 10,
+          align: "right",
+          format: (v) => v == null ? "\u2014" : decimal(v)
+        },
         money("Total custo", "totalCost", 12),
         money("Total venda", "totalSale", 12),
         { header: "Fornecedor", key: "supplier", width: 16 },
@@ -3145,6 +3171,7 @@ var CABECALHOS = [
   "Quantidade",
   "Pre\xE7o de Custo",
   "Pre\xE7o de Venda",
+  "Pre\xE7o de Atacado",
   "Fornecedor",
   "IMEI",
   "N\xFAmero de S\xE9rie",
@@ -3168,6 +3195,9 @@ var DE_PARA = {
   "preco de venda": "salePrice",
   "pre\xE7o de venda": "salePrice",
   venda: "salePrice",
+  atacado: "wholesalePrice",
+  "preco de atacado": "wholesalePrice",
+  "pre\xE7o de atacado": "wholesalePrice",
   fornecedor: "supplier",
   imei: "imei",
   "numero de serie": "serialNumber",
@@ -3226,6 +3256,7 @@ rotasSistema.get(
       2,
       3200,
       4199,
+      3950,
       "Distribuidora Tech SP",
       "356938035643809",
       "",
@@ -3308,6 +3339,7 @@ rotasSistema.post(
             capacity: dados.capacity || null,
             costPrice: paraNumero(dados.costPrice),
             salePrice: paraNumero(dados.salePrice),
+            wholesalePrice: dados.wholesalePrice ? paraNumero(dados.wholesalePrice) : null,
             imei: dados.imei || null,
             serialNumber: dados.serialNumber || null,
             lote: dados.lote || null,
