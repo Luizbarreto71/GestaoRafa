@@ -55,6 +55,8 @@ const CATALOGO = {
     coluna: 'condicao',
     opcoes: ['Lacrado', 'Xiaomi Lacrado', 'Vitrine', 'Seminovo'],
     ajuda: 'Estado do aparelho — muda bastante o preço',
+    // Obrigatória por categoria (ver PADROES), não no sistema todo: em
+    // caixa de medicamento, por exemplo, o campo não faz sentido.
   },
   imei: { rotulo: 'IMEI', tipo: 'texto', coluna: 'imei', exemplo: '356938035643809' },
   serie: { rotulo: 'Número de série', tipo: 'texto', coluna: 'serialNumber', exemplo: 'SN-000123' },
@@ -130,7 +132,7 @@ export const PADROES: Record<string, CampoDaCategoria[]> = {
     { campo: 'modelo' },
     { campo: 'cor' },
     { campo: 'capacidade' },
-    { campo: 'condicao' },
+    { campo: 'condicao', obrigatorio: true },
     { campo: 'imei' },
     { campo: 'quantidade' },
     { campo: 'custo' },
@@ -189,7 +191,7 @@ export const PADROES: Record<string, CampoDaCategoria[]> = {
     { campo: 'marca' },
     { campo: 'modelo' },
     { campo: 'capacidade', rotulo: 'Tamanho (polegadas)' },
-    { campo: 'condicao' },
+    { campo: 'condicao', obrigatorio: true },
     { campo: 'serie' },
     { campo: 'quantidade' },
     { campo: 'custo' },

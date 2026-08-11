@@ -399,6 +399,8 @@ var CATALOGO = {
     coluna: "condicao",
     opcoes: ["Lacrado", "Xiaomi Lacrado", "Vitrine", "Seminovo"],
     ajuda: "Estado do aparelho \u2014 muda bastante o pre\xE7o"
+    // Obrigatória por categoria (ver PADROES), não no sistema todo: em
+    // caixa de medicamento, por exemplo, o campo não faz sentido.
   },
   imei: { rotulo: "IMEI", tipo: "texto", coluna: "imei", exemplo: "356938035643809" },
   serie: { rotulo: "N\xFAmero de s\xE9rie", tipo: "texto", coluna: "serialNumber", exemplo: "SN-000123" },
@@ -448,7 +450,7 @@ var PADROES = {
     { campo: "modelo" },
     { campo: "cor" },
     { campo: "capacidade" },
-    { campo: "condicao" },
+    { campo: "condicao", obrigatorio: true },
     { campo: "imei" },
     { campo: "quantidade" },
     { campo: "custo" },
@@ -503,7 +505,7 @@ var PADROES = {
     { campo: "marca" },
     { campo: "modelo" },
     { campo: "capacidade", rotulo: "Tamanho (polegadas)" },
-    { campo: "condicao" },
+    { campo: "condicao", obrigatorio: true },
     { campo: "serie" },
     { campo: "quantidade" },
     { campo: "custo" },
