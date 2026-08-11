@@ -102,6 +102,32 @@ export default function StockPage() {
   );
 
   const { data, isLoading, isFetching } = useProducts(query);
+
+  /**
+   * As abas de condição, com quantos produtos existem em cada uma.
+   *
+   * A contagem vem do servidor já respeitando os outros filtros — busca,
+   * categoria, unidade —, então trocar de aba não muda o significado do
+   * que está na tela.
+   */
+  const abasDeCondicao = (() => {
+    const contagem = new Map<string, number>();
+    for (const c of data?.condicoes ?? []) {
+      contagem.set(c.condicao ?? '', (contagem.get(c.condicao ?? '') ?? 0) + c.produtos);
+    }
+
+    const total = [...contagem.values()].reduce((a, b) => a + b, 0);
+    const semCondicao = contagem.get('') ?? 0;
+
+    return [
+      { rotulo: 'Todos', valor: '', total },
+      // Segue a ordem do cadastro; some a que não tem nenhum produto.
+      ...(CAMPOS.condicao.opcoes ?? [])
+        .filter((o) => (contagem.get(o) ?? 0) > 0)
+        .map((o) => ({ rotulo: o, valor: o, total: contagem.get(o) ?? 0 })),
+      ...(semCondicao > 0 ? [{ rotulo: 'Sem condição', valor: '__sem__', total: semCondicao }] : []),
+    ];
+  })();
   const deleteProduct = useDeleteProduct();
   const adjustStock = useAdjustStock();
 
@@ -468,6 +494,40 @@ export default function StockPage() {
 
       {/* Busca + filtros */}
       <Card>
+        {/* Abas por condição.
+            Lacrado e vitrine são mercadorias diferentes na prática: preço,
+            margem e cliente mudam. Aqui a condição navega como categoria,
+            sem deixar de ser condição no cadastro. */}
+        <div className="flex flex-wrap gap-1.5 border-b border-slate-200 p-3 dark:border-navy-700">
+          {abasDeCondicao.map((aba) => {
+            const ativa = filters.condicao === aba.valor;
+
+            return (
+              <button
+                key={aba.rotulo}
+                type="button"
+                onClick={() => setFilters((f) => ({ ...f, condicao: aba.valor }))}
+                className={cn(
+                  'flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-semibold transition',
+                  ativa
+                    ? 'bg-navy-900 text-white dark:bg-accent'
+                    : 'text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-navy-800',
+                )}
+              >
+                {aba.rotulo}
+                <span
+                  className={cn(
+                    'rounded-full px-1.5 text-xs font-bold',
+                    ativa ? 'bg-white/20' : 'bg-slate-200 text-slate-600 dark:bg-navy-700 dark:text-slate-400',
+                  )}
+                >
+                  {aba.total}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
         <div className="flex flex-wrap items-center gap-3 p-4">
           <div className="relative min-w-[240px] flex-1">
             <Input

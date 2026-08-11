@@ -2335,7 +2335,8 @@ async function filtrarProdutos(q, unidadeId) {
   if (q.status) cond.push({ status: q.status });
   if (q.brand) cond.push({ brand: contem(q.brand) });
   if (q.model) cond.push({ model: contem(q.model) });
-  if (q.condicao) cond.push({ condicao: q.condicao });
+  if (q.condicao === "__sem__") cond.push({ OR: [{ condicao: null }, { condicao: "" }] });
+  else if (q.condicao) cond.push({ condicao: q.condicao });
   if (q.lowStock === "true") {
     const baixos = await estoqueBaixo(unidadeId, 500);
     cond.push({ id: { in: baixos.map((b) => b.productId) } });
@@ -2434,7 +2435,9 @@ rotasProdutos.get(
     const unidade = unidadePermitida(req.usuario, q.unitId);
     const where = await filtrarProdutos(q, unidade);
     const ordem = q.sortBy === "quantity" ? "name" : q.sortBy;
-    const [lista, total] = await Promise.all([
+    const { condicao: _naFrente, ...semCondicao } = q;
+    const wherePorCondicao = await filtrarProdutos(semCondicao, unidade);
+    const [lista, total, condicoes] = await Promise.all([
       db.product.findMany({
         where,
         include: COM_RELACOES,
@@ -2442,9 +2445,13 @@ rotasProdutos.get(
         take: p.take,
         orderBy: ordenar(ordem, q.sortOrder, ORDENAVEIS, { createdAt: "desc" })
       }),
-      db.product.count({ where })
+      db.product.count({ where }),
+      db.product.groupBy({ by: ["condicao"], where: wherePorCondicao, _count: true })
     ]);
-    res.json(paginado(lista.map((produto) => formatar(produto, unidade)), total, p));
+    res.json({
+      ...paginado(lista.map((produto) => formatar(produto, unidade)), total, p),
+      condicoes: condicoes.map((c) => ({ condicao: c.condicao, produtos: c._count }))
+    });
   })
 );
 rotasProdutos.get(

@@ -163,7 +163,10 @@ export async function filtrarProdutos(
   if (q.status) cond.push({ status: q.status });
   if (q.brand) cond.push({ brand: contem(q.brand) });
   if (q.model) cond.push({ model: contem(q.model) });
-  if (q.condicao) cond.push({ condicao: q.condicao });
+  // "__sem__" vem da aba "Sem condição" do estoque: é o único jeito de
+  // pedir "os que ninguém classificou" sem inventar um valor de condição.
+  if (q.condicao === '__sem__') cond.push({ OR: [{ condicao: null }, { condicao: '' }] });
+  else if (q.condicao) cond.push({ condicao: q.condicao });
   if (q.lowStock === 'true') {
     const baixos = await estoqueBaixo(unidadeId, 500);
     cond.push({ id: { in: baixos.map((b) => b.productId) } });
@@ -288,7 +291,14 @@ rotasProdutos.get(
     // por algo que não existe. Nesse caso caímos no nome.
     const ordem = q.sortBy === 'quantity' ? 'name' : q.sortBy;
 
-    const [lista, total] = await Promise.all([
+    // Contagem por condição para as abas do estoque.
+    //
+    // Ignora o filtro de condição de propósito: a aba precisa dizer quantos
+    // existem em cada uma, e não quantos existem na que já está aberta.
+    const { condicao: _naFrente, ...semCondicao } = q;
+    const wherePorCondicao = await filtrarProdutos(semCondicao as typeof q, unidade);
+
+    const [lista, total, condicoes] = await Promise.all([
       db.product.findMany({
         where,
         include: COM_RELACOES,
@@ -297,9 +307,13 @@ rotasProdutos.get(
         orderBy: ordenar(ordem, q.sortOrder, ORDENAVEIS, { createdAt: 'desc' }) as never,
       }),
       db.product.count({ where }),
+      db.product.groupBy({ by: ['condicao'], where: wherePorCondicao, _count: true }),
     ]);
 
-    res.json(paginado(lista.map((produto) => formatar(produto, unidade)), total, p));
+    res.json({
+      ...paginado(lista.map((produto) => formatar(produto, unidade)), total, p),
+      condicoes: condicoes.map((c) => ({ condicao: c.condicao, produtos: c._count })),
+    });
   }),
 );
 

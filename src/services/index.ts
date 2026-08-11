@@ -54,7 +54,12 @@ export interface ProductFilters {
 
 export const productService = {
   list: (filters: ProductFilters) =>
-    api.get<Paginated<Product>>('/products', { params: clean(filters) }).then((r) => r.data),
+    api
+      .get<Paginated<Product> & { condicoes?: { condicao: string | null; produtos: number }[] }>(
+        '/products',
+        { params: clean(filters) },
+      )
+      .then((r) => r.data),
   get: (id: string) => api.get<Product>(`/products/${id}`).then((r) => r.data),
   create: (data: Record<string, unknown>) => api.post<Product>('/products', data).then((r) => r.data),
   update: (id: string, data: Record<string, unknown>) =>
