@@ -10,6 +10,7 @@ import {
   useCancelarTransferencia,
   useMovimentarEstoque,
   useProducts,
+  useRetirada,
   useSuppliers,
   useTransfers,
 } from '@/hooks/queries';
@@ -17,18 +18,20 @@ import { useDebounce } from '@/hooks/useDebounce';
 import { cn } from '@/lib/cn';
 import { EXIT_REASON_OPTIONS, formatDateTime, toInputDate } from '@/lib/format';
 import type { Product } from '@/types';
+import { WithdrawalPanel } from '@/components/products/WithdrawalPanel';
 import {
   ArrowLeftRight,
   ArrowDownToLine,
   ArrowUpFromLine,
   Ban,
+  ClipboardCheck,
   Package,
   Search,
   ShieldCheck,
 } from 'lucide-react';
 import { useMemo, useState, type FormEvent } from 'react';
 
-type Aba = 'entrada' | 'saida' | 'transferencia';
+type Aba = 'entrada' | 'saida' | 'retirada' | 'transferencia';
 
 /**
  * Onde o estoque se mexe: entrada, saída e transferência entre unidades.
@@ -69,6 +72,7 @@ export default function StockMovementPage() {
   const abas = [
     { chave: 'entrada' as const, rotulo: 'Entrada', icone: ArrowDownToLine, cor: 'text-success' },
     { chave: 'saida' as const, rotulo: 'Saída', icone: ArrowUpFromLine, cor: 'text-danger' },
+    { chave: 'retirada' as const, rotulo: 'Retirada para a loja', icone: ClipboardCheck, cor: 'text-warning' },
     { chave: 'transferencia' as const, rotulo: 'Transferência', icone: ArrowLeftRight, cor: 'text-accent' },
   ];
 
@@ -104,9 +108,10 @@ export default function StockMovementPage() {
 
       {aba === 'entrada' && <FormularioEntrada />}
       {aba === 'saida' && <FormularioSaida />}
+      {aba === 'retirada' && <FormularioRetirada />}
       {aba === 'transferencia' && <FormularioTransferencia />}
 
-      <TransferenciasRecentes />
+      {aba === 'retirada' ? <WithdrawalPanel /> : <TransferenciasRecentes />}
     </div>
   );
 }
@@ -141,8 +146,9 @@ function EscolherProduto({
           <div className="mt-0.5 flex flex-wrap gap-1.5">
             {produto.stock?.length ? (
               produto.stock.map((s) => (
-                <Badge key={s.unitId} tone={s.quantity > 0 ? 'success' : 'danger'}>
+                <Badge key={s.unitId} tone={(s.available ?? s.quantity) > 0 ? 'success' : 'danger'}>
                   {s.unitName}: {s.quantity}
+                  {s.reserved ? ` (${s.reserved} reservadas)` : ''}
                 </Badge>
               ))
             ) : (
@@ -566,6 +572,108 @@ function FormularioTransferencia() {
             icon={<ArrowLeftRight className="h-4 w-4" />}
           >
             Confirmar transferência
+          </Button>
+        </form>
+      </CardBody>
+    </Card>
+  );
+}
+
+// -------------------------------------------------- Retirada para a loja
+
+/**
+ * Leva mercadoria para a loja sem baixar o estoque.
+ *
+ * O saldo continua o mesmo, mas as peças ficam reservadas até você acertar
+ * no fim do dia — porque nem tudo que vai para a loja vende.
+ */
+function FormularioRetirada() {
+  const [produto, setProduto] = useState<Product | null>(null);
+  const [form, setForm] = useState({ unitId: '', quantity: '1', notes: '' });
+
+  const toast = useToast();
+  const unidades = useUnidadesOperaveis();
+  const retirar = useRetirada('criar');
+
+  const unidadeEscolhida = form.unitId || unidades[0]?.id || '';
+  const linha = produto?.stock?.find((s) => s.unitId === unidadeEscolhida);
+  const livre = linha?.available ?? linha?.quantity ?? 0;
+  const quantidade = Number(form.quantity) || 0;
+
+  async function enviar(e: FormEvent) {
+    e.preventDefault();
+    if (!produto) return toast.warning('Escolha o produto');
+
+    try {
+      const r = await retirar.mutateAsync({
+        productId: produto.id,
+        unitId: unidadeEscolhida,
+        quantity: quantidade,
+        notes: form.notes.trim() || null,
+      });
+      toast.success('Retirada registrada', r.message);
+      setProduto(null);
+      setForm((f) => ({ ...f, quantity: '1', notes: '' }));
+    } catch (erro) {
+      toast.error('Não foi possível registrar', erro instanceof Error ? erro.message : undefined);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader
+        title="Retirada para a loja"
+        subtitle="O estoque só baixa quando você acertar, no fim do dia"
+      />
+      <CardBody>
+        <form onSubmit={enviar} className="space-y-4">
+          <EscolherProduto produto={produto} aoEscolher={setProduto} />
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <Select
+              label="Unidade"
+              required
+              value={unidadeEscolhida}
+              onChange={(e) => setForm((f) => ({ ...f, unitId: e.target.value }))}
+              options={unidades.map((u) => ({ value: u.id, label: u.name }))}
+              hint={produto ? `Livre: ${livre}` : undefined}
+            />
+            <Input
+              label="Quantidade"
+              required
+              type="number"
+              min={1}
+              max={livre || undefined}
+              value={form.quantity}
+              onChange={(e) => setForm((f) => ({ ...f, quantity: e.target.value }))}
+              error={produto && quantidade > livre ? `Só há ${livre} un. livres` : undefined}
+            />
+            <Input
+              label="Observação"
+              value={form.notes}
+              onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
+              placeholder="Ex.: mostruário do dia"
+            />
+          </div>
+
+          {produto && quantidade > 0 && quantidade <= livre && (
+            <div className="rounded-lg border border-warning/25 bg-warning-bg/60 px-4 py-3 text-sm dark:bg-warning/10">
+              <p className="font-semibold text-navy-900 dark:text-slate-100">Ao confirmar:</p>
+              <p className="mt-1 text-slate-600 dark:text-slate-400">
+                O estoque continua em <strong>{linha?.quantity ?? 0}</strong>, mas{' '}
+                <strong>{quantidade}</strong> ficam reservadas — sobram{' '}
+                <strong>{livre - quantidade}</strong> para vender. A baixa acontece só no acerto.
+              </p>
+            </div>
+          )}
+
+          <Button
+            type="submit"
+            variant="secondary"
+            loading={retirar.isPending}
+            icon={<ClipboardCheck className="h-4 w-4" />}
+          >
+            Registrar retirada
           </Button>
         </form>
       </CardBody>

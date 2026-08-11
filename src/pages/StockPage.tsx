@@ -240,8 +240,18 @@ export default function StockPage() {
           <div className="flex flex-wrap justify-center gap-1">
             {product.stock?.length ? (
               product.stock.map((s) => (
-                <Badge key={s.unitId} tone={s.quantity > product.minQuantity ? 'success' : s.quantity > 0 ? 'warning' : 'danger'}>
+                <Badge
+                  key={s.unitId}
+                  tone={
+                    (s.available ?? s.quantity) > product.minQuantity
+                      ? 'success'
+                      : (s.available ?? s.quantity) > 0
+                        ? 'warning'
+                        : 'danger'
+                  }
+                >
                   {s.unitName}: {s.quantity}
+                  {s.reserved ? ` · ${s.reserved} na loja` : ''}
                 </Badge>
               ))
             ) : (

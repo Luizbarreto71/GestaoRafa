@@ -45,9 +45,17 @@ enum MovementReason {
   USO_INTERNO
   AJUSTE
   TRANSFERENCIA
+  RETIRADA
   CANCELAMENTO
   EXCLUSAO
   OUTRO
+}
+
+/// Situação de uma retirada para a loja.
+enum WithdrawalStatus {
+  PENDENTE
+  APROVADA
+  CANCELADA
 }
 
 enum TransferStatus {
@@ -79,8 +87,9 @@ model Unit {
   movements    StockMovement[]
   sales        Sale[]
   users        User[]
-  transfersOut StockTransfer[] @relation("origem")
-  transfersIn  StockTransfer[] @relation("destino")
+  transfersOut StockTransfer[]   @relation("origem")
+  transfersIn  StockTransfer[]   @relation("destino")
+  withdrawals  StockWithdrawal[]
 
   @@map("units")
 }
@@ -189,11 +198,12 @@ model Product {
   /// A quantidade vive aqui, uma linha por unidade. Nunca no produto:
   /// misturar os estoques da Matriz e da Sede seria o mesmo que não tê-los
   /// separados.
-  stock     Stock[]
-  photos    ProductPhoto[]
-  sales     Sale[]
-  movements StockMovement[]
-  transfers StockTransfer[]
+  stock       Stock[]
+  photos      ProductPhoto[]
+  sales       Sale[]
+  movements   StockMovement[]
+  transfers   StockTransfer[]
+  withdrawals StockWithdrawal[]
 
   @@index([name])
   @@index([brand])
@@ -315,6 +325,9 @@ model StockMovement {
   transferId String?
   transfer   StockTransfer? @relation(fields: [transferId], references: [id], onDelete: SetNull)
 
+  withdrawalId String?
+  withdrawal   StockWithdrawal? @relation(fields: [withdrawalId], references: [id], onDelete: SetNull)
+
   userId String?
   user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
 
@@ -323,6 +336,42 @@ model StockMovement {
   @@index([productId])
   @@index([unitId])
   @@map("stock_movements")
+}
+
+/// Retirada do estoque para a loja.
+///
+/// Enquanto está pendente o saldo NÃO diminui — mas fica reservado, para
+/// ninguém vender duas vezes a mesma peça. No fim do dia você aprova
+/// informando quanto realmente saiu; o que sobrou continua no estoque,
+/// porque nunca chegou a sair.
+model StockWithdrawal {
+  id               String           @id @default(uuid())
+  /// Quanto foi levado para a loja.
+  quantity         Int
+  /// Quanto realmente saiu, informado na aprovação.
+  soldQuantity     Int?
+  /// O que voltou (quantity - soldQuantity), guardado para o histórico.
+  returnedQuantity Int?
+  status           WithdrawalStatus @default(PENDENTE)
+  notes            String?
+
+  createdAt  DateTime  @default(now())
+  approvedAt DateTime?
+
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+
+  unitId String
+  unit   Unit   @relation(fields: [unitId], references: [id])
+
+  requestedById String?
+  approvedById  String?
+
+  movements StockMovement[]
+
+  @@index([status])
+  @@index([productId, unitId])
+  @@map("stock_withdrawals")
 }
 
 /// Transferência entre unidades. Gera sempre duas movimentações ligadas:

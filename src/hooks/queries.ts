@@ -288,6 +288,38 @@ export const useTransfers = (params: { page?: number; status?: string; unitId?: 
     staleTime: 15_000,
   });
 
+export const useWithdrawals = (params: { status?: string; unitId?: string } = {}) =>
+  useQuery({
+    queryKey: ['withdrawals', params],
+    queryFn: () => movementService.retiradas(params),
+    placeholderData: (previous) => previous,
+    staleTime: 10_000,
+  });
+
+/** Criar, aprovar e cancelar retirada — tudo invalida estoque e reservas. */
+export function useRetirada(acao: 'criar' | 'aprovar' | 'cancelar') {
+  const queryClient = useQueryClient();
+
+  return useMutation<{ message: string }, Error, { id?: string; soldQuantity?: number } & Record<string, unknown>>({
+    mutationFn: (v) => {
+      const chamada =
+        acao === 'criar'
+          ? movementService.retirar(v)
+          : acao === 'aprovar'
+            ? movementService.aprovarRetirada(v.id!, v.soldQuantity ?? 0)
+            : movementService.cancelarRetirada(v.id!);
+
+      return chamada.catch((erro) => {
+        throw new Error(getErrorMessage(erro));
+      });
+    },
+    onSuccess: () => {
+      invalidateStock(queryClient);
+      void queryClient.invalidateQueries({ queryKey: ['withdrawals'] });
+    },
+  });
+}
+
 /** Entrada, saída, transferência e ajuste — todas mexem no estoque. */
 export function useMovimentarEstoque(acao: 'entrada' | 'saida' | 'transferir' | 'ajustar') {
   const queryClient = useQueryClient();

@@ -91,6 +91,7 @@ export const REASON_LABEL: Record<MovementReason, string> = {
   USO_INTERNO: 'Uso interno',
   AJUSTE: 'Ajuste de estoque',
   TRANSFERENCIA: 'Transferência',
+  RETIRADA: 'Retirada para a loja',
   CANCELAMENTO: 'Cancelamento',
   EXCLUSAO: 'Exclusão',
   OUTRO: 'Outro',

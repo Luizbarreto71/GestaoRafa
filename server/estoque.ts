@@ -25,6 +25,7 @@ export const MOTIVO_LABEL: Record<MovementReason, string> = {
   USO_INTERNO: 'Uso interno',
   AJUSTE: 'Ajuste de estoque',
   TRANSFERENCIA: 'Transferência',
+  RETIRADA: 'Retirada para a loja',
   CANCELAMENTO: 'Cancelamento',
   EXCLUSAO: 'Exclusão',
   OUTRO: 'Outro',
@@ -67,18 +68,54 @@ export async function saldo(produtoId: string, unidadeId: string, tx?: Cliente):
   return linha?.quantity ?? 0;
 }
 
+/**
+ * Quanto está comprometido com retiradas pendentes numa unidade.
+ *
+ * Essas peças ainda constam no saldo — elas só saem de verdade quando a
+ * retirada é aprovada —, mas não podem ser vendidas de novo por outra
+ * pessoa. Por isso entram como reserva.
+ */
+export async function reservado(produtoId: string, unidadeId: string, tx?: Cliente): Promise<number> {
+  const soma = await (tx ?? db).stockWithdrawal.aggregate({
+    where: { productId: produtoId, unitId: unidadeId, status: 'PENDENTE' },
+    _sum: { quantity: true },
+  });
+  return soma._sum.quantity ?? 0;
+}
+
+/** Saldo livre para vender: o que existe menos o que está reservado. */
+export async function disponivel(produtoId: string, unidadeId: string, tx?: Cliente): Promise<number> {
+  const [total, reserva] = await Promise.all([
+    saldo(produtoId, unidadeId, tx),
+    reservado(produtoId, unidadeId, tx),
+  ]);
+  return Math.max(0, total - reserva);
+}
+
 /** Saldo por unidade de um produto, incluindo unidades ainda sem linha. */
 export async function saldosDoProduto(produtoId: string) {
-  const [unidades, linhas] = await Promise.all([
+  const [unidades, linhas, retiradas] = await Promise.all([
     db.unit.findMany({ where: { active: true }, orderBy: [{ type: 'asc' }, { name: 'asc' }] }),
     db.stock.findMany({ where: { productId: produtoId } }),
+    db.stockWithdrawal.groupBy({
+      by: ['unitId'],
+      where: { productId: produtoId, status: 'PENDENTE' },
+      _sum: { quantity: true },
+    }),
   ]);
 
-  return unidades.map((unidade) => ({
-    unitId: unidade.id,
-    unitName: unidade.name,
-    quantity: linhas.find((l) => l.unitId === unidade.id)?.quantity ?? 0,
-  }));
+  return unidades.map((unidade) => {
+    const quantidade = linhas.find((l) => l.unitId === unidade.id)?.quantity ?? 0;
+    const reserva = retiradas.find((r) => r.unitId === unidade.id)?._sum.quantity ?? 0;
+
+    return {
+      unitId: unidade.id,
+      unitName: unidade.name,
+      quantity: quantidade,
+      reserved: reserva,
+      available: Math.max(0, quantidade - reserva),
+    };
+  });
 }
 
 // -------------------------------------------------------------- Movimentação
@@ -110,6 +147,14 @@ interface Movimento {
   tx?: Prisma.TransactionClient;
   /** Não envia para a planilha (usado quando o chamador envia em lote). */
   semPlanilha?: boolean;
+  /**
+   * Ignora as retiradas pendentes na conferência de saldo.
+   *
+   * Usado só pela própria aprovação de retirada, que é justamente quem
+   * transforma a reserva em saída de verdade.
+   */
+  ignorarReserva?: boolean;
+  withdrawalId?: string | null;
 }
 
 /**
@@ -133,11 +178,21 @@ export async function movimentar(m: Movimento): Promise<{ antes: number; depois:
   const soma = entra ? m.quantidade : -m.quantidade;
   const antes = await saldo(m.produtoId, m.unidadeId, cliente);
 
-  if (soma < 0 && antes < m.quantidade) {
-    const unidade = await cliente.unit.findUnique({ where: { id: m.unidadeId } });
-    throw new AppError(
-      `Estoque insuficiente na ${unidade?.name ?? 'unidade'}. Estoque disponível: ${antes} unidade(s).`,
-    );
+  if (soma < 0) {
+    const reserva = m.ignorarReserva ? 0 : await reservado(m.produtoId, m.unidadeId, cliente);
+    const livre = antes - reserva;
+
+    if (livre < m.quantidade) {
+      const unidade = await cliente.unit.findUnique({ where: { id: m.unidadeId } });
+      const nome = unidade?.name ?? 'unidade';
+
+      throw new AppError(
+        reserva > 0
+          ? `Estoque insuficiente na ${nome}. Disponível: ${Math.max(0, livre)} unidade(s) — ` +
+            `${reserva} estão reservadas para retiradas pendentes.`
+          : `Estoque insuficiente na ${nome}. Estoque disponível: ${antes} unidade(s).`,
+      );
+    }
   }
 
   let depois: number;
@@ -179,6 +234,7 @@ export async function movimentar(m: Movimento): Promise<{ antes: number; depois:
       referenceId: m.referenciaId ?? m.vendaId ?? m.transferenciaId ?? null,
       saleId: m.vendaId ?? null,
       transferId: m.transferenciaId ?? null,
+      withdrawalId: m.withdrawalId ?? null,
       userId: m.usuarioId ?? null,
     },
   });

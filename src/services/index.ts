@@ -15,6 +15,7 @@ import type {
   Transfer,
   Unit,
   User,
+  Withdrawal,
 } from '@/types';
 
 /**
@@ -119,6 +120,19 @@ export const movementService = {
 
   transferencias: (params: { page?: number; status?: string; unitId?: string } = {}) =>
     api.get<Paginated<Transfer>>('/movements/transferencias', { params: clean(params) }).then((r) => r.data),
+
+  /** Retirada para a loja: reserva agora, baixa na aprovação. */
+  retirar: (data: Record<string, unknown>) =>
+    api.post<{ message: string; withdrawal: Withdrawal }>('/movements/retirada', data).then((r) => r.data),
+
+  retiradas: (params: { page?: number; status?: string; unitId?: string } = {}) =>
+    api.get<Paginated<Withdrawal>>('/movements/retiradas', { params: clean(params) }).then((r) => r.data),
+
+  aprovarRetirada: (id: string, soldQuantity: number) =>
+    api.post<{ message: string }>(`/movements/retiradas/${id}/aprovar`, { soldQuantity }).then((r) => r.data),
+
+  cancelarRetirada: (id: string) =>
+    api.post<{ message: string }>(`/movements/retiradas/${id}/cancelar`).then((r) => r.data),
 
   cancelarTransferencia: (id: string) =>
     api.post<{ message: string }>(`/movements/transferencias/${id}/cancelar`).then((r) => r.data),

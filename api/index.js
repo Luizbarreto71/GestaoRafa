@@ -1019,6 +1019,7 @@ var MOTIVO_LABEL = {
   USO_INTERNO: "Uso interno",
   AJUSTE: "Ajuste de estoque",
   TRANSFERENCIA: "Transfer\xEAncia",
+  RETIRADA: "Retirada para a loja",
   CANCELAMENTO: "Cancelamento",
   EXCLUSAO: "Exclus\xE3o",
   OUTRO: "Outro"
@@ -1041,16 +1042,41 @@ async function saldo(produtoId, unidadeId, tx) {
   });
   return linha?.quantity ?? 0;
 }
-async function saldosDoProduto(produtoId) {
-  const [unidades, linhas] = await Promise.all([
-    db.unit.findMany({ where: { active: true }, orderBy: [{ type: "asc" }, { name: "asc" }] }),
-    db.stock.findMany({ where: { productId: produtoId } })
+async function reservado(produtoId, unidadeId, tx) {
+  const soma = await (tx ?? db).stockWithdrawal.aggregate({
+    where: { productId: produtoId, unitId: unidadeId, status: "PENDENTE" },
+    _sum: { quantity: true }
+  });
+  return soma._sum.quantity ?? 0;
+}
+async function disponivel(produtoId, unidadeId, tx) {
+  const [total, reserva] = await Promise.all([
+    saldo(produtoId, unidadeId, tx),
+    reservado(produtoId, unidadeId, tx)
   ]);
-  return unidades.map((unidade) => ({
-    unitId: unidade.id,
-    unitName: unidade.name,
-    quantity: linhas.find((l) => l.unitId === unidade.id)?.quantity ?? 0
-  }));
+  return Math.max(0, total - reserva);
+}
+async function saldosDoProduto(produtoId) {
+  const [unidades, linhas, retiradas] = await Promise.all([
+    db.unit.findMany({ where: { active: true }, orderBy: [{ type: "asc" }, { name: "asc" }] }),
+    db.stock.findMany({ where: { productId: produtoId } }),
+    db.stockWithdrawal.groupBy({
+      by: ["unitId"],
+      where: { productId: produtoId, status: "PENDENTE" },
+      _sum: { quantity: true }
+    })
+  ]);
+  return unidades.map((unidade) => {
+    const quantidade = linhas.find((l) => l.unitId === unidade.id)?.quantity ?? 0;
+    const reserva = retiradas.find((r) => r.unitId === unidade.id)?._sum.quantity ?? 0;
+    return {
+      unitId: unidade.id,
+      unitName: unidade.name,
+      quantity: quantidade,
+      reserved: reserva,
+      available: Math.max(0, quantidade - reserva)
+    };
+  });
 }
 async function movimentar(m) {
   const cliente3 = m.tx ?? db;
@@ -1063,11 +1089,16 @@ async function movimentar(m) {
   }
   const soma = entra ? m.quantidade : -m.quantidade;
   const antes = await saldo(m.produtoId, m.unidadeId, cliente3);
-  if (soma < 0 && antes < m.quantidade) {
-    const unidade = await cliente3.unit.findUnique({ where: { id: m.unidadeId } });
-    throw new AppError(
-      `Estoque insuficiente na ${unidade?.name ?? "unidade"}. Estoque dispon\xEDvel: ${antes} unidade(s).`
-    );
+  if (soma < 0) {
+    const reserva = m.ignorarReserva ? 0 : await reservado(m.produtoId, m.unidadeId, cliente3);
+    const livre = antes - reserva;
+    if (livre < m.quantidade) {
+      const unidade = await cliente3.unit.findUnique({ where: { id: m.unidadeId } });
+      const nome = unidade?.name ?? "unidade";
+      throw new AppError(
+        reserva > 0 ? `Estoque insuficiente na ${nome}. Dispon\xEDvel: ${Math.max(0, livre)} unidade(s) \u2014 ${reserva} est\xE3o reservadas para retiradas pendentes.` : `Estoque insuficiente na ${nome}. Estoque dispon\xEDvel: ${antes} unidade(s).`
+      );
+    }
   }
   let depois;
   if (soma > 0) {
@@ -1103,6 +1134,7 @@ async function movimentar(m) {
       referenceId: m.referenciaId ?? m.vendaId ?? m.transferenciaId ?? null,
       saleId: m.vendaId ?? null,
       transferId: m.transferenciaId ?? null,
+      withdrawalId: m.withdrawalId ?? null,
       userId: m.usuarioId ?? null
     }
   });
@@ -1719,6 +1751,157 @@ rotasMovimentacoes.post(
     res.json({ message: "Transfer\xEAncia cancelada e estoque devolvido \xE0 origem." });
   })
 );
+var retiradaSchema = z4.object({
+  productId: z4.string().uuid("Selecione o produto"),
+  unitId: z4.string().uuid("Selecione a unidade"),
+  quantity: z4.coerce.number().int().min(1, "A quantidade deve ser no m\xEDnimo 1"),
+  notes: z4.string().trim().max(1e3).optional().nullable()
+});
+rotasMovimentacoes.post(
+  "/retirada",
+  gerenteOuAdmin,
+  rota(async (req, res) => {
+    const dados = validar(retiradaSchema, req.body);
+    exigirAcessoNaUnidade(req.usuario, dados.unitId);
+    const produto = await db.product.findUnique({ where: { id: dados.productId } });
+    if (!produto) throw naoEncontrado("Produto");
+    const livre = await disponivel(dados.productId, dados.unitId);
+    if (livre < dados.quantity) {
+      const unidade = await db.unit.findUnique({ where: { id: dados.unitId } });
+      throw new AppError(
+        `S\xF3 h\xE1 ${livre} unidade(s) livres na ${unidade?.name ?? "unidade"} \u2014 o restante j\xE1 est\xE1 em outra retirada pendente.`
+      );
+    }
+    const retirada = await db.stockWithdrawal.create({
+      data: {
+        productId: produto.id,
+        unitId: dados.unitId,
+        quantity: dados.quantity,
+        notes: dados.notes ?? null,
+        requestedById: req.usuario?.id ?? null
+      },
+      include: { unit: { select: { name: true } } }
+    });
+    await registrarLog({ acao: "RETIRADA", entidade: "StockWithdrawal", id: retirada.id, req });
+    res.status(201).json(
+      limpar({
+        withdrawal: retirada,
+        message: `${dados.quantity} un. de ${produto.name} reservadas para a loja. O estoque s\xF3 ser\xE1 baixado quando voc\xEA aprovar.`
+      })
+    );
+  })
+);
+var filtroRetiradas = z4.object({
+  page: z4.coerce.number().int().min(1).optional(),
+  pageSize: z4.coerce.number().int().min(1).max(200).optional(),
+  status: z4.enum(["PENDENTE", "APROVADA", "CANCELADA"]).optional(),
+  unitId: z4.string().uuid().optional()
+});
+rotasMovimentacoes.get(
+  "/retiradas",
+  rota(async (req, res) => {
+    const q = validar(filtroRetiradas, req.query);
+    const p = paginacao(q);
+    const unidade = unidadePermitida(req.usuario, q.unitId);
+    const where = {
+      ...q.status ? { status: q.status } : {},
+      ...unidade ? { unitId: unidade } : {}
+    };
+    const [lista, total] = await Promise.all([
+      db.stockWithdrawal.findMany({
+        where,
+        skip: p.skip,
+        take: p.take,
+        // Pendentes primeiro: são as que pedem ação.
+        orderBy: [{ status: "asc" }, { createdAt: "desc" }],
+        include: {
+          product: { select: { id: true, name: true, model: true } },
+          unit: { select: { id: true, name: true } }
+        }
+      }),
+      db.stockWithdrawal.count({ where })
+    ]);
+    res.json(limpar(paginado(lista, total, p)));
+  })
+);
+var aprovarSchema = z4.object({
+  /** Quanto realmente saiu. O resto continua no estoque. */
+  soldQuantity: z4.coerce.number().int().min(0, "Informe quantas sa\xEDram"),
+  notes: z4.string().trim().max(1e3).optional().nullable()
+});
+rotasMovimentacoes.post(
+  "/retiradas/:id/aprovar",
+  gerenteOuAdmin,
+  rota(async (req, res) => {
+    const { soldQuantity, notes } = validar(aprovarSchema, req.body);
+    const resultado = await db.$transaction(async (tx) => {
+      const retirada = await tx.stockWithdrawal.findUnique({
+        where: { id: req.params.id },
+        include: { product: true, unit: true }
+      });
+      if (!retirada) throw naoEncontrado("Retirada");
+      if (retirada.status !== "PENDENTE") {
+        throw new AppError("Esta retirada j\xE1 foi fechada.");
+      }
+      if (soldQuantity > retirada.quantity) {
+        throw new AppError(
+          `Voc\xEA retirou ${retirada.quantity} un. \u2014 n\xE3o \xE9 poss\xEDvel informar ${soldQuantity} vendidas.`
+        );
+      }
+      exigirAcessoNaUnidade(req.usuario, retirada.unitId);
+      const devolvidas = retirada.quantity - soldQuantity;
+      await tx.stockWithdrawal.update({
+        where: { id: retirada.id },
+        data: {
+          status: "APROVADA",
+          soldQuantity,
+          returnedQuantity: devolvidas,
+          approvedAt: /* @__PURE__ */ new Date(),
+          approvedById: req.usuario?.id ?? null,
+          notes: notes ?? retirada.notes
+        }
+      });
+      let saldo2 = null;
+      if (soldQuantity > 0) {
+        saldo2 = await movimentar({
+          produtoId: retirada.productId,
+          produtoNome: retirada.product.name,
+          unidadeId: retirada.unitId,
+          tipo: "SAIDA",
+          motivo: "RETIRADA",
+          quantidade: soldQuantity,
+          observacao: `Retirada para a loja aprovada \u2014 ${soldQuantity} de ${retirada.quantity} sa\xEDram` + (devolvidas ? `, ${devolvidas} voltaram ao estoque` : ""),
+          withdrawalId: retirada.id,
+          referenciaId: retirada.id,
+          usuarioId: req.usuario?.id,
+          usuarioNome: req.usuario?.nome,
+          tx
+        });
+      }
+      return { retirada, soldQuantity, devolvidas, saldo: saldo2 };
+    });
+    await registrarLog({ acao: "APROVAR_RETIRADA", entidade: "StockWithdrawal", id: req.params.id, req });
+    res.json({
+      message: resultado.soldQuantity === 0 ? `Nenhuma unidade saiu \u2014 as ${resultado.retirada.quantity} voltaram ao estoque.` : `${resultado.soldQuantity} un. baixadas do estoque` + (resultado.devolvidas ? ` \xB7 ${resultado.devolvidas} voltaram` : "") + (resultado.saldo ? ` \xB7 saldo: ${resultado.saldo.antes} \u2192 ${resultado.saldo.depois}` : "")
+    });
+  })
+);
+rotasMovimentacoes.post(
+  "/retiradas/:id/cancelar",
+  gerenteOuAdmin,
+  rota(async (req, res) => {
+    const retirada = await db.stockWithdrawal.findUnique({ where: { id: req.params.id } });
+    if (!retirada) throw naoEncontrado("Retirada");
+    if (retirada.status !== "PENDENTE") throw new AppError("Esta retirada j\xE1 foi fechada.");
+    exigirAcessoNaUnidade(req.usuario, retirada.unitId);
+    await db.stockWithdrawal.update({
+      where: { id: retirada.id },
+      data: { status: "CANCELADA", soldQuantity: 0, returnedQuantity: retirada.quantity }
+    });
+    await registrarLog({ acao: "CANCELAR_RETIRADA", entidade: "StockWithdrawal", id: retirada.id, req });
+    res.json({ message: `Retirada cancelada \u2014 as ${retirada.quantity} un. seguem no estoque.` });
+  })
+);
 var filtros = z4.object({
   page: z4.coerce.number().int().min(1).optional(),
   pageSize: z4.coerce.number().int().min(1).max(200).optional(),
@@ -2073,14 +2256,14 @@ rotasProdutos.get(
       where: { productId: produto.id, status: { in: ["PENDENTE", "EM_TRANSITO"] } },
       _sum: { quantity: true }
     });
-    const disponivel = porUnidade.reduce((soma, u) => soma + u.quantity, 0);
+    const disponivel2 = porUnidade.reduce((soma, u) => soma + u.quantity, 0);
     const transito = emTransito._sum.quantity ?? 0;
     res.json({
       ...formatar(produto),
       stock: porUnidade,
       inTransit: transito,
-      totalAvailable: disponivel,
-      totalPhysical: disponivel + transito
+      totalAvailable: disponivel2,
+      totalPhysical: disponivel2 + transito
     });
   })
 );

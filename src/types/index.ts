@@ -11,11 +11,28 @@ export type MovementReason =
   | 'USO_INTERNO'
   | 'AJUSTE'
   | 'TRANSFERENCIA'
+  | 'RETIRADA'
   | 'CANCELAMENTO'
   | 'EXCLUSAO'
   | 'OUTRO';
 
 export type TransferStatus = 'PENDENTE' | 'EM_TRANSITO' | 'RECEBIDA' | 'CANCELADA';
+
+export type WithdrawalStatus = 'PENDENTE' | 'APROVADA' | 'CANCELADA';
+
+/** Retirada do estoque para a loja, aprovada no fim do dia. */
+export interface Withdrawal {
+  id: string;
+  quantity: number;
+  soldQuantity?: number | null;
+  returnedQuantity?: number | null;
+  status: WithdrawalStatus;
+  notes?: string | null;
+  createdAt: string;
+  approvedAt?: string | null;
+  product: { id: string; name: string; model?: string | null };
+  unit: { id: string; name: string };
+}
 
 /** Matriz, Sede… Cada uma com seu estoque. */
 export interface Unit {
@@ -31,6 +48,10 @@ export interface StockLine {
   unitId: string;
   unitName: string;
   quantity: number;
+  /** Comprometido com retiradas pendentes. */
+  reserved?: number;
+  /** Livre para vender (quantity - reserved). */
+  available?: number;
 }
 export type PaymentMethod = 'PIX' | 'DINHEIRO' | 'DEBITO' | 'CREDITO' | 'TRANSFERENCIA';
 export type UserRole = 'ADMIN' | 'GERENTE' | 'VENDEDOR';

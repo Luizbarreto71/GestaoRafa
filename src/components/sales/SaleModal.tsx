@@ -52,8 +52,8 @@ export function SaleModal({ open, onClose, product }: SaleModalProps) {
 
   useEffect(() => {
     if (!open || !product) return;
-    // Já começa na unidade que tem estoque, para poupar um clique.
-    const comEstoque = product.stock?.find((s) => s.quantity > 0);
+    // Já começa na unidade que tem estoque livre, para poupar um clique.
+    const comEstoque = product.stock?.find((s) => (s.available ?? s.quantity) > 0);
     setForm({
       unitId: comEstoque?.unitId ?? operaveis[0]?.id ?? '',
       customerName: '',
@@ -74,7 +74,9 @@ export function SaleModal({ open, onClose, product }: SaleModalProps) {
   };
 
   const quantity = Number(form.quantity) || 0;
-  const saldoNaUnidade = product?.stock?.find((s) => s.unitId === form.unitId)?.quantity ?? 0;
+  const linhaDaUnidade = product?.stock?.find((s) => s.unitId === form.unitId);
+  // O que está reservado para retirada não pode ser vendido de novo.
+  const saldoNaUnidade = linhaDaUnidade?.available ?? linhaDaUnidade?.quantity ?? 0;
   const unitPrice = Number(form.unitPrice) || 0;
   const total = quantity * unitPrice;
 
@@ -203,7 +205,12 @@ export function SaleModal({ open, onClose, product }: SaleModalProps) {
           onChange={(e) => set('unitId')(e.target.value)}
           options={operaveis.map((u) => ({
             value: u.id,
-            label: `${u.name} — ${product.stock?.find((s) => s.unitId === u.id)?.quantity ?? 0} em estoque`,
+            label: (() => {
+              const linha = product.stock?.find((s) => s.unitId === u.id);
+              const livre = linha?.available ?? linha?.quantity ?? 0;
+              const reservadas = linha?.reserved ?? 0;
+              return `${u.name} — ${livre} disponível${reservadas ? ` (${reservadas} na loja)` : ''}`;
+            })(),
           }))}
           placeholder="Selecione…"
           error={errors.unitId}

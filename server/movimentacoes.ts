@@ -14,7 +14,7 @@ import {
   validar,
 } from './core';
 import { db, registrarLog } from './db';
-import { cancelarTransferencia, movimentar, transferir } from './estoque';
+import { cancelarTransferencia, disponivel, movimentar, transferir } from './estoque';
 import { exigirAcessoNaUnidade, unidadePermitida } from './unidades';
 
 /** Entrada, saída, transferência e o histórico de tudo isso. */
@@ -219,6 +219,212 @@ rotasMovimentacoes.post(
     const t = await cancelarTransferencia(req.params.id, req.usuario);
     await registrarLog({ acao: 'CANCEL', entidade: 'StockTransfer', id: t.id, req });
     res.json({ message: 'Transferência cancelada e estoque devolvido à origem.' });
+  }),
+);
+
+// -------------------------------------------------- Retirada para a loja
+
+const retiradaSchema = z.object({
+  productId: z.string().uuid('Selecione o produto'),
+  unitId: z.string().uuid('Selecione a unidade'),
+  quantity: z.coerce.number().int().min(1, 'A quantidade deve ser no mínimo 1'),
+  notes: z.string().trim().max(1000).optional().nullable(),
+});
+
+/**
+ * Registra a saída de mercadoria para a loja SEM baixar o estoque.
+ *
+ * O saldo só diminui quando a retirada é aprovada, no fim do dia, porque
+ * nem tudo que vai para a loja vende. Enquanto isso as peças ficam
+ * reservadas: continuam no estoque, mas ninguém consegue vendê-las de novo.
+ */
+rotasMovimentacoes.post(
+  '/retirada',
+  gerenteOuAdmin,
+  rota(async (req, res) => {
+    const dados = validar(retiradaSchema, req.body);
+    exigirAcessoNaUnidade(req.usuario, dados.unitId);
+
+    const produto = await db.product.findUnique({ where: { id: dados.productId } });
+    if (!produto) throw naoEncontrado('Produto');
+
+    const livre = await disponivel(dados.productId, dados.unitId);
+    if (livre < dados.quantity) {
+      const unidade = await db.unit.findUnique({ where: { id: dados.unitId } });
+      throw new AppError(
+        `Só há ${livre} unidade(s) livres na ${unidade?.name ?? 'unidade'} — o restante já está em outra retirada pendente.`,
+      );
+    }
+
+    const retirada = await db.stockWithdrawal.create({
+      data: {
+        productId: produto.id,
+        unitId: dados.unitId,
+        quantity: dados.quantity,
+        notes: dados.notes ?? null,
+        requestedById: req.usuario?.id ?? null,
+      },
+      include: { unit: { select: { name: true } } },
+    });
+
+    await registrarLog({ acao: 'RETIRADA', entidade: 'StockWithdrawal', id: retirada.id, req });
+
+    res.status(201).json(
+      limpar({
+        withdrawal: retirada,
+        message:
+          `${dados.quantity} un. de ${produto.name} reservadas para a loja. ` +
+          'O estoque só será baixado quando você aprovar.',
+      }),
+    );
+  }),
+);
+
+const filtroRetiradas = z.object({
+  page: z.coerce.number().int().min(1).optional(),
+  pageSize: z.coerce.number().int().min(1).max(200).optional(),
+  status: z.enum(['PENDENTE', 'APROVADA', 'CANCELADA']).optional(),
+  unitId: z.string().uuid().optional(),
+});
+
+rotasMovimentacoes.get(
+  '/retiradas',
+  rota(async (req, res) => {
+    const q = validar(filtroRetiradas, req.query);
+    const p = paginacao(q as Record<string, unknown>);
+    const unidade = unidadePermitida(req.usuario, q.unitId);
+
+    const where: Prisma.StockWithdrawalWhereInput = {
+      ...(q.status ? { status: q.status } : {}),
+      ...(unidade ? { unitId: unidade } : {}),
+    };
+
+    const [lista, total] = await Promise.all([
+      db.stockWithdrawal.findMany({
+        where,
+        skip: p.skip,
+        take: p.take,
+        // Pendentes primeiro: são as que pedem ação.
+        orderBy: [{ status: 'asc' }, { createdAt: 'desc' }],
+        include: {
+          product: { select: { id: true, name: true, model: true } },
+          unit: { select: { id: true, name: true } },
+        },
+      }),
+      db.stockWithdrawal.count({ where }),
+    ]);
+
+    res.json(limpar(paginado(lista, total, p)));
+  }),
+);
+
+const aprovarSchema = z.object({
+  /** Quanto realmente saiu. O resto continua no estoque. */
+  soldQuantity: z.coerce.number().int().min(0, 'Informe quantas saíram'),
+  notes: z.string().trim().max(1000).optional().nullable(),
+});
+
+/**
+ * Fecha a retirada informando quanto realmente saiu.
+ *
+ * Só essa quantidade baixa do estoque; o que sobrou nunca chegou a sair,
+ * então volta a ficar livre assim que a reserva é desfeita.
+ */
+rotasMovimentacoes.post(
+  '/retiradas/:id/aprovar',
+  gerenteOuAdmin,
+  rota(async (req, res) => {
+    const { soldQuantity, notes } = validar(aprovarSchema, req.body);
+
+    const resultado = await db.$transaction(async (tx) => {
+      const retirada = await tx.stockWithdrawal.findUnique({
+        where: { id: req.params.id },
+        include: { product: true, unit: true },
+      });
+
+      if (!retirada) throw naoEncontrado('Retirada');
+      if (retirada.status !== 'PENDENTE') {
+        throw new AppError('Esta retirada já foi fechada.');
+      }
+      if (soldQuantity > retirada.quantity) {
+        throw new AppError(
+          `Você retirou ${retirada.quantity} un. — não é possível informar ${soldQuantity} vendidas.`,
+        );
+      }
+
+      exigirAcessoNaUnidade(req.usuario, retirada.unitId);
+
+      const devolvidas = retirada.quantity - soldQuantity;
+
+      // Fecha antes de movimentar: assim a própria reserva desta retirada
+      // deixa de contar na conferência de saldo.
+      await tx.stockWithdrawal.update({
+        where: { id: retirada.id },
+        data: {
+          status: 'APROVADA',
+          soldQuantity,
+          returnedQuantity: devolvidas,
+          approvedAt: new Date(),
+          approvedById: req.usuario?.id ?? null,
+          notes: notes ?? retirada.notes,
+        },
+      });
+
+      let saldo: { antes: number; depois: number } | null = null;
+
+      if (soldQuantity > 0) {
+        saldo = await movimentar({
+          produtoId: retirada.productId,
+          produtoNome: retirada.product.name,
+          unidadeId: retirada.unitId,
+          tipo: 'SAIDA',
+          motivo: 'RETIRADA',
+          quantidade: soldQuantity,
+          observacao:
+            `Retirada para a loja aprovada — ${soldQuantity} de ${retirada.quantity} saíram` +
+            (devolvidas ? `, ${devolvidas} voltaram ao estoque` : ''),
+          withdrawalId: retirada.id,
+          referenciaId: retirada.id,
+          usuarioId: req.usuario?.id,
+          usuarioNome: req.usuario?.nome,
+          tx,
+        });
+      }
+
+      return { retirada, soldQuantity, devolvidas, saldo };
+    });
+
+    await registrarLog({ acao: 'APROVAR_RETIRADA', entidade: 'StockWithdrawal', id: req.params.id, req });
+
+    res.json({
+      message:
+        resultado.soldQuantity === 0
+          ? `Nenhuma unidade saiu — as ${resultado.retirada.quantity} voltaram ao estoque.`
+          : `${resultado.soldQuantity} un. baixadas do estoque` +
+            (resultado.devolvidas ? ` · ${resultado.devolvidas} voltaram` : '') +
+            (resultado.saldo ? ` · saldo: ${resultado.saldo.antes} → ${resultado.saldo.depois}` : ''),
+    });
+  }),
+);
+
+/** Cancela a retirada e libera a reserva. O estoque nunca chegou a sair. */
+rotasMovimentacoes.post(
+  '/retiradas/:id/cancelar',
+  gerenteOuAdmin,
+  rota(async (req, res) => {
+    const retirada = await db.stockWithdrawal.findUnique({ where: { id: req.params.id } });
+    if (!retirada) throw naoEncontrado('Retirada');
+    if (retirada.status !== 'PENDENTE') throw new AppError('Esta retirada já foi fechada.');
+
+    exigirAcessoNaUnidade(req.usuario, retirada.unitId);
+
+    await db.stockWithdrawal.update({
+      where: { id: retirada.id },
+      data: { status: 'CANCELADA', soldQuantity: 0, returnedQuantity: retirada.quantity },
+    });
+
+    await registrarLog({ acao: 'CANCELAR_RETIRADA', entidade: 'StockWithdrawal', id: retirada.id, req });
+    res.json({ message: `Retirada cancelada — as ${retirada.quantity} un. seguem no estoque.` });
   }),
 );
 
