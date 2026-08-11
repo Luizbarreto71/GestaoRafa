@@ -4147,6 +4147,13 @@ import { z as z9 } from "zod";
 var rotasPreVendas = Router11();
 rotasPreVendas.use(autenticar);
 var PAGAMENTOS = ["PIX", "DINHEIRO", "DEBITO", "CREDITO", "TRANSFERENCIA", "OUTRO"];
+var STATUS_PRE_VENDA = [
+  "AGUARDANDO_CAIXA",
+  "EM_ATENDIMENTO",
+  "FINALIZADA",
+  "CANCELADA",
+  "EXPIRADA"
+];
 var COM_TUDO = {
   items: { include: { product: { select: { id: true, name: true, model: true, imei: true } } } },
   seller: { select: { id: true, name: true } },
@@ -4180,7 +4187,9 @@ rotasPreVendas.get(
       z9.object({
         page: z9.coerce.number().int().min(1).optional(),
         pageSize: z9.coerce.number().int().min(1).max(100).optional(),
-        status: z9.enum(["AGUARDANDO_CAIXA", "EM_ATENDIMENTO", "FINALIZADA", "CANCELADA", "EXPIRADA"]).optional(),
+        // Aceita mais de um status separado por vírgula: a fila do caixa
+        // precisa das que aguardam e das que já estão sendo atendidas.
+        status: z9.string().optional().transform((v) => v ? v.split(",").map((s) => s.trim()).filter(Boolean) : void 0).pipe(z9.array(z9.enum(STATUS_PRE_VENDA)).min(1).optional()),
         sellerId: z9.string().uuid().optional(),
         search: z9.string().trim().optional(),
         startDate: z9.coerce.date().optional(),
@@ -4193,7 +4202,7 @@ rotasPreVendas.get(
     const where = {
       // Um vendedor nunca vê a pré-venda de outro.
       ...podeVerTodas(req) ? q.sellerId ? { sellerId: q.sellerId } : {} : { sellerId: req.usuario.id },
-      ...q.status ? { status: q.status } : {},
+      ...q.status ? { status: { in: q.status } } : {},
       ...periodo2 ? { createdAt: periodo2 } : {},
       ...q.search ? {
         OR: [

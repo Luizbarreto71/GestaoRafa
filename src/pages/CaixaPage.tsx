@@ -40,6 +40,14 @@ import { useEffect, useState, type FormEvent } from 'react';
 type Aba = 'pendentes' | 'pdv' | 'fechamento';
 
 /**
+ * O que o caixa ainda tem para resolver.
+ *
+ * Inclui as que já foram abertas: abrir uma pré-venda muda o status, e sem
+ * isto ela sumiria da tela justamente na hora de ser atendida.
+ */
+const FILA_DO_CAIXA = 'AGUARDANDO_CAIXA,EM_ATENDIMENTO';
+
+/**
  * Tela do caixa: recebe as pré-vendas, cobra, finaliza e fecha o dia.
  *
  * É o único lugar do sistema onde uma venda se conclui — e, portanto, o
@@ -48,8 +56,9 @@ type Aba = 'pendentes' | 'pdv' | 'fechamento';
 export default function CaixaPage() {
   const [aba, setAba] = useState<Aba>('pendentes');
   const { data: caixa } = useCaixaAtual();
-  const { data: preVendas } = usePreVendas({ status: 'AGUARDANDO_CAIXA' });
+  const { data: preVendas } = usePreVendas({ status: FILA_DO_CAIXA });
 
+  // Uma pré-venda já aberta continua sendo trabalho por fazer.
   const pendentes = preVendas?.meta.total ?? 0;
 
   const abas = [
@@ -153,28 +162,26 @@ function ControleDoTurno() {
 // ---------------------------------------------------------- Fila de pedidos
 
 function FilaDePreVendas() {
-  const { data, isLoading } = usePreVendas({ status: 'AGUARDANDO_CAIXA' });
+  const { data, isLoading } = usePreVendas({ status: FILA_DO_CAIXA });
   const [abrindo, setAbrindo] = useState<PreSale | null>(null);
 
   const lista = data?.data ?? [];
 
-  if (isLoading) return <div className="skeleton h-32 w-full" />;
-
-  if (!lista.length) {
-    return (
-      <Card>
-        <div className="flex flex-col items-center gap-2 px-4 py-16 text-center">
-          <Inbox className="h-10 w-10 text-slate-300 dark:text-navy-600" />
-          <p className="text-sm text-slate-500 dark:text-slate-400">
-            Nenhuma pré-venda aguardando. Quando um vendedor enviar, aparece aqui.
-          </p>
-        </div>
-      </Card>
-    );
-  }
-
   return (
     <>
+      {isLoading && <div className="skeleton h-32 w-full" />}
+
+      {!isLoading && lista.length === 0 && (
+        <Card>
+          <div className="flex flex-col items-center gap-2 px-4 py-16 text-center">
+            <Inbox className="h-10 w-10 text-slate-300 dark:text-navy-600" />
+            <p className="text-sm text-slate-500 dark:text-slate-400">
+              Nenhuma pré-venda aguardando. Quando um vendedor enviar, aparece aqui.
+            </p>
+          </div>
+        </Card>
+      )}
+
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         {lista.map((pv) => (
           <Card key={pv.id}>
@@ -189,7 +196,9 @@ function FilaDePreVendas() {
                     {pv.seller?.name} · {formatDateTime(pv.createdAt)}
                   </p>
                 </div>
-                <Badge tone="warning">{PRE_SALE_LABEL[pv.status]}</Badge>
+                <Badge tone={pv.status === 'EM_ATENDIMENTO' ? 'info' : 'warning'}>
+                  {PRE_SALE_LABEL[pv.status]}
+                </Badge>
               </div>
 
               <div className="space-y-1 border-t border-slate-200 pt-2 dark:border-navy-700">
@@ -208,7 +217,7 @@ function FilaDePreVendas() {
                   {formatCurrency(pv.totalAmount)}
                 </span>
                 <Button size="sm" onClick={() => setAbrindo(pv)}>
-                  Abrir pré-venda
+                  {pv.status === 'EM_ATENDIMENTO' ? 'Continuar' : 'Abrir pré-venda'}
                 </Button>
               </div>
             </CardBody>

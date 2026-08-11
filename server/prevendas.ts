@@ -33,6 +33,14 @@ rotasPreVendas.use(autenticar);
 
 const PAGAMENTOS = ['PIX', 'DINHEIRO', 'DEBITO', 'CREDITO', 'TRANSFERENCIA', 'OUTRO'] as const;
 
+const STATUS_PRE_VENDA = [
+  'AGUARDANDO_CAIXA',
+  'EM_ATENDIMENTO',
+  'FINALIZADA',
+  'CANCELADA',
+  'EXPIRADA',
+] as const;
+
 const COM_TUDO = {
   items: { include: { product: { select: { id: true, name: true, model: true, imei: true } } } },
   seller: { select: { id: true, name: true } },
@@ -74,7 +82,13 @@ rotasPreVendas.get(
       z.object({
         page: z.coerce.number().int().min(1).optional(),
         pageSize: z.coerce.number().int().min(1).max(100).optional(),
-        status: z.enum(['AGUARDANDO_CAIXA', 'EM_ATENDIMENTO', 'FINALIZADA', 'CANCELADA', 'EXPIRADA']).optional(),
+        // Aceita mais de um status separado por vírgula: a fila do caixa
+        // precisa das que aguardam e das que já estão sendo atendidas.
+        status: z
+          .string()
+          .optional()
+          .transform((v) => (v ? v.split(',').map((s) => s.trim()).filter(Boolean) : undefined))
+          .pipe(z.array(z.enum(STATUS_PRE_VENDA)).min(1).optional()),
         sellerId: z.string().uuid().optional(),
         search: z.string().trim().optional(),
         startDate: z.coerce.date().optional(),
@@ -89,7 +103,7 @@ rotasPreVendas.get(
     const where: Prisma.PreSaleWhereInput = {
       // Um vendedor nunca vê a pré-venda de outro.
       ...(podeVerTodas(req) ? (q.sellerId ? { sellerId: q.sellerId } : {}) : { sellerId: req.usuario!.id }),
-      ...(q.status ? { status: q.status } : {}),
+      ...(q.status ? { status: { in: q.status } } : {}),
       ...(periodo ? { createdAt: periodo } : {}),
       ...(q.search
         ? {
