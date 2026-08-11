@@ -165,12 +165,10 @@ export default function StockPage() {
 
   async function exportStock(format: 'xlsx' | 'pdf' | 'csv') {
     try {
-      await downloadFile(
-        '/reports/stock',
-        { format, ...filters, ...(unidadeId ? { unitId: unidadeId } : {}) },
-        `estoque.${format}`,
-      );
-      toast.success('Relatório gerado');
+      // De propósito sem `unitId`: o relatório do estoque é o retrato geral
+      // da loja. Para o de uma unidade só, a tela de Relatórios tem o filtro.
+      await downloadFile('/reports/stock', { format, ...filters }, `estoque.${format}`);
+      toast.success('Relatório gerado', 'Com o estoque de todas as unidades.');
     } catch {
       toast.error('Não foi possível exportar o relatório');
     }
@@ -388,7 +386,7 @@ export default function StockPage() {
             <details className="group">
               <summary className="flex h-10 cursor-pointer list-none items-center gap-2 rounded-lg border border-slate-300 px-4 text-sm font-semibold text-navy-900 transition hover:bg-slate-50 dark:border-navy-600 dark:text-slate-100 dark:hover:bg-navy-800">
                 <Download className="h-4 w-4" />
-                Exportar
+                Exportar tudo
               </summary>
               <div className="absolute right-0 top-11 z-20 w-40 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-card-hover dark:border-navy-700 dark:bg-navy-800">
                 {(['xlsx', 'pdf', 'csv'] as const).map((format) => (
