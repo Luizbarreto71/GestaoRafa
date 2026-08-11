@@ -7,6 +7,12 @@ import { StatCard } from '@/components/ui/StatCard';
 import { CarrinhoDeItens, totalDosItens } from '@/components/vendas/CarrinhoDeItens';
 import { ReciboDaVenda } from '@/components/vendas/ReciboDaVenda';
 import {
+  TrocaNoBalcao,
+  trocaParaApi,
+  trocaVazia,
+  type TrocaDeBalcao,
+} from '@/components/vendas/TrocaNoBalcao';
+import {
   FormasDePagamento,
   paraApi,
   somaDasFormas,
@@ -584,6 +590,8 @@ function VendaDireta() {
 
   const [itens, setItens] = useState<ItemVenda[]>([]);
   const [recibo, setRecibo] = useState<{ id: string; code: string; totalAmount: number } | null>(null);
+  const [comTroca, setComTroca] = useState(false);
+  const [troca, setTroca] = useState<TrocaDeBalcao>(trocaVazia);
   const [dividido, setDividido] = useState(false);
   const [formas, setFormas] = useState<FormaDePagamento[]>([]);
   const [form, setForm] = useState({
@@ -598,7 +606,10 @@ function VendaDireta() {
   });
 
   const unidade = form.unitId || unidades[0]?.id || '';
-  const total = totalDosItens(itens);
+  const totalDosProdutos = totalDosItens(itens);
+  // O aparelho do cliente é forma de pagamento: o que sobra é o que ele paga.
+  const daTroca = comTroca ? Number(troca.valorAvaliado) || 0 : 0;
+  const total = Math.max(0, totalDosProdutos - daTroca);
   // Sugestão, não restrição: quem vende no salão muitas vezes não tem login,
   // e filtrar por perfil deixava a lista praticamente vazia.
   const sugestoes = (usuarios?.data ?? []).map((u) => u.name).sort((a, b) => a.localeCompare(b, 'pt-BR'));
@@ -612,6 +623,17 @@ function VendaDireta() {
     // Cliente é opcional no balcão: quem paga um cabo à vista não precisa
     // se identificar, e a fila anda.
     if (!itens.length) return toast.warning('Adicione ao menos um produto');
+
+    if (comTroca) {
+      if (!troca.modelo.trim()) return toast.warning('Informe o modelo do aparelho da troca');
+      if (daTroca <= 0) return toast.warning('Informe quanto vale o aparelho do cliente');
+      if (daTroca > totalDosProdutos) {
+        return toast.warning(
+          'A troca vale mais que a compra',
+          'Ajuste a avaliação ou acrescente produtos.',
+        );
+      }
+    }
 
     if (dividido && Math.abs(somaDasFormas(formas) - total) >= 0.01) {
       return toast.warning(
@@ -633,6 +655,7 @@ function VendaDireta() {
         paymentMethod: form.paymentMethod,
         installments: Number(form.installments) || 1,
         payments: paraApi(dividido, formas),
+        tradeIn: trocaParaApi(comTroca, troca),
         customerName: form.customerName.trim() || null,
         customerPhone: form.customerPhone.trim() || null,
         customerDocument: form.customerDocument.trim() || null,
@@ -651,6 +674,8 @@ function VendaDireta() {
       setForm((f) => ({ ...f, customerName: '', customerPhone: '', customerDocument: '', notes: '' }));
       setDividido(false);
       setFormas([]);
+      setComTroca(false);
+      setTroca(trocaVazia());
     } catch (erro) {
       const m = erro instanceof Error ? erro.message : 'Erro ao registrar';
       if (m === 'OFFLINE_QUEUED') {
@@ -697,6 +722,14 @@ function VendaDireta() {
           </div>
 
           <CarrinhoDeItens itens={itens} aoMudar={setItens} unidadeId={unidade} />
+
+          <TrocaNoBalcao
+            ligada={comTroca}
+            aoLigar={setComTroca}
+            troca={troca}
+            aoMudar={setTroca}
+            totalDosProdutos={totalDosProdutos}
+          />
 
           <FormasDePagamento
             dividido={dividido}
@@ -754,7 +787,7 @@ function VendaDireta() {
             disabled={!itens.length}
             icon={<Check className="h-4 w-4" />}
           >
-            Finalizar venda · {formatCurrency(totalDosItens(itens))}
+            Finalizar venda · {formatCurrency(total)}
           </Button>
         </form>
 

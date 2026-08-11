@@ -42,6 +42,19 @@ export interface DadosDaVenda {
    * prejuízo diante do custo do produto.
    */
   trocaValor?: number | null;
+  /**
+   * Aparelho anotado na hora, no balcão.
+   *
+   * A caixa registra só o essencial — modelo, cor, capacidade e quanto
+   * vale. O cadastro completo, com IMEI e Anatel, fica para quando o
+   * aparelho for para a prateleira.
+   */
+  trocaNova?: {
+    modelo: string;
+    cor?: string | null;
+    armazenamento?: string | null;
+    valorAvaliado: number;
+  } | null;
   customerName?: string | null;
   customerPhone?: string | null;
   customerDocument?: string | null;
@@ -204,7 +217,7 @@ export async function registrarVenda(dados: DadosDaVenda) {
 
     // Toda venda guarda o rateio, mesmo com forma única: o fechamento soma
     // sempre da mesma tabela, sem caso especial.
-    const daTroca = new Prisma.Decimal(dados.trocaValor ?? 0);
+    const daTroca = new Prisma.Decimal(dados.trocaNova?.valorAvaliado ?? dados.trocaValor ?? 0);
     // O que o cliente entrega em dinheiro: o resto vem no aparelho.
     const aReceber = total.minus(daTroca);
 
@@ -314,6 +327,29 @@ export async function registrarVenda(dados: DadosDaVenda) {
         usuarioId: dados.cashierId ?? dados.sellerId,
         usuarioNome: dados.cashierName,
         tx,
+      });
+    }
+
+    // A troca anotada no balcão vira registro junto com a venda: se a
+    // venda falhar, não sobra aparelho fantasma esperando dono.
+    if (dados.trocaNova) {
+      await tx.tradeIn.create({
+        data: {
+          code: await proximoCodigo('troca', 'TR', tx),
+          status: 'ACEITA',
+          modelo: dados.trocaNova.modelo,
+          cor: dados.trocaNova.cor ?? null,
+          armazenamento: dados.trocaNova.armazenamento ?? null,
+          valorAvaliado: daTroca,
+          valorSaida: total,
+          customerName: nome ?? 'Consumidor',
+          customerPhone: dados.customerPhone ?? null,
+          customerDocument: dados.customerDocument ?? null,
+          sellerId: dados.sellerId ?? dados.cashierId!,
+          unitId: dados.unitId,
+          saleId: venda.id,
+          defeitos: [],
+        },
       });
     }
 

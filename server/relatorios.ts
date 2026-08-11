@@ -176,6 +176,7 @@ rotasRelatorios.get(
             seller: { select: { name: true } },
             cashier: { select: { name: true } },
             unit: { select: { name: true } },
+            payments: { orderBy: { amount: 'desc' } },
           },
         },
       },
@@ -197,7 +198,15 @@ rotasRelatorios.get(
         unitPrice: numero(i.unitPrice),
         total,
         profit: total - numero(i.costPrice) * i.quantity,
-        payment: PAGAMENTO_LABEL[i.sale.paymentMethod] ?? i.sale.paymentMethod,
+        // Todas as formas, não só a principal: uma venda paga metade no
+        // cartão e metade em aparelho mostraria só o cartão, e a troca
+        // sumiria justamente de onde se confere o dinheiro.
+        payment:
+          i.sale.payments.length > 1
+            ? i.sale.payments
+                .map((p) => `${PAGAMENTO_LABEL[p.method] ?? p.method} ${reais(numero(p.amount))}`)
+                .join(' + ')
+            : (PAGAMENTO_LABEL[i.sale.paymentMethod] ?? i.sale.paymentMethod),
         installments: i.sale.installments,
         seller: i.sale.seller?.name ?? i.sale.sellerName ?? '—',
         cashier: i.sale.cashier?.name ?? '—',
@@ -221,7 +230,7 @@ rotasRelatorios.get(
         money('Valor unit.', 'unitPrice', 11),
         money('Total', 'total', 11),
         money('Lucro', 'profit', 11),
-        { header: 'Pagamento', key: 'payment', width: 12 },
+        { header: 'Pagamento', key: 'payment', width: 22 },
         { header: 'Vendedor', key: 'seller', width: 13 },
         { header: 'Caixa', key: 'cashier', width: 13 },
       ],

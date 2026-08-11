@@ -2901,7 +2901,8 @@ rotasRelatorios.get(
           include: {
             seller: { select: { name: true } },
             cashier: { select: { name: true } },
-            unit: { select: { name: true } }
+            unit: { select: { name: true } },
+            payments: { orderBy: { amount: "desc" } }
           }
         }
       },
@@ -2922,7 +2923,10 @@ rotasRelatorios.get(
         unitPrice: numero(i.unitPrice),
         total,
         profit: total - numero(i.costPrice) * i.quantity,
-        payment: PAGAMENTO_LABEL[i.sale.paymentMethod] ?? i.sale.paymentMethod,
+        // Todas as formas, não só a principal: uma venda paga metade no
+        // cartão e metade em aparelho mostraria só o cartão, e a troca
+        // sumiria justamente de onde se confere o dinheiro.
+        payment: i.sale.payments.length > 1 ? i.sale.payments.map((p) => `${PAGAMENTO_LABEL[p.method] ?? p.method} ${reais(numero(p.amount))}`).join(" + ") : PAGAMENTO_LABEL[i.sale.paymentMethod] ?? i.sale.paymentMethod,
         installments: i.sale.installments,
         seller: i.sale.seller?.name ?? i.sale.sellerName ?? "\u2014",
         cashier: i.sale.cashier?.name ?? "\u2014"
@@ -2944,7 +2948,7 @@ rotasRelatorios.get(
         money("Valor unit.", "unitPrice", 11),
         money("Total", "total", 11),
         money("Lucro", "profit", 11),
-        { header: "Pagamento", key: "payment", width: 12 },
+        { header: "Pagamento", key: "payment", width: 22 },
         { header: "Vendedor", key: "seller", width: 13 },
         { header: "Caixa", key: "cashier", width: 13 }
       ],
@@ -3888,7 +3892,7 @@ async function registrarVenda(dados) {
       (soma, i) => soma.add(i.costPrice.mul(i.quantity)),
       new Prisma3.Decimal(0)
     );
-    const daTroca = new Prisma3.Decimal(dados.trocaValor ?? 0);
+    const daTroca = new Prisma3.Decimal(dados.trocaNova?.valorAvaliado ?? dados.trocaValor ?? 0);
     const aReceber = total.minus(daTroca);
     const emDinheiro = dados.pagamentos?.length ? dados.pagamentos.map((p) => ({
       method: p.method,
@@ -3975,6 +3979,26 @@ async function registrarVenda(dados) {
         usuarioId: dados.cashierId ?? dados.sellerId,
         usuarioNome: dados.cashierName,
         tx
+      });
+    }
+    if (dados.trocaNova) {
+      await tx.tradeIn.create({
+        data: {
+          code: await proximoCodigo("troca", "TR", tx),
+          status: "ACEITA",
+          modelo: dados.trocaNova.modelo,
+          cor: dados.trocaNova.cor ?? null,
+          armazenamento: dados.trocaNova.armazenamento ?? null,
+          valorAvaliado: daTroca,
+          valorSaida: total,
+          customerName: nome ?? "Consumidor",
+          customerPhone: dados.customerPhone ?? null,
+          customerDocument: dados.customerDocument ?? null,
+          sellerId: dados.sellerId ?? dados.cashierId,
+          unitId: dados.unitId,
+          saleId: venda.id,
+          defeitos: []
+        }
       });
     }
     return venda;
@@ -4667,7 +4691,13 @@ var trocaSchema = z10.object({
   marca: z10.string().trim().max(60).optional().nullable(),
   armazenamento: z10.string().trim().max(20).optional().nullable(),
   cor: z10.string().trim().max(40).optional().nullable(),
-  imei: z10.string().trim().transform((v) => v.replace(/\D/g, "")).refine((v) => v.length === 15, "O IMEI tem 15 n\xFAmeros").refine(imeiValido, "Esse IMEI n\xE3o passa na confer\xEAncia \u2014 confira os n\xFAmeros"),
+  /**
+   * Opcional porque o balcão não para.
+   *
+   * Quando vem, é conferido de verdade: erro de digitação vira problema
+   * depois que o cliente já foi embora.
+   */
+  imei: z10.string().trim().transform((v) => v.replace(/\D/g, "")).refine((v) => v === "" || v.length === 15, "O IMEI tem 15 n\xFAmeros").refine((v) => v === "" || imeiValido(v), "Esse IMEI n\xE3o passa na confer\xEAncia \u2014 confira os n\xFAmeros").optional().nullable(),
   imeiSituacao: z10.enum(["NAO_CONSULTADO", "REGULAR", "IRREGULAR", "BLOQUEADO"]).default("NAO_CONSULTADO"),
   estado: z10.string().trim().max(40).optional().nullable(),
   defeitos: z10.array(z10.enum(CHAVES_DEFEITO)).default([]),
@@ -4754,10 +4784,10 @@ rotasTrocas.post(
   exigir("troca.criar"),
   rota(async (req, res) => {
     const dados = validar(trocaSchema, req.body);
-    const repetido = await db.tradeIn.findFirst({
+    const repetido = dados.imei ? await db.tradeIn.findFirst({
       where: { imei: dados.imei, status: { not: "RECUSADA" } },
       select: { code: true, createdAt: true }
-    });
+    }) : null;
     if (repetido) {
       throw new AppError(
         `Esse IMEI j\xE1 foi recebido na troca ${repetido.code}. Se for outro aparelho, confira os n\xFAmeros.`
@@ -4783,7 +4813,7 @@ rotasTrocas.post(
         marca: dados.marca ?? null,
         armazenamento: dados.armazenamento ?? null,
         cor: dados.cor ?? null,
-        imei: dados.imei,
+        imei: dados.imei || null,
         imeiSituacao: dados.imeiSituacao,
         imeiCheckedAt: dados.imeiSituacao === "NAO_CONSULTADO" ? null : /* @__PURE__ */ new Date(),
         estado: dados.estado ?? null,
@@ -5009,7 +5039,12 @@ function enviarRecibo(res, r) {
     doc.font("Helvetica-Bold").text(dinheiro2(p.amount), x0, yp, { width: largura, align: "right" });
     doc.y = yp + 14;
     if (p.method === "TROCA" && r.troca) {
-      doc.fillColor(CINZA).fontSize(7.5).font("Helvetica").text(`${r.troca.modelo} \xB7 IMEI ${r.troca.imei}`, x0 + 12, doc.y - 2, { width: largura / 2 });
+      doc.fillColor(CINZA).fontSize(7.5).font("Helvetica").text(
+        [r.troca.modelo, r.troca.imei && `IMEI ${r.troca.imei}`].filter(Boolean).join(" \xB7 "),
+        x0 + 12,
+        doc.y - 2,
+        { width: largura / 2 }
+      );
       doc.y += 11;
     }
   }
@@ -5165,6 +5200,18 @@ var vendaSchema = z11.object({
   customerPhone: z11.string().trim().max(30).optional().nullable(),
   customerDocument: z11.string().trim().max(30).optional().nullable(),
   customerId: z11.string().uuid().optional().nullable(),
+  /**
+   * Aparelho que o cliente deixou como parte do pagamento.
+   *
+   * Versão de balcão: só o que dá para anotar com o cliente na frente.
+   * O aparelho vira uma forma de pagamento e o cliente paga a diferença.
+   */
+  tradeIn: z11.object({
+    modelo: z11.string().trim().min(2, "Informe o modelo do aparelho").max(120),
+    cor: z11.string().trim().max(40).optional().nullable(),
+    armazenamento: z11.string().trim().max(20).optional().nullable(),
+    valorAvaliado: z11.coerce.number().min(0.01, "Informe quanto vale o aparelho do cliente")
+  }).optional().nullable(),
   /** Vendedor que atendeu, para a comissão. Vazio = o próprio caixa. */
   sellerId: z11.string().uuid().optional().nullable(),
   /**
@@ -5197,6 +5244,7 @@ rotasVendas.post(
       paymentMethod: dados.paymentMethod,
       installments: dados.installments,
       pagamentos: dados.payments,
+      trocaNova: dados.tradeIn,
       customerName: dados.customerName,
       sellerName: dados.sellerName,
       customerPhone: dados.customerPhone,
@@ -5272,7 +5320,7 @@ rotasVendas.get(
         unit: { select: { name: true } },
         seller: { select: { name: true } },
         cashier: { select: { name: true } },
-        tradeIn: { select: { modelo: true, imei: true, valorAvaliado: true } }
+        tradeIn: { select: { modelo: true, imei: true, cor: true, armazenamento: true, valorAvaliado: true } }
       }
     });
     if (!venda) throw naoEncontrado("Venda");
@@ -5299,7 +5347,7 @@ rotasVendas.get(
         installments: p.installments
       })),
       troca: venda.tradeIn ? {
-        modelo: venda.tradeIn.modelo,
+        modelo: [venda.tradeIn.modelo, venda.tradeIn.armazenamento, venda.tradeIn.cor].filter(Boolean).join(" \xB7 "),
         imei: venda.tradeIn.imei,
         valor: numero(venda.tradeIn.valorAvaliado)
       } : null,

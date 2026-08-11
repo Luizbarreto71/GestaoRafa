@@ -52,13 +52,20 @@ const trocaSchema = z.object({
   armazenamento: z.string().trim().max(20).optional().nullable(),
   cor: z.string().trim().max(40).optional().nullable(),
 
+  /**
+   * Opcional porque o balcão não para.
+   *
+   * Quando vem, é conferido de verdade: erro de digitação vira problema
+   * depois que o cliente já foi embora.
+   */
   imei: z
     .string()
     .trim()
     .transform((v) => v.replace(/\D/g, ''))
-    .refine((v) => v.length === 15, 'O IMEI tem 15 números')
-    // Erro de digitação vira problema depois que o cliente foi embora.
-    .refine(imeiValido, 'Esse IMEI não passa na conferência — confira os números'),
+    .refine((v) => v === '' || v.length === 15, 'O IMEI tem 15 números')
+    .refine((v) => v === '' || imeiValido(v), 'Esse IMEI não passa na conferência — confira os números')
+    .optional()
+    .nullable(),
   imeiSituacao: z.enum(['NAO_CONSULTADO', 'REGULAR', 'IRREGULAR', 'BLOQUEADO']).default('NAO_CONSULTADO'),
 
   estado: z.string().trim().max(40).optional().nullable(),
@@ -177,11 +184,14 @@ rotasTrocas.post(
   rota(async (req, res) => {
     const dados = validar(trocaSchema, req.body);
 
-    // O mesmo aparelho não entra duas vezes.
-    const repetido = await db.tradeIn.findFirst({
-      where: { imei: dados.imei, status: { not: 'RECUSADA' } },
-      select: { code: true, createdAt: true },
-    });
+    // O mesmo aparelho não entra duas vezes. Sem IMEI não há o que
+    // comparar — a conferência fica para o cadastro no estoque.
+    const repetido = dados.imei
+      ? await db.tradeIn.findFirst({
+          where: { imei: dados.imei, status: { not: 'RECUSADA' } },
+          select: { code: true, createdAt: true },
+        })
+      : null;
     if (repetido) {
       throw new AppError(
         `Esse IMEI já foi recebido na troca ${repetido.code}. Se for outro aparelho, confira os números.`,
@@ -211,7 +221,7 @@ rotasTrocas.post(
         marca: dados.marca ?? null,
         armazenamento: dados.armazenamento ?? null,
         cor: dados.cor ?? null,
-        imei: dados.imei,
+        imei: dados.imei || null,
         imeiSituacao: dados.imeiSituacao,
         imeiCheckedAt: dados.imeiSituacao === 'NAO_CONSULTADO' ? null : new Date(),
 

@@ -179,6 +179,21 @@ const vendaSchema = z.object({
   customerPhone: z.string().trim().max(30).optional().nullable(),
   customerDocument: z.string().trim().max(30).optional().nullable(),
   customerId: z.string().uuid().optional().nullable(),
+  /**
+   * Aparelho que o cliente deixou como parte do pagamento.
+   *
+   * Versão de balcão: só o que dá para anotar com o cliente na frente.
+   * O aparelho vira uma forma de pagamento e o cliente paga a diferença.
+   */
+  tradeIn: z
+    .object({
+      modelo: z.string().trim().min(2, 'Informe o modelo do aparelho').max(120),
+      cor: z.string().trim().max(40).optional().nullable(),
+      armazenamento: z.string().trim().max(20).optional().nullable(),
+      valorAvaliado: z.coerce.number().min(0.01, 'Informe quanto vale o aparelho do cliente'),
+    })
+    .optional()
+    .nullable(),
   /** Vendedor que atendeu, para a comissão. Vazio = o próprio caixa. */
   sellerId: z.string().uuid().optional().nullable(),
   /**
@@ -222,6 +237,7 @@ rotasVendas.post(
       paymentMethod: dados.paymentMethod as never,
       installments: dados.installments,
       pagamentos: dados.payments,
+      trocaNova: dados.tradeIn,
       customerName: dados.customerName,
       sellerName: dados.sellerName,
       customerPhone: dados.customerPhone,
@@ -318,7 +334,7 @@ rotasVendas.get(
         unit: { select: { name: true } },
         seller: { select: { name: true } },
         cashier: { select: { name: true } },
-        tradeIn: { select: { modelo: true, imei: true, valorAvaliado: true } },
+        tradeIn: { select: { modelo: true, imei: true, cor: true, armazenamento: true, valorAvaliado: true } },
       },
     });
     if (!venda) throw naoEncontrado('Venda');
@@ -347,7 +363,9 @@ rotasVendas.get(
       })),
       troca: venda.tradeIn
         ? {
-            modelo: venda.tradeIn.modelo,
+            modelo: [venda.tradeIn.modelo, venda.tradeIn.armazenamento, venda.tradeIn.cor]
+              .filter(Boolean)
+              .join(' · '),
             imei: venda.tradeIn.imei,
             valor: numero(venda.tradeIn.valorAvaliado),
           }

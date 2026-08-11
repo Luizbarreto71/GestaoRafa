@@ -28,7 +28,7 @@ export interface DadosDoRecibo {
   }[];
   payments: { method: string; amount: number; installments: number }[];
   /** Aparelho recebido na troca, quando houve. */
-  troca?: { modelo: string; imei: string; valor: number } | null;
+  troca?: { modelo: string; imei?: string | null; valor: number } | null;
   total: number;
 }
 
@@ -222,7 +222,12 @@ export function enviarRecibo(res: Response, r: DadosDoRecibo): void {
         .fillColor(CINZA)
         .fontSize(7.5)
         .font('Helvetica')
-        .text(`${r.troca.modelo} · IMEI ${r.troca.imei}`, x0 + 12, doc.y - 2, { width: largura / 2 });
+        .text(
+          [r.troca.modelo, r.troca.imei && `IMEI ${r.troca.imei}`].filter(Boolean).join(' · '),
+          x0 + 12,
+          doc.y - 2,
+          { width: largura / 2 },
+        );
       doc.y += 11;
     }
   }

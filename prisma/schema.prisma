@@ -300,7 +300,9 @@ model TradeIn {
   marca         String?
   armazenamento String?
   cor           String?
-  imei          String
+  /// Opcional: no balcão a caixa anota só modelo, cor e capacidade, e o
+  /// cadastro completo fica para quando o aparelho for para a prateleira.
+  imei          String?
   imeiSituacao  ImeiSituacao @default(NAO_CONSULTADO)
   /// Quando a consulta da Anatel foi feita.
   imeiCheckedAt DateTime?
