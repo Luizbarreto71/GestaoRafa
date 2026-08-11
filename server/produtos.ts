@@ -6,7 +6,7 @@ import { AppError, contem, limpar, naoEncontrado, ordenar, paginacao, paginado, 
 import { db, registrarLog } from './db';
 import { exigir } from './permissoes';
 import { estoqueBaixo, movimentar, saldosDoProduto } from './estoque';
-import { unidadePermitida } from './unidades';
+import { exigirAcessoNaUnidade, unidadePermitida } from './unidades';
 
 /** Cadastro, busca, edição, ajuste de estoque e exclusão de produtos. */
 
@@ -379,6 +379,16 @@ rotasProdutos.post(
 
     if (quantity > 0 && !unidadeDestino) {
       throw new AppError('Cadastre uma unidade antes de lançar estoque.');
+    }
+
+    // Confere a unidade ANTES de criar o produto. Sem isto, um destino
+    // inválido criava o produto e só depois estourava ao lançar o estoque,
+    // deixando um cadastro solto e uma mensagem que não explica nada.
+    if (unidadeDestino) {
+      const destino = await db.unit.findUnique({ where: { id: unidadeDestino } });
+      if (!destino) throw naoEncontrado('Unidade');
+      if (!destino.active) throw new AppError(`A unidade ${destino.name} está desativada.`);
+      exigirAcessoNaUnidade(req.usuario, unidadeDestino);
     }
 
     const produto = await db.product.create({

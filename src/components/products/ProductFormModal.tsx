@@ -1,8 +1,11 @@
 import { Button } from '@/components/ui/Button';
 import { Input, Select, Textarea } from '@/components/ui/Field';
 import { Modal } from '@/components/ui/Modal';
+import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/contexts/ToastContext';
+import { useUnit } from '@/contexts/UnitContext';
 import { useCategories, useCreateProduct, useSuppliers, useUpdateProduct } from '@/hooks/queries';
+import { cn } from '@/lib/cn';
 import { formatCurrency, profitMargin, STATUS_OPTIONS, toInputDate } from '@/lib/format';
 import type { Product } from '@/types';
 import { CAMPOS, normalizarCampos, rotuloDoCampo, type ChaveCampo } from '@shared/campos';
@@ -52,6 +55,10 @@ export function ProductFormModal({ open, onClose, product }: ProductFormModalPro
   const toast = useToast();
   const { data: categorias } = useCategories();
   const { data: fornecedores } = useSuppliers({ all: 'true' });
+  const { user } = useAuth();
+  const { unidades, unidadeId } = useUnit();
+  const [unidadeDestino, setUnidadeDestino] = useState('');
+
   const criarProduto = useCreateProduct();
   const atualizarProduto = useUpdateProduct();
 
@@ -89,11 +96,13 @@ export function ProductFormModal({ open, onClose, product }: ProductFormModalPro
       setCategoriaId(categorias?.[0]?.id ?? '');
       setValores(VAZIO);
       setFotos([]);
+      // Sugere onde a pessoa já está trabalhando; ela pode trocar.
+      setUnidadeDestino(unidadeId ?? user?.unitId ?? unidades[0]?.id ?? '');
     }
 
     setMotivo('');
     setErros({});
-  }, [open, product, categorias]);
+  }, [open, product, categorias, unidadeId, user?.unitId, unidades]);
 
   const categoria = categorias?.find((c) => c.id === categoriaId);
 
@@ -181,6 +190,8 @@ export function ProductFormModal({ open, onClose, product }: ProductFormModalPro
       notes: seVisivel('observacoes', valores.observacoes),
       supplierId: mostra('fornecedor') ? valores.fornecedor || null : null,
       quantity: Number(valores.quantidade) || 0,
+      // Só no cadastro: a edição não mexe em estoque, tem tela própria.
+      unitId: editando ? undefined : unidadeDestino || undefined,
       minQuantity: mostra('minimo') ? Number(valores.minimo) || 0 : 1,
       costPrice: Number(valores.custo) || 0,
       salePrice: Number(valores.venda) || 0,
@@ -353,6 +364,7 @@ export function ProductFormModal({ open, onClose, product }: ProductFormModalPro
   }
 
   const salvando = criarProduto.isPending || atualizarProduto.isPending;
+  const quantidadeInformada = Number(valores.quantidade) || 0;
 
   return (
     <>
@@ -380,20 +392,44 @@ export function ProductFormModal({ open, onClose, product }: ProductFormModalPro
         }
       >
         <form id="form-produto" onSubmit={enviar} className="space-y-5">
-          {/* A categoria vem primeiro: é ela que define o resto do formulário. */}
-          <Select
-            label="Categoria"
-            required
-            value={categoriaId}
-            onChange={(e) => setCategoriaId(e.target.value)}
-            options={(categorias ?? []).map((c) => ({ value: c.id, label: c.name }))}
-            placeholder="Selecione…"
-            hint={
-              editando
-                ? undefined
-                : 'Cada categoria tem seu próprio formulário — ajuste em Configurações → Categorias'
-            }
-          />
+          {/* O que é e onde entra — as duas decisões que mudam o resto. */}
+          <div
+            className={cn(
+              'grid grid-cols-1 gap-4',
+              !editando && unidades.length > 1 && 'sm:grid-cols-2',
+            )}
+          >
+            <Select
+              label="Categoria"
+              required
+              value={categoriaId}
+              onChange={(e) => setCategoriaId(e.target.value)}
+              options={(categorias ?? []).map((c) => ({ value: c.id, label: c.name }))}
+              placeholder="Selecione…"
+              hint={
+                editando
+                  ? undefined
+                  : 'Cada categoria tem seu próprio formulário — ajuste em Configurações → Categorias'
+              }
+            />
+
+            {/* Com uma unidade só não há escolha a fazer. Na edição o estoque
+                não se mexe por aqui: quem move é a tela de movimentação. */}
+            {!editando && unidades.length > 1 && (
+              <Select
+                label="Entra no estoque de"
+                required
+                value={unidadeDestino}
+                onChange={(e) => setUnidadeDestino(e.target.value)}
+                options={unidades.map((u) => ({ value: u.id, label: u.name }))}
+                hint={
+                  quantidadeInformada > 0
+                    ? `${quantidadeInformada} un. entram nesta unidade`
+                    : 'Sem quantidade, nada entra em lugar nenhum'
+                }
+              />
+            )}
+          </div>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             {camposVisiveis.map((c) => desenhar(c.campo))}

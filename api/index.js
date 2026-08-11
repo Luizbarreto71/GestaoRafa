@@ -21,7 +21,18 @@ var AppError = class extends Error {
     this.status = status;
   }
 };
-var naoEncontrado = (o = "Registro") => new AppError(`${o} n\xE3o encontrado`, 404);
+var FEMININAS = /* @__PURE__ */ new Set([
+  "Categoria",
+  "Foto",
+  "Pr\xE9-venda",
+  "Retirada",
+  "Troca",
+  "Unidade",
+  "Venda",
+  "Transfer\xEAncia",
+  "Movimenta\xE7\xE3o"
+]);
+var naoEncontrado = (o = "Registro") => new AppError(`${o} n\xE3o ${FEMININAS.has(o) ? "encontrada" : "encontrado"}`, 404);
 function rota(handler2) {
   return (req, res, next) => {
     handler2(req, res).catch(next);
@@ -2430,6 +2441,12 @@ rotasProdutos.post(
     }
     if (quantity > 0 && !unidadeDestino) {
       throw new AppError("Cadastre uma unidade antes de lan\xE7ar estoque.");
+    }
+    if (unidadeDestino) {
+      const destino = await db.unit.findUnique({ where: { id: unidadeDestino } });
+      if (!destino) throw naoEncontrado("Unidade");
+      if (!destino.active) throw new AppError(`A unidade ${destino.name} est\xE1 desativada.`);
+      exigirAcessoNaUnidade(req.usuario, unidadeDestino);
     }
     const produto = await db.product.create({
       data: {

@@ -15,7 +15,33 @@ export class AppError extends Error {
   }
 }
 
-export const naoEncontrado = (o = 'Registro') => new AppError(`${o} não encontrado`, 404);
+/**
+ * Palavras femininas usadas no 404.
+ *
+ * Lista à mão em vez de adivinhar pela terminação: "Foto" acaba em "o" e
+ * "Unidade" em "e", e as duas são femininas. Como os nomes vêm todos do
+ * código, o conjunto é fechado e a lista não sai do lugar.
+ */
+const FEMININAS = new Set([
+  'Categoria',
+  'Foto',
+  'Pré-venda',
+  'Retirada',
+  'Troca',
+  'Unidade',
+  'Venda',
+  'Transferência',
+  'Movimentação',
+]);
+
+/**
+ * Erro 404 com a concordância certa.
+ *
+ * "Unidade não encontrado" aparece para quem usa o sistema o dia inteiro, e
+ * cada palavra torta desgasta a confiança no resto.
+ */
+export const naoEncontrado = (o = 'Registro') =>
+  new AppError(`${o} não ${FEMININAS.has(o) ? 'encontrada' : 'encontrado'}`, 404);
 
 /** Envolve rotas async para que erros caiam no tratador central. */
 export function rota(
