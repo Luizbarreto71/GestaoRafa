@@ -292,7 +292,18 @@ function ConferenciaDaPreVenda({
 
   useEffect(() => {
     if (!detalhe) return;
-    setItens(detalhe.items);
+
+    // Traz foto e características para o carrinho: é aqui que o caixa
+    // confere item a item o que o vendedor montou.
+    setItens(
+      detalhe.items.map((i) => ({
+        ...i,
+        foto: i.product?.photos?.[0] ? `/api/fotos/${i.product.photos[0].id}` : null,
+        detalhes: [i.product?.brand, i.product?.capacity, i.product?.color, i.product?.condicao]
+          .filter(Boolean)
+          .join(' · '),
+      })),
+    );
     setForm({
       unitId: detalhe.unit?.id ?? unidades[0]?.id ?? '',
       paymentMethod: detalhe.paymentMethod ?? 'PIX',

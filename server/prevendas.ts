@@ -42,7 +42,24 @@ const STATUS_PRE_VENDA = [
 ] as const;
 
 const COM_TUDO = {
-  items: { include: { product: { select: { id: true, name: true, model: true, imei: true } } } },
+  items: {
+    include: {
+      product: {
+        select: {
+          id: true,
+          name: true,
+          model: true,
+          imei: true,
+          brand: true,
+          capacity: true,
+          color: true,
+          condicao: true,
+          // Uma só: é miniatura de conferência, não galeria.
+          photos: { select: { id: true }, take: 1, orderBy: { createdAt: 'asc' } as const },
+        },
+      },
+    },
+  },
   seller: { select: { id: true, name: true } },
   tradeIn: {
     select: {

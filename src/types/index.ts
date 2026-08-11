@@ -168,9 +168,21 @@ export interface ItemVenda {
   costPrice?: number;
   imei?: string | null;
   serialNumber?: string | null;
-  product?: { id: string; name: string; model?: string | null };
+  product?: {
+    id: string;
+    name: string;
+    model?: string | null;
+    brand?: string | null;
+    capacity?: string | null;
+    color?: string | null;
+    condicao?: string | null;
+    photos?: { id: string }[];
+  };
   /** Saldo atual na unidade, calculado pela API ao abrir a pré-venda. */
   disponivel?: number | null;
+  /** Só para a tela conferir de relance; a API não recebe nem devolve. */
+  foto?: string | null;
+  detalhes?: string;
 }
 
 /** Intenção de venda montada pelo vendedor. Não mexe no estoque. */

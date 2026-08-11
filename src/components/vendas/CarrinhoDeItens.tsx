@@ -5,7 +5,7 @@ import { useDebounce } from '@/hooks/useDebounce';
 import { cn } from '@/lib/cn';
 import { formatCurrency } from '@/lib/format';
 import type { ItemVenda, Product } from '@/types';
-import { Package, Plus, Search, Trash2 } from 'lucide-react';
+import { Check, ImageOff, Package, Plus, Search, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 
 /**
@@ -46,6 +46,12 @@ export function CarrinhoDeItens({
         imei: produto.imei ?? '',
         serialNumber: produto.serialNumber ?? '',
         disponivel: linha?.available ?? linha?.quantity ?? null,
+        // Só para a tela: a API ignora, mas é o que deixa o carrinho
+        // conferível de relance quando o cliente leva várias coisas.
+        foto: produto.photos?.[0] ?? null,
+        detalhes: [produto.brand, produto.capacity, produto.color, produto.condicao]
+          .filter(Boolean)
+          .join(' · '),
         product: { id: produto.id, name: produto.name, model: produto.model },
       },
     ]);
@@ -81,27 +87,52 @@ export function CarrinhoDeItens({
                 const linha = p.stock?.find((s) => s.unitId === unidadeId);
                 const livre = linha?.available ?? linha?.quantity ?? p.quantity;
 
+                // Quantas vezes este produto já está no carrinho: o cliente
+                // que leva três iguais precisa ver que já foram lançados.
+                const jaNoCarrinho = itens
+                  .filter((i) => i.productId === p.id)
+                  .reduce((n, i) => n + i.quantity, 0);
+
+                // O que diferencia um modelo do outro na prateleira.
+                const detalhes = [p.brand, p.capacity, p.color, p.condicao].filter(Boolean).join(' · ');
+
                 return (
                   <button
                     key={p.id}
                     type="button"
                     onClick={() => acrescentar(p)}
-                    className="flex w-full items-center gap-3 border-b border-slate-100 px-3 py-2 text-left transition last:border-0 hover:bg-slate-50 dark:border-navy-700 dark:hover:bg-navy-800"
+                    className="flex w-full items-center gap-3 border-b border-slate-100 p-2 text-left transition last:border-0 hover:bg-slate-50 dark:border-navy-700 dark:hover:bg-navy-800"
                   >
-                    <Plus className="h-4 w-4 shrink-0 text-accent" />
+                    <FotoDoProduto produto={p} />
+
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-medium text-navy-900 dark:text-slate-100">
+                      <span className="block truncate text-sm font-semibold text-navy-900 dark:text-slate-100">
                         {p.name}
                       </span>
                       <span className="block truncate text-xs text-slate-500 dark:text-slate-400">
-                        {[p.condicao, p.imei && `IMEI ${p.imei}`].filter(Boolean).join(' · ') ||
-                          p.category?.name}
+                        {detalhes || p.category?.name}
                       </span>
+                      {p.imei && (
+                        <span className="block truncate font-mono text-[11px] text-slate-400">
+                          IMEI {p.imei}
+                        </span>
+                      )}
+                      {jaNoCarrinho > 0 && (
+                        <span className="mt-0.5 inline-flex items-center gap-1 rounded bg-accent/10 px-1.5 py-0.5 text-[11px] font-bold text-accent">
+                          <Check className="h-3 w-3" />
+                          {jaNoCarrinho} já no carrinho
+                        </span>
+                      )}
                     </span>
-                    <Badge tone={livre > 0 ? 'success' : 'danger'}>{livre} un.</Badge>
-                    <span className="shrink-0 text-sm font-semibold text-navy-900 dark:text-slate-100">
-                      {formatCurrency(p.salePrice || p.wholesalePrice || 0)}
+
+                    <span className="flex shrink-0 flex-col items-end gap-1">
+                      <span className="text-sm font-bold text-navy-900 dark:text-slate-100">
+                        {formatCurrency(p.salePrice || p.wholesalePrice || 0)}
+                      </span>
+                      <Badge tone={livre > 0 ? 'success' : 'danger'}>{livre} un.</Badge>
                     </span>
+
+                    <Plus className="h-4 w-4 shrink-0 text-accent" />
                   </button>
                 );
               })}
@@ -131,17 +162,35 @@ export function CarrinhoDeItens({
                 )}
               >
                 <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold text-navy-900 dark:text-slate-100">
-                      {item.productName ?? item.product?.name}
-                    </p>
-                    {item.disponivel != null && (
-                      <p className={cn('text-xs', semSaldo ? 'font-semibold text-danger' : 'text-slate-500')}>
-                        {semSaldo
-                          ? `Só há ${item.disponivel} em estoque`
-                          : `${item.disponivel} disponível(is)`}
-                      </p>
+                  <div className="flex min-w-0 items-start gap-2.5">
+                    {item.foto && (
+                      <span className="h-11 w-11 shrink-0 overflow-hidden rounded-lg border border-slate-200 dark:border-navy-600">
+                        <img
+                          src={item.foto}
+                          alt={item.productName ?? ''}
+                          className="h-full w-full object-cover"
+                          loading="lazy"
+                        />
+                      </span>
                     )}
+
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-navy-900 dark:text-slate-100">
+                        {item.productName ?? item.product?.name}
+                      </p>
+                      {item.detalhes && (
+                        <p className="truncate text-xs text-slate-500 dark:text-slate-400">
+                          {item.detalhes}
+                        </p>
+                      )}
+                      {item.disponivel != null && (
+                        <p className={cn('text-xs', semSaldo ? 'font-semibold text-danger' : 'text-slate-500')}>
+                          {semSaldo
+                            ? `Só há ${item.disponivel} em estoque`
+                            : `${item.disponivel} disponível(is)`}
+                        </p>
+                      )}
+                    </div>
                   </div>
 
                   <div className="flex items-center gap-2">
@@ -207,6 +256,31 @@ export function CarrinhoDeItens({
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Miniatura do produto na busca e no carrinho.
+ *
+ * Nome de celular muda por uma palavra — "15 PRO 128GB" e "15 PRO MAX
+ * 128GB" —, e no balcão a foto é o que confirma num relance que o item
+ * lançado é o que está na mão do cliente.
+ */
+function FotoDoProduto({ produto }: { produto: Product }) {
+  const foto = produto.photos?.[0];
+
+  if (!foto) {
+    return (
+      <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-slate-100 dark:bg-navy-700">
+        <ImageOff className="h-4 w-4 text-slate-300 dark:text-navy-500" />
+      </span>
+    );
+  }
+
+  return (
+    <span className="h-12 w-12 shrink-0 overflow-hidden rounded-lg border border-slate-200 dark:border-navy-600">
+      <img src={foto} alt={produto.name} className="h-full w-full object-cover" loading="lazy" />
+    </span>
   );
 }
 

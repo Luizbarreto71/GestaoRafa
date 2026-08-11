@@ -4241,7 +4241,24 @@ var STATUS_PRE_VENDA = [
   "EXPIRADA"
 ];
 var COM_TUDO = {
-  items: { include: { product: { select: { id: true, name: true, model: true, imei: true } } } },
+  items: {
+    include: {
+      product: {
+        select: {
+          id: true,
+          name: true,
+          model: true,
+          imei: true,
+          brand: true,
+          capacity: true,
+          color: true,
+          condicao: true,
+          // Uma só: é miniatura de conferência, não galeria.
+          photos: { select: { id: true }, take: 1, orderBy: { createdAt: "asc" } }
+        }
+      }
+    }
+  },
   seller: { select: { id: true, name: true } },
   tradeIn: {
     select: {
