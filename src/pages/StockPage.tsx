@@ -23,6 +23,7 @@ import { downloadFile } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import { formatCurrency, STATUS_OPTIONS } from '@/lib/format';
 import type { Product } from '@/types';
+import { CAMPOS } from '@shared/campos';
 import {
   Download,
   Filter,
@@ -56,6 +57,7 @@ export default function StockPage() {
     status: searchParams.get('status') ?? '',
     brand: '',
     model: '',
+    condicao: '',
     lowStock: searchParams.get('estoqueBaixo') ?? '',
   });
 
@@ -109,7 +111,7 @@ export default function StockPage() {
   const activeFilterCount = Object.values(filters).filter(Boolean).length;
 
   const clearFilters = () => {
-    setFilters({ categoryId: '', supplierId: '', status: '', brand: '', model: '', lowStock: '' });
+    setFilters({ categoryId: '', supplierId: '', status: '', brand: '', model: '', condicao: '', lowStock: '' });
     setSearch('');
   };
 
@@ -203,23 +205,15 @@ export default function StockPage() {
           <p className="text-xs text-slate-500 dark:text-slate-400">
             {[product.brand, product.color, product.capacity].filter(Boolean).join(' · ') || '—'}
           </p>
-          {product.condicao && (
-            <Badge
-              tone={
-                product.condicao === 'Lacrado'
-                  ? 'success'
-                  : product.condicao === 'Vitrine'
-                    ? 'warning'
-                    : 'neutral'
-              }
-              className="mt-1"
-            >
-              {product.condicao}
-            </Badge>
-          )}
           {product.imei && <p className="text-[11px] text-slate-400">IMEI {product.imei}</p>}
         </div>
       ),
+    },
+    {
+      key: 'condicao',
+      header: 'Condição',
+      render: (product) =>
+        product.condicao ? <CondicaoBadge condicao={product.condicao} /> : <span className="text-slate-400">—</span>,
     },
     {
       key: 'category',
@@ -484,6 +478,13 @@ export default function StockPage() {
               placeholder="Todas"
             />
             <Select
+              label="Condição"
+              value={filters.condicao}
+              onChange={(e) => setFilters((f) => ({ ...f, condicao: e.target.value }))}
+              options={(CAMPOS.condicao.opcoes ?? []).map((o) => ({ value: o, label: o }))}
+              placeholder="Todas"
+            />
+            <Select
               label="Modelo"
               value={filters.model}
               onChange={(e) => setFilters((f) => ({ ...f, model: e.target.value }))}
@@ -543,6 +544,11 @@ export default function StockPage() {
                 <p className="truncate text-xs text-slate-500 dark:text-slate-400">
                   {[product.category?.name, product.model].filter(Boolean).join(' · ')}
                 </p>
+                {product.condicao && (
+                  <div className="mt-1">
+                    <CondicaoBadge condicao={product.condicao} />
+                  </div>
+                )}
                 {!unidadeId && product.stock?.length > 0 && (
                   <p className="truncate text-xs text-slate-500 dark:text-slate-400">
                     {product.stock.map((s) => `${s.unitName}: ${s.quantity}`).join(' · ')}
@@ -691,4 +697,21 @@ export default function StockPage() {
       </Modal>
     </div>
   );
+}
+
+/**
+ * Etiqueta da condição do aparelho.
+ *
+ * Qualquer coisa "lacrada" (inclusive "Xiaomi Lacrado") entra em verde:
+ * o que importa na estante é distinguir lacrado de vitrine e de seminovo.
+ */
+function CondicaoBadge({ condicao }: { condicao: string }) {
+  const texto = condicao.toLowerCase();
+  const tom = texto.includes('lacrado')
+    ? 'success'
+    : texto.includes('vitrine')
+      ? 'warning'
+      : 'info';
+
+  return <Badge tone={tom}>{condicao}</Badge>;
 }
