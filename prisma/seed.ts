@@ -29,6 +29,7 @@ const CATEGORIAS = [
   { name: 'JBL', slug: 'jbl', color: '#F97316' },
   { name: 'Notebooks', slug: 'notebooks', color: '#14B8A6' },
   { name: 'Video Games', slug: 'video-games', color: '#EC4899' },
+  { name: 'TVs', slug: 'tvs', color: '#6366F1' },
 ];
 
 async function main() {
