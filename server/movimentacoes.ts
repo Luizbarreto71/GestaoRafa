@@ -334,7 +334,7 @@ const aprovarSchema = z.object({
  */
 rotasMovimentacoes.post(
   '/retiradas/:id/aprovar',
-  exigir('estoque.movimentar'),
+  exigir('retirada.aprovar'),
   rota(async (req, res) => {
     const { soldQuantity, notes } = validar(aprovarSchema, req.body);
 
@@ -409,10 +409,18 @@ rotasMovimentacoes.post(
   }),
 );
 
-/** Cancela a retirada e libera a reserva. O estoque nunca chegou a sair. */
+const recusaSchema = z.object({
+  motivo: z.string().trim().max(1000).optional().nullable(),
+});
+
+/**
+ * Recusa a retirada e libera a reserva. O estoque nunca chegou a sair.
+ *
+ * Guarda quem recusou e quando, para o acerto do dia ter dono no histórico.
+ */
 rotasMovimentacoes.post(
   '/retiradas/:id/cancelar',
-  exigir('estoque.movimentar'),
+  exigir('retirada.aprovar'),
   rota(async (req, res) => {
     const retirada = await db.stockWithdrawal.findUnique({ where: { id: req.params.id } });
     if (!retirada) throw naoEncontrado('Retirada');
@@ -420,13 +428,22 @@ rotasMovimentacoes.post(
 
     exigirAcessoNaUnidade(req.usuario, retirada.unitId);
 
+    const { motivo } = validar(recusaSchema, req.body ?? {});
+
     await db.stockWithdrawal.update({
       where: { id: retirada.id },
-      data: { status: 'CANCELADA', soldQuantity: 0, returnedQuantity: retirada.quantity },
+      data: {
+        status: 'CANCELADA',
+        soldQuantity: 0,
+        returnedQuantity: retirada.quantity,
+        approvedAt: new Date(),
+        approvedById: req.usuario?.id ?? null,
+        notes: motivo ?? retirada.notes,
+      },
     });
 
     await registrarLog({ acao: 'CANCELAR_RETIRADA', entidade: 'StockWithdrawal', id: retirada.id, req });
-    res.json({ message: `Retirada cancelada — as ${retirada.quantity} un. seguem no estoque.` });
+    res.json({ message: `Retirada recusada — as ${retirada.quantity} un. seguem no estoque.` });
   }),
 );
 

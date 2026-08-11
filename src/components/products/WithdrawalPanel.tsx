@@ -4,12 +4,14 @@ import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { Input } from '@/components/ui/Field';
 import { Modal } from '@/components/ui/Modal';
+import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/contexts/ToastContext';
 import { useRetirada, useWithdrawals } from '@/hooks/queries';
 import { cn } from '@/lib/cn';
 import { formatDateTime } from '@/lib/format';
+import { pode } from '@/lib/permissoes';
 import type { Withdrawal } from '@/types';
-import { Ban, Check, ClipboardCheck, PackageCheck } from 'lucide-react';
+import { Check, PackageCheck, SplitSquareHorizontal, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 /**
@@ -20,20 +22,37 @@ import { useEffect, useState } from 'react';
  */
 export function WithdrawalPanel() {
   const { data: pendentes } = useWithdrawals({ status: 'PENDENTE' });
+  const [parcial, setParcial] = useState<Withdrawal | null>(null);
   const [aprovando, setAprovando] = useState<Withdrawal | null>(null);
-  const [cancelando, setCancelando] = useState<Withdrawal | null>(null);
+  const [recusando, setRecusando] = useState<Withdrawal | null>(null);
 
+  const { user } = useAuth();
   const toast = useToast();
-  const cancelar = useRetirada('cancelar');
+  const aprovar = useRetirada('aprovar');
+  const recusar = useRetirada('cancelar');
 
-  async function confirmarCancelamento() {
-    if (!cancelando) return;
+  // Quem decide é o dono da loja; o resto só consegue olhar.
+  const podeDecidir = pode(user?.role, 'retirada.aprovar');
+
+  async function confirmarAprovacao() {
+    if (!aprovando) return;
     try {
-      const r = await cancelar.mutateAsync({ id: cancelando.id });
-      toast.success('Retirada cancelada', r.message);
-      setCancelando(null);
+      const r = await aprovar.mutateAsync({ id: aprovando.id, soldQuantity: aprovando.quantity });
+      toast.success('Saída aprovada', r.message);
+      setAprovando(null);
     } catch (erro) {
-      toast.error('Não foi possível cancelar', erro instanceof Error ? erro.message : undefined);
+      toast.error('Não foi possível aprovar', erro instanceof Error ? erro.message : undefined);
+    }
+  }
+
+  async function confirmarRecusa() {
+    if (!recusando) return;
+    try {
+      const r = await recusar.mutateAsync({ id: recusando.id });
+      toast.success('Retirada recusada', r.message);
+      setRecusando(null);
+    } catch (erro) {
+      toast.error('Não foi possível recusar', erro instanceof Error ? erro.message : undefined);
     }
   }
 
@@ -43,8 +62,8 @@ export function WithdrawalPanel() {
     <>
       <Card>
         <CardHeader
-          title="Retiradas aguardando acerto"
-          subtitle="Mercadoria na loja que ainda não baixou do estoque"
+          title="Retiradas aguardando sua aprovação"
+          subtitle="Mercadoria na loja que só baixa do estoque quando você aprovar"
           action={
             lista.length > 0 && (
               <Badge tone="warning">
@@ -77,40 +96,73 @@ export function WithdrawalPanel() {
                   </p>
                 </div>
 
-                <Button
-                  size="sm"
-                  variant="success"
-                  onClick={() => setAprovando(r)}
-                  icon={<ClipboardCheck className="h-3.5 w-3.5" />}
-                >
-                  Acertar
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="text-danger"
-                  onClick={() => setCancelando(r)}
-                  icon={<Ban className="h-3.5 w-3.5" />}
-                >
-                  Cancelar
-                </Button>
+                {podeDecidir ? (
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setAprovando(r)}
+                      title={`Aprovar: as ${r.quantity} un. saem do estoque`}
+                      aria-label="Aprovar a saída"
+                      className="flex h-10 w-10 items-center justify-center rounded-lg bg-success-bg text-success transition hover:bg-success hover:text-white dark:bg-success/15"
+                    >
+                      <Check className="h-5 w-5" strokeWidth={3} />
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setRecusando(r)}
+                      title="Recusar: nada sai do estoque"
+                      aria-label="Recusar a retirada"
+                      className="flex h-10 w-10 items-center justify-center rounded-lg bg-danger-bg text-danger transition hover:bg-danger hover:text-white dark:bg-danger/15"
+                    >
+                      <X className="h-5 w-5" strokeWidth={3} />
+                    </button>
+
+                    {/* Nem todo dia é tudo ou nada. */}
+                    {r.quantity > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => setParcial(r)}
+                        title="Saiu só uma parte"
+                        aria-label="Informar quantas saíram"
+                        className="flex h-10 w-10 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-navy-700"
+                      >
+                        <SplitSquareHorizontal className="h-4 w-4" />
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <Badge tone="warning">Aguardando o administrador</Badge>
+                )}
               </div>
             ))}
           </div>
         )}
       </Card>
 
-      <ModalDeAcerto retirada={aprovando} aoFechar={() => setAprovando(null)} />
+      <ModalDeAcerto retirada={parcial} aoFechar={() => setParcial(null)} />
 
       <ConfirmDialog
-        open={Boolean(cancelando)}
-        title="Cancelar retirada"
-        message={`As ${cancelando?.quantity ?? 0} un. voltam a ficar livres. Nenhuma baixa é feita — o estoque nunca chegou a sair.`}
-        confirmLabel="Cancelar retirada"
+        open={Boolean(aprovando)}
+        title="Aprovar a saída"
+        message={`As ${aprovando?.quantity ?? 0} un. de ${aprovando?.product.name ?? ''} saem do estoque agora. Se só uma parte vendeu, volte e use “saiu só uma parte”.`}
+        confirmLabel="Aprovar e baixar"
         cancelLabel="Voltar"
-        loading={cancelar.isPending}
-        onConfirm={() => void confirmarCancelamento()}
-        onCancel={() => setCancelando(null)}
+        variant="primary"
+        loading={aprovar.isPending}
+        onConfirm={() => void confirmarAprovacao()}
+        onCancel={() => setAprovando(null)}
+      />
+
+      <ConfirmDialog
+        open={Boolean(recusando)}
+        title="Recusar a retirada"
+        message={`As ${recusando?.quantity ?? 0} un. voltam a ficar livres. Nenhuma baixa é feita — o estoque nunca chegou a sair.`}
+        confirmLabel="Recusar"
+        cancelLabel="Voltar"
+        loading={recusar.isPending}
+        onConfirm={() => void confirmarRecusa()}
+        onCancel={() => setRecusando(null)}
       />
     </>
   );

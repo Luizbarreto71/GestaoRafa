@@ -14,6 +14,7 @@ export type Permissao =
   | 'estoque.ver'
   | 'estoque.movimentar'
   | 'estoque.transferir'
+  | 'retirada.aprovar'
   | 'prevenda.criar'
   | 'prevenda.verTodas'
   | 'pdv'
@@ -33,6 +34,7 @@ const TODAS: Permissao[] = [
   'estoque.ver',
   'estoque.movimentar',
   'estoque.transferir',
+  'retirada.aprovar',
   'prevenda.criar',
   'prevenda.verTodas',
   'pdv',

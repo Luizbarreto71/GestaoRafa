@@ -915,6 +915,7 @@ var TODAS = [
   "estoque.ver",
   "estoque.movimentar",
   "estoque.transferir",
+  "retirada.aprovar",
   "prevenda.criar",
   "prevenda.verTodas",
   "pdv",
@@ -1944,7 +1945,7 @@ var aprovarSchema = z4.object({
 });
 rotasMovimentacoes.post(
   "/retiradas/:id/aprovar",
-  exigir("estoque.movimentar"),
+  exigir("retirada.aprovar"),
   rota(async (req, res) => {
     const { soldQuantity, notes } = validar(aprovarSchema, req.body);
     const resultado = await db.$transaction(async (tx) => {
@@ -1999,20 +2000,31 @@ rotasMovimentacoes.post(
     });
   })
 );
+var recusaSchema = z4.object({
+  motivo: z4.string().trim().max(1e3).optional().nullable()
+});
 rotasMovimentacoes.post(
   "/retiradas/:id/cancelar",
-  exigir("estoque.movimentar"),
+  exigir("retirada.aprovar"),
   rota(async (req, res) => {
     const retirada = await db.stockWithdrawal.findUnique({ where: { id: req.params.id } });
     if (!retirada) throw naoEncontrado("Retirada");
     if (retirada.status !== "PENDENTE") throw new AppError("Esta retirada j\xE1 foi fechada.");
     exigirAcessoNaUnidade(req.usuario, retirada.unitId);
+    const { motivo } = validar(recusaSchema, req.body ?? {});
     await db.stockWithdrawal.update({
       where: { id: retirada.id },
-      data: { status: "CANCELADA", soldQuantity: 0, returnedQuantity: retirada.quantity }
+      data: {
+        status: "CANCELADA",
+        soldQuantity: 0,
+        returnedQuantity: retirada.quantity,
+        approvedAt: /* @__PURE__ */ new Date(),
+        approvedById: req.usuario?.id ?? null,
+        notes: motivo ?? retirada.notes
+      }
     });
     await registrarLog({ acao: "CANCELAR_RETIRADA", entidade: "StockWithdrawal", id: retirada.id, req });
-    res.json({ message: `Retirada cancelada \u2014 as ${retirada.quantity} un. seguem no estoque.` });
+    res.json({ message: `Retirada recusada \u2014 as ${retirada.quantity} un. seguem no estoque.` });
   })
 );
 var filtros = z4.object({

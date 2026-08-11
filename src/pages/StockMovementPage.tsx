@@ -13,6 +13,7 @@ import {
   useRetirada,
   useSuppliers,
   useTransfers,
+  useWithdrawals,
 } from '@/hooks/queries';
 import { useDebounce } from '@/hooks/useDebounce';
 import { cn } from '@/lib/cn';
@@ -43,7 +44,9 @@ export default function StockMovementPage() {
   const [aba, setAba] = useState<Aba>('entrada');
   const { user } = useAuth();
   const { unidades } = useUnit();
+  const { data: retiradas } = useWithdrawals({ status: 'PENDENTE' });
 
+  const aguardando = retiradas?.meta.total ?? 0;
   const ehVendedor = user?.role === 'VENDEDOR';
 
   if (ehVendedor) {
@@ -72,7 +75,14 @@ export default function StockMovementPage() {
   const abas = [
     { chave: 'entrada' as const, rotulo: 'Entrada', icone: ArrowDownToLine, cor: 'text-success' },
     { chave: 'saida' as const, rotulo: 'Saída', icone: ArrowUpFromLine, cor: 'text-danger' },
-    { chave: 'retirada' as const, rotulo: 'Retirada para a loja', icone: ClipboardCheck, cor: 'text-warning' },
+    {
+      chave: 'retirada' as const,
+      rotulo: 'Retirada para a loja',
+      icone: ClipboardCheck,
+      cor: 'text-warning',
+      // O acerto do dia não pode depender de alguém lembrar de conferir.
+      contador: aguardando,
+    },
     { chave: 'transferencia' as const, rotulo: 'Transferência', icone: ArrowLeftRight, cor: 'text-accent' },
   ];
 
@@ -102,6 +112,11 @@ export default function StockMovementPage() {
           >
             <item.icone className={cn('h-4 w-4', aba === item.chave ? '' : item.cor)} />
             {item.rotulo}
+            {Boolean(item.contador) && (
+              <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-warning px-1.5 text-[11px] font-bold text-white">
+                {item.contador}
+              </span>
+            )}
           </button>
         ))}
       </div>
