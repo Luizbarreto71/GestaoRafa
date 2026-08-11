@@ -199,7 +199,7 @@ export function useCreateSale() {
             method: 'post',
             url: '/sales',
             data,
-            label: `Venda: ${data.customerName}`,
+            label: `Venda: ${data.customerName || 'Consumidor'}`,
           });
           throw new Error('OFFLINE_QUEUED');
         }

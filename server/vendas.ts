@@ -149,7 +149,14 @@ const vendaSchema = z.object({
   unitId: z.string().uuid('Informe de qual unidade o produto saiu'),
   paymentMethod: z.enum(PAGAMENTOS),
   installments: z.coerce.number().int().min(1).max(24).default(1),
-  customerName: z.string().trim().min(2, 'Informe o nome do cliente').max(180),
+  /**
+   * Opcional na venda de balcão.
+   *
+   * No caixa a fila anda, e exigir nome e CPF de quem paga R$ 60 num cabo
+   * atrasa todo mundo. A pré-venda continua pedindo: lá o caixa precisa
+   * saber de quem é o pedido.
+   */
+  customerName: z.string().trim().max(180).optional().nullable(),
   customerPhone: z.string().trim().max(30).optional().nullable(),
   customerDocument: z.string().trim().max(30).optional().nullable(),
   customerId: z.string().uuid().optional().nullable(),

@@ -553,7 +553,8 @@ function VendaDireta() {
 
   async function enviar(evento: FormEvent) {
     evento.preventDefault();
-    if (form.customerName.trim().length < 2) return toast.warning('Informe o nome do cliente');
+    // Cliente é opcional no balcão: quem paga um cabo à vista não precisa
+    // se identificar, e a fila anda.
     if (!itens.length) return toast.warning('Adicione ao menos um produto');
 
     try {
@@ -568,7 +569,7 @@ function VendaDireta() {
         unitId: unidade,
         paymentMethod: form.paymentMethod,
         installments: Number(form.installments) || 1,
-        customerName: form.customerName.trim(),
+        customerName: form.customerName.trim() || null,
         customerPhone: form.customerPhone.trim() || null,
         customerDocument: form.customerDocument.trim() || null,
         sellerId: form.sellerId || user?.id,
@@ -593,23 +594,34 @@ function VendaDireta() {
       <CardHeader title="Nova venda no balcão" subtitle="Sem passar por pré-venda" />
       <CardBody>
         <form onSubmit={enviar} className="space-y-5">
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-            <Input
-              label="Cliente"
-              required
-              value={form.customerName}
-              onChange={(e) => setForm((f) => ({ ...f, customerName: e.target.value }))}
-            />
-            <Input
-              label="CPF"
-              value={form.customerDocument}
-              onChange={(e) => setForm((f) => ({ ...f, customerDocument: e.target.value }))}
-            />
-            <Input
-              label="Telefone"
-              value={form.customerPhone}
-              onChange={(e) => setForm((f) => ({ ...f, customerPhone: e.target.value }))}
-            />
+          <div>
+            <p className="label-base">
+              Cliente
+              <span className="ml-1.5 font-normal text-slate-400">
+                opcional — deixe em branco para agilizar
+              </span>
+            </p>
+
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <Input
+                label="Nome"
+                value={form.customerName}
+                onChange={(e) => setForm((f) => ({ ...f, customerName: e.target.value }))}
+                placeholder="Consumidor"
+              />
+              <Input
+                label="CPF"
+                value={form.customerDocument}
+                onChange={(e) => setForm((f) => ({ ...f, customerDocument: e.target.value }))}
+                placeholder="opcional"
+              />
+              <Input
+                label="Telefone"
+                value={form.customerPhone}
+                onChange={(e) => setForm((f) => ({ ...f, customerPhone: e.target.value }))}
+                placeholder="opcional"
+              />
+            </div>
           </div>
 
           <CarrinhoDeItens itens={itens} aoMudar={setItens} unidadeId={unidade} />

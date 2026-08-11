@@ -3850,18 +3850,18 @@ async function registrarVenda(dados) {
         );
       }
     }
+    const nome = dados.customerName?.trim() || null;
     let clienteId = dados.customerId ?? null;
-    if (!clienteId) {
-      const existente = (dados.customerPhone ? await tx.customer.findFirst({ where: { phone: dados.customerPhone } }) : null) ?? (dados.customerDocument ? await tx.customer.findFirst({ where: { document: dados.customerDocument } }) : null) ?? await tx.customer.findFirst({
-        where: { name: { equals: dados.customerName, mode: "insensitive" } }
-      });
-      clienteId = existente?.id ?? (await tx.customer.create({
+    if (!clienteId && (nome || dados.customerPhone || dados.customerDocument)) {
+      const existente = (dados.customerPhone ? await tx.customer.findFirst({ where: { phone: dados.customerPhone } }) : null) ?? (dados.customerDocument ? await tx.customer.findFirst({ where: { document: dados.customerDocument } }) : null) ?? (nome ? await tx.customer.findFirst({ where: { name: { equals: nome, mode: "insensitive" } } }) : null);
+      clienteId = existente?.id ?? // Sem nome não há ficha a criar: a tabela exige um.
+      (nome ? (await tx.customer.create({
         data: {
-          name: dados.customerName,
+          name: nome,
           phone: dados.customerPhone ?? null,
           document: dados.customerDocument ?? null
         }
-      })).id;
+      })).id : null);
     }
     const itensComCusto = dados.itens.map((item) => {
       const produto = produtos.get(item.productId);
@@ -3894,7 +3894,7 @@ async function registrarVenda(dados) {
         notes: dados.notes ?? null,
         unitId: dados.unitId,
         customerId: clienteId,
-        customerName: dados.customerName,
+        customerName: nome,
         customerPhone: dados.customerPhone ?? null,
         customerDocument: dados.customerDocument ?? null,
         sellerId: dados.sellerId ?? null,
@@ -3928,7 +3928,7 @@ async function registrarVenda(dados) {
         tipo: "SAIDA",
         motivo: "VENDA",
         quantidade: item.quantity,
-        observacao: `Venda ${venda.code} para ${dados.customerName}` + (item.imei ? ` \xB7 IMEI ${item.imei}` : "") + (item.serialNumber ? ` \xB7 s\xE9rie ${item.serialNumber}` : ""),
+        observacao: `Venda ${venda.code} para ${nome ?? "consumidor n\xE3o identificado"}` + (item.imei ? ` \xB7 IMEI ${item.imei}` : "") + (item.serialNumber ? ` \xB7 s\xE9rie ${item.serialNumber}` : ""),
         vendaId: venda.id,
         usuarioId: dados.cashierId ?? dados.sellerId,
         usuarioNome: dados.cashierName,
@@ -3941,7 +3941,7 @@ async function registrarVenda(dados) {
     await notificar({
       userId: dados.sellerId,
       title: `Venda ${resultado.code} finalizada`,
-      message: `${dados.customerName} \xB7 ${resultado.items.length} item(ns) \xB7 R$ ${Number(resultado.totalAmount).toFixed(2)}`,
+      message: `${dados.customerName?.trim() || "Consumidor"} \xB7 ${resultado.items.length} item(ns) \xB7 R$ ${Number(resultado.totalAmount).toFixed(2)}`,
       link: "/minhas-vendas"
     });
   }
@@ -4914,7 +4914,14 @@ var vendaSchema = z11.object({
   unitId: z11.string().uuid("Informe de qual unidade o produto saiu"),
   paymentMethod: z11.enum(PAGAMENTOS2),
   installments: z11.coerce.number().int().min(1).max(24).default(1),
-  customerName: z11.string().trim().min(2, "Informe o nome do cliente").max(180),
+  /**
+   * Opcional na venda de balcão.
+   *
+   * No caixa a fila anda, e exigir nome e CPF de quem paga R$ 60 num cabo
+   * atrasa todo mundo. A pré-venda continua pedindo: lá o caixa precisa
+   * saber de quem é o pedido.
+   */
+  customerName: z11.string().trim().max(180).optional().nullable(),
   customerPhone: z11.string().trim().max(30).optional().nullable(),
   customerDocument: z11.string().trim().max(30).optional().nullable(),
   customerId: z11.string().uuid().optional().nullable(),

@@ -26,7 +26,7 @@ export interface DadosDaVenda {
   unitId: string;
   paymentMethod: PaymentMethod;
   installments?: number;
-  customerName: string;
+  customerName?: string | null;
   customerPhone?: string | null;
   customerDocument?: string | null;
   customerId?: string | null;
@@ -120,9 +120,15 @@ export async function registrarVenda(dados: DadosDaVenda) {
       }
     }
 
-    // Cliente: reaproveita pelo telefone/documento, senão cria.
+    // Cliente: reaproveita pelo telefone/documento/nome, senão cria.
+    //
+    // Venda de balcão pode não ter cliente nenhum. Nesse caso a venda fica
+    // sem vínculo em vez de criar uma ficha vazia — um cadastro sem nome
+    // suja a lista de clientes e não serve para nada depois.
+    const nome = dados.customerName?.trim() || null;
     let clienteId = dados.customerId ?? null;
-    if (!clienteId) {
+
+    if (!clienteId && (nome || dados.customerPhone || dados.customerDocument)) {
       const existente =
         (dados.customerPhone
           ? await tx.customer.findFirst({ where: { phone: dados.customerPhone } })
@@ -130,21 +136,24 @@ export async function registrarVenda(dados: DadosDaVenda) {
         (dados.customerDocument
           ? await tx.customer.findFirst({ where: { document: dados.customerDocument } })
           : null) ??
-        (await tx.customer.findFirst({
-          where: { name: { equals: dados.customerName, mode: 'insensitive' } },
-        }));
+        (nome
+          ? await tx.customer.findFirst({ where: { name: { equals: nome, mode: 'insensitive' } } })
+          : null);
 
       clienteId =
         existente?.id ??
-        (
-          await tx.customer.create({
-            data: {
-              name: dados.customerName,
-              phone: dados.customerPhone ?? null,
-              document: dados.customerDocument ?? null,
-            },
-          })
-        ).id;
+        // Sem nome não há ficha a criar: a tabela exige um.
+        (nome
+          ? (
+              await tx.customer.create({
+                data: {
+                  name: nome,
+                  phone: dados.customerPhone ?? null,
+                  document: dados.customerDocument ?? null,
+                },
+              })
+            ).id
+          : null);
     }
 
     const itensComCusto = dados.itens.map((item) => {
@@ -184,7 +193,7 @@ export async function registrarVenda(dados: DadosDaVenda) {
         notes: dados.notes ?? null,
         unitId: dados.unitId,
         customerId: clienteId,
-        customerName: dados.customerName,
+        customerName: nome,
         customerPhone: dados.customerPhone ?? null,
         customerDocument: dados.customerDocument ?? null,
         sellerId: dados.sellerId ?? null,
@@ -220,7 +229,7 @@ export async function registrarVenda(dados: DadosDaVenda) {
         motivo: 'VENDA',
         quantidade: item.quantity,
         observacao:
-          `Venda ${venda.code} para ${dados.customerName}` +
+          `Venda ${venda.code} para ${nome ?? 'consumidor não identificado'}` +
           (item.imei ? ` · IMEI ${item.imei}` : '') +
           (item.serialNumber ? ` · série ${item.serialNumber}` : ''),
         vendaId: venda.id,
@@ -239,7 +248,7 @@ export async function registrarVenda(dados: DadosDaVenda) {
     await notificar({
       userId: dados.sellerId,
       title: `Venda ${resultado.code} finalizada`,
-      message: `${dados.customerName} · ${resultado.items.length} item(ns) · R$ ${Number(resultado.totalAmount).toFixed(2)}`,
+      message: `${dados.customerName?.trim() || 'Consumidor'} · ${resultado.items.length} item(ns) · R$ ${Number(resultado.totalAmount).toFixed(2)}`,
       link: '/minhas-vendas',
     });
   }

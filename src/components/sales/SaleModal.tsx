@@ -91,7 +91,6 @@ export function SaleModal({ open, onClose, product }: SaleModalProps) {
   function validate(): boolean {
     const next: Partial<Record<keyof FormState, string>> = {};
 
-    if (form.customerName.trim().length < 2) next.customerName = 'Informe o nome do cliente';
     if (quantity < 1) next.quantity = 'Quantidade mínima: 1';
     if (!form.unitId) next.unitId = 'Selecione a unidade';
     if (form.unitId && quantity > saldoNaUnidade) {
@@ -113,7 +112,7 @@ export function SaleModal({ open, onClose, product }: SaleModalProps) {
       await createSale.mutateAsync({
         productId: product.id,
         unitId: form.unitId,
-        customerName: form.customerName.trim(),
+        customerName: form.customerName.trim() || null,
         customerPhone: form.customerPhone.trim() || null,
         quantity,
         unitPrice,
@@ -221,10 +220,10 @@ export function SaleModal({ open, onClose, product }: SaleModalProps) {
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Input
             label="Cliente"
-            required
             value={form.customerName}
             onChange={(e) => set('customerName')(e.target.value)}
-            placeholder="Nome completo"
+            placeholder="Consumidor"
+            hint="Opcional"
             error={errors.customerName}
             autoFocus
           />
