@@ -15,8 +15,8 @@ import {
   validar,
 } from './core';
 import { db, registrarLog } from './db';
-import { linhaDaPlanilha } from './movimentacoes';
-import { enviarParaPlanilha } from './planilha';
+import { movimentar } from './estoque';
+import { exigirAcessoNaUnidade, unidadePermitida } from './unidades';
 
 /** Registro e cancelamento de vendas — é aqui que o estoque baixa. */
 
@@ -27,12 +27,15 @@ const COM_RELACOES = {
   product: { include: { category: true, supplier: true } },
   customer: true,
   user: { select: { id: true, name: true } },
+  unit: { select: { id: true, name: true } },
 } satisfies Prisma.SaleInclude;
 
 const PAGAMENTOS = ['PIX', 'DINHEIRO', 'DEBITO', 'CREDITO', 'TRANSFERENCIA'] as const;
 
 const vendaSchema = z.object({
   productId: z.string().uuid('Selecione o produto'),
+  /** Obrigatória: é o que diz de qual loja o produto saiu. */
+  unitId: z.string().uuid('Selecione a unidade da venda'),
   customerName: z.string().trim().min(2, 'Informe o nome do cliente').max(180),
   customerPhone: z
     .string()
@@ -57,6 +60,7 @@ const filtrosSchema = z.object({
   categoryId: z.string().uuid().optional(),
   supplierId: z.string().uuid().optional(),
   paymentMethod: z.enum(PAGAMENTOS).optional(),
+  unitId: z.string().uuid().optional(),
   startDate: z.coerce.date().optional(),
   endDate: z.coerce.date().optional(),
   sortBy: z.string().optional(),
@@ -87,6 +91,7 @@ export function filtrarVendas(q: FiltrosVenda): Prisma.SaleWhereInput {
   if (q.categoryId) cond.push({ product: { categoryId: q.categoryId } });
   if (q.supplierId) cond.push({ product: { supplierId: q.supplierId } });
   if (q.paymentMethod) cond.push({ paymentMethod: q.paymentMethod });
+  if (q.unitId) cond.push({ unitId: q.unitId });
 
   const periodo = intervalo(q.startDate, q.endDate);
   if (periodo) cond.push({ saleDate: periodo });
@@ -99,7 +104,8 @@ rotasVendas.get(
   rota(async (req, res) => {
     const q = validar(filtrosSchema, req.query);
     const p = paginacao(q as Record<string, unknown>);
-    const where = filtrarVendas(q);
+    // Quem não é administrador só vê as vendas da própria unidade.
+    const where = filtrarVendas({ ...q, unitId: unidadePermitida(req.usuario, q.unitId) });
 
     const [lista, total, somas] = await Promise.all([
       db.sale.findMany({
@@ -147,32 +153,12 @@ rotasVendas.post(
     const dados = validar(vendaSchema, req.body);
     const usuario = req.usuario;
 
+    // Vendedor e Gerente só vendem da própria unidade.
+    exigirAcessoNaUnidade(usuario, dados.unitId);
+
     const resultado = await db.$transaction(async (tx) => {
-      const produto = await tx.product.findUnique({
-        where: { id: dados.productId },
-        include: { category: true, supplier: true },
-      });
+      const produto = await tx.product.findUnique({ where: { id: dados.productId } });
       if (!produto) throw naoEncontrado('Produto');
-
-      if (produto.quantity < dados.quantity) {
-        throw new AppError(
-          `Estoque insuficiente para "${produto.name}". Disponível: ${produto.quantity}.`,
-        );
-      }
-
-      const baixa = await tx.product.updateMany({
-        where: { id: produto.id, quantity: { gte: dados.quantity } },
-        data: { quantity: { decrement: dados.quantity } },
-      });
-
-      if (baixa.count === 0) {
-        throw new AppError('O estoque mudou durante a operação. Tente novamente.', 409);
-      }
-
-      const restante = produto.quantity - dados.quantity;
-      if (restante === 0) {
-        await tx.product.update({ where: { id: produto.id }, data: { status: 'VENDIDO' } });
-      }
 
       // Reaproveita o cliente pelo telefone; se não achar, cria.
       let clienteId = dados.customerId ?? null;
@@ -195,6 +181,7 @@ rotasVendas.post(
       const venda = await tx.sale.create({
         data: {
           productId: produto.id,
+          unitId: dados.unitId,
           customerId: clienteId,
           customerName: dados.customerName,
           customerPhone: dados.customerPhone ?? null,
@@ -211,81 +198,75 @@ rotasVendas.post(
         include: COM_RELACOES,
       });
 
-      await tx.movement.create({
-        data: {
-          type: 'SAIDA',
-          quantity: dados.quantity,
-          balanceAfter: restante,
-          reason: `Venda para ${dados.customerName}`,
-          productId: produto.id,
-          productName: produto.name,
-          saleId: venda.id,
-          userId: usuario?.id ?? null,
-        },
+      // A baixa acontece aqui: se faltar estoque na unidade, a transação
+      // inteira é desfeita e a venda não existe.
+      const baixa = await movimentar({
+        produtoId: produto.id,
+        produtoNome: produto.name,
+        unidadeId: dados.unitId,
+        tipo: 'SAIDA',
+        motivo: 'VENDA',
+        quantidade: dados.quantity,
+        observacao: `Venda para ${dados.customerName}`,
+        vendaId: venda.id,
+        usuarioId: usuario?.id,
+        usuarioNome: usuario?.nome,
+        tx,
       });
 
-      return { venda, produto, restante };
-    });
+      // Sem saldo em nenhuma unidade, o produto passa a constar como vendido.
+      const restante = await tx.stock.aggregate({
+        where: { productId: produto.id },
+        _sum: { quantity: true },
+      });
+      if ((restante._sum.quantity ?? 0) === 0) {
+        await tx.product.update({ where: { id: produto.id }, data: { status: 'VENDIDO' } });
+      }
 
-    enviarParaPlanilha(
-      linhaDaPlanilha(resultado.produto, 'SAIDA', dados.quantity, usuario?.nome, resultado.restante),
-    );
+      return { venda, baixa };
+    });
 
     await registrarLog({ acao: 'CREATE', entidade: 'Sale', id: resultado.venda.id, req });
     res.status(201).json(limpar(resultado.venda));
   }),
 );
 
-/** Cancela a venda e devolve os itens ao estoque. */
+/** Cancela a venda e devolve os itens à unidade de onde saíram. */
 rotasVendas.delete(
   '/:id',
   somenteAdmin,
   rota(async (req, res) => {
     const usuario = req.usuario;
 
-    const resultado = await db.$transaction(async (tx) => {
+    await db.$transaction(async (tx) => {
       const venda = await tx.sale.findUnique({
         where: { id: req.params.id },
-        include: { product: true },
+        include: { product: true, unit: true },
       });
       if (!venda) throw naoEncontrado('Venda');
 
-      const produto = await tx.product.update({
-        where: { id: venda.productId },
-        data: {
-          quantity: { increment: venda.quantity },
-          status: venda.product.status === 'VENDIDO' ? 'EM_ESTOQUE' : undefined,
-        },
-        include: { category: true, supplier: true },
+      await movimentar({
+        produtoId: venda.productId,
+        produtoNome: venda.product.name,
+        unidadeId: venda.unitId,
+        tipo: 'ENTRADA',
+        motivo: 'CANCELAMENTO',
+        quantidade: venda.quantity,
+        observacao: `Cancelamento de venda (${venda.customerName ?? 'cliente'}) — voltou para a ${venda.unit.name}`,
+        usuarioId: usuario?.id,
+        usuarioNome: usuario?.nome,
+        tx,
       });
 
-      await tx.movement.create({
-        data: {
-          type: 'ENTRADA',
-          quantity: venda.quantity,
-          balanceAfter: produto.quantity,
-          reason: `Cancelamento de venda (${venda.customerName ?? 'cliente'})`,
-          productId: produto.id,
-          productName: produto.name,
-          userId: usuario?.id ?? null,
-        },
-      });
+      // O produto volta a ficar disponível.
+      if (venda.product.status === 'VENDIDO') {
+        await tx.product.update({ where: { id: venda.productId }, data: { status: 'EM_ESTOQUE' } });
+      }
 
       await tx.sale.delete({ where: { id: venda.id } });
-      return { venda, produto };
     });
 
-    enviarParaPlanilha(
-      linhaDaPlanilha(
-        resultado.produto,
-        'ENTRADA',
-        resultado.venda.quantity,
-        usuario?.nome,
-        resultado.produto.quantity,
-      ),
-    );
-
     await registrarLog({ acao: 'DELETE', entidade: 'Sale', id: req.params.id, req });
-    res.json({ message: 'Venda cancelada e estoque devolvido' });
+    res.json({ message: 'Venda cancelada e estoque devolvido à unidade de origem.' });
   }),
 );

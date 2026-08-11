@@ -324,13 +324,24 @@ rotasClientes.delete(
 export const rotasUsuarios = Router();
 rotasUsuarios.use(autenticar, somenteAdmin);
 
-const campos = { id: true, name: true, email: true, role: true, active: true, createdAt: true };
+const campos = {
+  id: true,
+  name: true,
+  email: true,
+  role: true,
+  active: true,
+  createdAt: true,
+  unitId: true,
+  unit: { select: { id: true, name: true } },
+};
 
 const usuarioSchema = z.object({
   name: z.string().trim().min(2, 'Informe o nome').max(120),
   email: z.string().trim().toLowerCase().email('E-mail inválido'),
   password: z.string().trim().min(6, 'A senha deve ter ao menos 6 caracteres'),
-  role: z.enum(['ADMIN', 'OPERADOR']).default('OPERADOR'),
+  role: z.enum(['ADMIN', 'GERENTE', 'VENDEDOR']).default('VENDEDOR'),
+  /** Gerente e Vendedor precisam de unidade; Administrador vê todas. */
+  unitId: z.string().uuid().optional().nullable(),
   active: z.boolean().default(true),
 });
 
@@ -396,7 +407,7 @@ rotasUsuarios.put(
     const alvo = await db.user.findUnique({ where: { id: req.params.id } });
     if (!alvo) throw naoEncontrado('Usuário');
 
-    if (alvo.role === 'ADMIN' && (dados.role === 'OPERADOR' || dados.active === false)) {
+    if (alvo.role === 'ADMIN' && (dados.role !== undefined && dados.role !== 'ADMIN' || dados.active === false)) {
       await garantirOutroAdmin();
     }
 

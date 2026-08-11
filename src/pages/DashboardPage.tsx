@@ -5,10 +5,12 @@ import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { StatCard } from '@/components/ui/StatCard';
 import { useAuth } from '@/contexts/AuthContext';
 import { useDashboard } from '@/hooks/queries';
+import { useUnit } from '@/contexts/UnitContext';
 import { cn } from '@/lib/cn';
 import { formatCurrency, formatDateTime, formatNumber } from '@/lib/format';
 import {
   AlertTriangle,
+  ArrowLeftRight,
   Boxes,
   DollarSign,
   Package,
@@ -29,7 +31,8 @@ const PERIODS = [
 export default function DashboardPage() {
   const [days, setDays] = useState(14);
   const [chartMode, setChartMode] = useState<'revenue' | 'flow'>('revenue');
-  const { data, isLoading } = useDashboard(days);
+  const { unidadeId, rotulo } = useUnit();
+  const { data, isLoading } = useDashboard(days, unidadeId);
   const { user } = useAuth();
   const navigate = useNavigate();
 
@@ -50,7 +53,7 @@ export default function DashboardPage() {
             {greeting}, {user?.name?.split(' ')[0]} 👋
           </h1>
           <p className="mt-0.5 text-sm text-slate-500 dark:text-slate-400">
-            Resumo do estoque e das vendas da Rafa Multimarcas.
+            {unidadeId ? `Dados da ${rotulo}.` : 'Consolidado de todas as unidades.'}
           </p>
         </div>
 
@@ -95,6 +98,15 @@ export default function DashboardPage() {
           icon={Wallet}
           tone="purple"
           loading={isLoading}
+        />
+        <StatCard
+          label="Entradas / Saídas"
+          value={`${cards?.entradas ?? 0} / ${cards?.saidas ?? 0}`}
+          hint={`Movimentações dos últimos ${days} dias`}
+          icon={ArrowLeftRight}
+          tone="accent"
+          loading={isLoading}
+          onClick={() => navigate('/movimentacoes')}
         />
         <StatCard
           label="Estoque baixo"
@@ -212,7 +224,8 @@ export default function DashboardPage() {
                     {sale.customerName ?? 'Cliente não informado'}
                   </p>
                   <p className="truncate text-xs text-slate-500 dark:text-slate-400">
-                    {sale.quantity}× {sale.product?.name} · {formatDateTime(sale.saleDate)}
+                    {sale.quantity}× {sale.product?.name}
+                    {sale.unit ? ` · ${sale.unit.name}` : ''} · {formatDateTime(sale.saleDate)}
                   </p>
                 </div>
 
@@ -250,7 +263,9 @@ export default function DashboardPage() {
                       {product.name}
                     </p>
                     <p className="truncate text-xs text-slate-500 dark:text-slate-400">
-                      {product.category?.name}
+                      {[product.category?.name, (product as { unitName?: string }).unitName]
+                        .filter(Boolean)
+                        .join(' · ')}
                     </p>
                   </div>
                   <Badge tone="warning">{product.quantity} un.</Badge>

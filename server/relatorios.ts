@@ -4,7 +4,8 @@ import { autenticar } from './auth';
 import { dataBR, dataHoraBR, intervalo, numero, rota, validar } from './core';
 import { db } from './db';
 import { decimal, exportar, reais, type Coluna } from './exportar';
-import { STATUS_LABEL, TIPO_LABEL } from './movimentacoes';
+import { MOTIVO_LABEL, STATUS_PRODUTO_LABEL, TIPO_LABEL } from './estoque';
+import { unidadePermitida } from './unidades';
 
 /** Os seis relatórios, todos exportáveis em PDF, Excel ou CSV. */
 
@@ -19,6 +20,7 @@ const base = z.object({
   supplierId: z.string().uuid().optional(),
   status: z.enum(['EM_ESTOQUE', 'RESERVADO', 'VENDIDO']).optional(),
   paymentMethod: z.enum(['PIX', 'DINHEIRO', 'DEBITO', 'CREDITO', 'TRANSFERENCIA']).optional(),
+  unitId: z.string().uuid().optional(),
 });
 
 type Base = z.infer<typeof base>;
@@ -58,32 +60,42 @@ rotasRelatorios.get(
   '/stock',
   rota(async (req, res) => {
     const q = validar(base, req.query);
+    const unidade = unidadePermitida(req.usuario, q.unitId);
     const entrada = intervalo(q.startDate, q.endDate);
 
-    const produtos = await db.product.findMany({
+    // Uma linha por produto em cada unidade: é assim que se vê onde está
+    // cada peça, em vez de um total que não diz nada.
+    const linhasDeEstoque = await db.stock.findMany({
       where: {
-        ...(q.categoryId ? { categoryId: q.categoryId } : {}),
-        ...(q.supplierId ? { supplierId: q.supplierId } : {}),
-        ...(q.status ? { status: q.status } : {}),
-        ...(entrada ? { entryDate: entrada } : {}),
+        ...(unidade ? { unitId: unidade } : {}),
+        product: {
+          ...(q.categoryId ? { categoryId: q.categoryId } : {}),
+          ...(q.supplierId ? { supplierId: q.supplierId } : {}),
+          ...(q.status ? { status: q.status } : {}),
+          ...(entrada ? { entryDate: entrada } : {}),
+        },
       },
-      include: { category: true, supplier: true },
-      orderBy: [{ category: { name: 'asc' } }, { name: 'asc' }],
+      include: {
+        unit: { select: { name: true } },
+        product: { include: { category: true, supplier: true } },
+      },
+      orderBy: [{ unit: { name: 'asc' } }, { product: { name: 'asc' } }],
     });
 
-    const linhas = produtos.map((p) => ({
+    const linhas = linhasDeEstoque.map(({ product: p, unit, quantity }) => ({
+      unit: unit.name,
       name: p.name,
       category: p.category.name,
       brand: p.brand ?? '—',
       model: p.model ?? '—',
       lote: p.lote ?? '—',
-      quantity: p.quantity,
+      quantity,
       costPrice: numero(p.costPrice),
       salePrice: numero(p.salePrice),
-      totalCost: numero(p.costPrice) * p.quantity,
-      totalSale: numero(p.salePrice) * p.quantity,
+      totalCost: numero(p.costPrice) * quantity,
+      totalSale: numero(p.salePrice) * quantity,
       supplier: p.supplier?.name ?? '—',
-      status: STATUS_LABEL[p.status] ?? p.status,
+      status: STATUS_PRODUTO_LABEL[p.status] ?? p.status,
       entryDate: dataBR(p.entryDate),
     }));
 
@@ -94,23 +106,23 @@ rotasRelatorios.get(
       title: 'Relatório de Estoque',
       subtitle: periodo(q),
       columns: [
-        { header: 'Produto', key: 'name', width: 26 },
-        { header: 'Categoria', key: 'category', width: 14 },
-        { header: 'Marca', key: 'brand', width: 12 },
-        { header: 'Modelo', key: 'model', width: 14 },
-        { header: 'Lote', key: 'lote', width: 12 },
+        { header: 'Unidade', key: 'unit', width: 12 },
+        { header: 'Produto', key: 'name', width: 24 },
+        { header: 'Categoria', key: 'category', width: 13 },
+        { header: 'Marca', key: 'brand', width: 11 },
+        { header: 'Modelo', key: 'model', width: 13 },
+        { header: 'Lote', key: 'lote', width: 11 },
         qtd('Qtd', 'quantity', 6),
-        money('Custo', 'costPrice', 11),
-        money('Venda', 'salePrice', 11),
-        money('Total custo', 'totalCost'),
-        money('Total venda', 'totalSale'),
-        { header: 'Fornecedor', key: 'supplier', width: 18 },
-        { header: 'Status', key: 'status', width: 12 },
-        { header: 'Entrada', key: 'entryDate', width: 11 },
+        money('Custo', 'costPrice', 10),
+        money('Venda', 'salePrice', 10),
+        money('Total custo', 'totalCost', 12),
+        money('Total venda', 'totalSale', 12),
+        { header: 'Fornecedor', key: 'supplier', width: 16 },
+        { header: 'Status', key: 'status', width: 11 },
       ],
       rows: linhas,
       summary: [
-        { label: 'Produtos listados', value: String(linhas.length) },
+        { label: 'Linhas listadas', value: String(linhas.length) },
         { label: 'Itens em estoque', value: String(linhas.reduce((s, l) => s + l.quantity, 0)) },
         { label: 'Valor total (custo)', value: reais(custo) },
         { label: 'Valor total (venda)', value: reais(venda) },
@@ -192,15 +204,20 @@ rotasRelatorios.get(
   '/by-category',
   rota(async (req, res) => {
     const q = validar(base, req.query);
+    const unidade = unidadePermitida(req.usuario, q.unitId);
     const quando = intervalo(q.startDate, q.endDate);
 
-    const [categorias, vendas] = await Promise.all([
-      db.category.findMany({
-        include: { products: { select: { quantity: true, costPrice: true, salePrice: true } } },
-        orderBy: { name: 'asc' },
+    const [categorias, linhasDeEstoque, vendas] = await Promise.all([
+      db.category.findMany({ orderBy: { name: 'asc' } }),
+      db.stock.findMany({
+        where: unidade ? { unitId: unidade } : {},
+        select: {
+          quantity: true,
+          product: { select: { categoryId: true, costPrice: true, salePrice: true } },
+        },
       }),
       db.sale.findMany({
-        where: quando ? { saleDate: quando } : {},
+        where: { ...(quando ? { saleDate: quando } : {}), ...(unidade ? { unitId: unidade } : {}) },
         select: {
           quantity: true,
           totalPrice: true,
@@ -211,16 +228,17 @@ rotasRelatorios.get(
     ]);
 
     const linhas = categorias.map((c) => {
+      const doEstoque = linhasDeEstoque.filter((l) => l.product.categoryId === c.id);
       const daCategoria = vendas.filter((v) => v.product.categoryId === c.id);
       const faturamento = daCategoria.reduce((s, v) => s + numero(v.totalPrice), 0);
       const custo = daCategoria.reduce((s, v) => s + numero(v.costAtSale) * v.quantity, 0);
 
       return {
         category: c.name,
-        products: c.products.length,
-        stockQty: c.products.reduce((s, p) => s + p.quantity, 0),
-        stockCost: c.products.reduce((s, p) => s + numero(p.costPrice) * p.quantity, 0),
-        stockSale: c.products.reduce((s, p) => s + numero(p.salePrice) * p.quantity, 0),
+        products: doEstoque.length,
+        stockQty: doEstoque.reduce((s, l) => s + l.quantity, 0),
+        stockCost: doEstoque.reduce((s, l) => s + numero(l.product.costPrice) * l.quantity, 0),
+        stockSale: doEstoque.reduce((s, l) => s + numero(l.product.salePrice) * l.quantity, 0),
         soldQty: daCategoria.reduce((s, v) => s + v.quantity, 0),
         revenue: faturamento,
         profit: faturamento - custo,
@@ -256,15 +274,17 @@ rotasRelatorios.get(
   '/by-supplier',
   rota(async (req, res) => {
     const q = validar(base, req.query);
+    const unidade = unidadePermitida(req.usuario, q.unitId);
     const quando = intervalo(q.startDate, q.endDate);
 
-    const [fornecedores, vendas] = await Promise.all([
-      db.supplier.findMany({
-        include: { products: { select: { quantity: true, costPrice: true } } },
-        orderBy: { name: 'asc' },
+    const [fornecedores, linhasDeEstoque, vendas] = await Promise.all([
+      db.supplier.findMany({ orderBy: { name: 'asc' } }),
+      db.stock.findMany({
+        where: unidade ? { unitId: unidade } : {},
+        select: { quantity: true, product: { select: { supplierId: true, costPrice: true } } },
       }),
       db.sale.findMany({
-        where: quando ? { saleDate: quando } : {},
+        where: { ...(quando ? { saleDate: quando } : {}), ...(unidade ? { unitId: unidade } : {}) },
         select: {
           quantity: true,
           totalPrice: true,
@@ -275,6 +295,7 @@ rotasRelatorios.get(
     ]);
 
     const linhas = fornecedores.map((f) => {
+      const doEstoque = linhasDeEstoque.filter((l) => l.product.supplierId === f.id);
       const doFornecedor = vendas.filter((v) => v.product.supplierId === f.id);
       const faturamento = doFornecedor.reduce((s, v) => s + numero(v.totalPrice), 0);
       const custo = doFornecedor.reduce((s, v) => s + numero(v.costAtSale) * v.quantity, 0);
@@ -282,9 +303,9 @@ rotasRelatorios.get(
       return {
         supplier: f.name,
         active: f.active ? 'Sim' : 'Não',
-        products: f.products.length,
-        stockQty: f.products.reduce((s, p) => s + p.quantity, 0),
-        invested: f.products.reduce((s, p) => s + numero(p.costPrice) * p.quantity, 0),
+        products: doEstoque.length,
+        stockQty: doEstoque.reduce((s, l) => s + l.quantity, 0),
+        invested: doEstoque.reduce((s, l) => s + numero(l.product.costPrice) * l.quantity, 0),
         soldQty: doFornecedor.reduce((s, v) => s + v.quantity, 0),
         revenue: faturamento,
         profit: faturamento - custo,
@@ -328,7 +349,7 @@ rotasRelatorios.get(
         select: { saleDate: true, quantity: true, totalPrice: true, costAtSale: true },
         orderBy: { saleDate: 'asc' },
       }),
-      db.movement.findMany({
+      db.stockMovement.findMany({
         where: quando ? { createdAt: quando } : {},
         select: { createdAt: true, type: true, quantity: true },
       }),
@@ -403,34 +424,44 @@ rotasRelatorios.get(
   '/movements',
   rota(async (req, res) => {
     const q = validar(
-      base.extend({ type: z.enum(['ENTRADA', 'SAIDA', 'AJUSTE', 'EXCLUSAO']).optional() }),
+      base.extend({ type: z.enum(['ENTRADA', 'SAIDA', 'TRANSFERENCIA', 'AJUSTE']).optional() }),
       req.query,
     );
+    const unidade = unidadePermitida(req.usuario, q.unitId);
     const quando = intervalo(q.startDate, q.endDate);
 
-    const movimentos = await db.movement.findMany({
+    const movimentos = await db.stockMovement.findMany({
       where: {
         ...(quando ? { createdAt: quando } : {}),
         ...(q.type ? { type: q.type } : {}),
+        ...(unidade ? { unitId: unidade } : {}),
         ...(q.categoryId ? { product: { categoryId: q.categoryId } } : {}),
       },
       include: {
         user: { select: { name: true } },
+        unit: { select: { name: true } },
         product: { select: { model: true, category: { select: { name: true } } } },
       },
       orderBy: { createdAt: 'desc' },
     });
 
+    const unidades = await db.unit.findMany({ select: { id: true, name: true } });
+    const nome = (id?: string | null) => unidades.find((u) => u.id === id)?.name ?? '—';
+
     const linhas = movimentos.map((m) => ({
       date: dataHoraBR(m.createdAt),
+      unit: m.unit?.name ?? '—',
       type: TIPO_LABEL[m.type] ?? m.type,
+      reason: MOTIVO_LABEL[m.reason] ?? m.reason,
       product: m.productName ?? '—',
       category: m.product?.category.name ?? '—',
-      model: m.product?.model ?? '—',
-      quantity: m.quantity,
-      balance: m.balanceAfter ?? '—',
-      reason: m.reason ?? '—',
+      quantity: m.type === 'ENTRADA' ? m.quantity : -m.quantity,
+      previous: m.previousQuantity ?? '—',
+      balance: m.newQuantity ?? '—',
+      origin: m.originUnitId ? nome(m.originUnitId) : '—',
+      destination: m.destinationUnitId ? nome(m.destinationUnitId) : '—',
       user: m.user?.name ?? '—',
+      notes: m.notes ?? '—',
     }));
 
     const somaPor = (tipo: string) =>
@@ -441,20 +472,24 @@ rotasRelatorios.get(
       subtitle: periodo(q),
       columns: [
         { header: 'Data', key: 'date', width: 15 },
-        { header: 'Tipo', key: 'type', width: 10 },
-        { header: 'Produto', key: 'product', width: 24 },
-        { header: 'Categoria', key: 'category', width: 13 },
-        { header: 'Modelo', key: 'model', width: 13 },
+        { header: 'Unidade', key: 'unit', width: 11 },
+        { header: 'Tipo', key: 'type', width: 11 },
+        { header: 'Motivo', key: 'reason', width: 15 },
+        { header: 'Produto', key: 'product', width: 22 },
+        { header: 'Categoria', key: 'category', width: 12 },
         qtd('Qtd', 'quantity', 6),
-        qtd('Saldo', 'balance', 7),
-        { header: 'Motivo', key: 'reason', width: 24 },
-        { header: 'Usuário', key: 'user', width: 14 },
+        qtd('Antes', 'previous', 7),
+        qtd('Depois', 'balance', 7),
+        { header: 'Origem', key: 'origin', width: 11 },
+        { header: 'Destino', key: 'destination', width: 11 },
+        { header: 'Usuário', key: 'user', width: 13 },
       ],
       rows: linhas,
       summary: [
         { label: 'Movimentações', value: String(linhas.length) },
         { label: 'Entradas', value: String(somaPor('ENTRADA')) },
         { label: 'Saídas', value: String(somaPor('SAIDA')) },
+        { label: 'Transferências', value: String(somaPor('TRANSFERENCIA')) },
       ],
     });
   }),

@@ -5,6 +5,8 @@ import { Modal } from '@/components/ui/Modal';
 import { useToast } from '@/contexts/ToastContext';
 import { useCreateSale } from '@/hooks/queries';
 import { formatCurrency, PAYMENT_OPTIONS, toInputDate } from '@/lib/format';
+import { useAuth } from '@/contexts/AuthContext';
+import { useUnit } from '@/contexts/UnitContext';
 import type { Product } from '@/types';
 import { AlertTriangle, ShoppingCart } from 'lucide-react';
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
@@ -16,6 +18,7 @@ interface SaleModalProps {
 }
 
 interface FormState {
+  unitId: string;
   customerName: string;
   customerPhone: string;
   quantity: string;
@@ -27,6 +30,7 @@ interface FormState {
 
 export function SaleModal({ open, onClose, product }: SaleModalProps) {
   const [form, setForm] = useState<FormState>({
+    unitId: '',
     customerName: '',
     customerPhone: '',
     quantity: '1',
@@ -39,10 +43,19 @@ export function SaleModal({ open, onClose, product }: SaleModalProps) {
 
   const toast = useToast();
   const createSale = useCreateSale();
+  const { unidades } = useUnit();
+  const { user } = useAuth();
+
+  /** Vendedor e gerente só vendem da própria unidade. */
+  const operaveis =
+    user?.role === 'ADMIN' ? unidades : unidades.filter((u) => u.id === user?.unitId);
 
   useEffect(() => {
     if (!open || !product) return;
+    // Já começa na unidade que tem estoque, para poupar um clique.
+    const comEstoque = product.stock?.find((s) => s.quantity > 0);
     setForm({
+      unitId: comEstoque?.unitId ?? operaveis[0]?.id ?? '',
       customerName: '',
       customerPhone: '',
       quantity: '1',
@@ -52,6 +65,7 @@ export function SaleModal({ open, onClose, product }: SaleModalProps) {
       notes: '',
     });
     setErrors({});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, product]);
 
   const set = (field: keyof FormState) => (value: string) => {
@@ -60,6 +74,7 @@ export function SaleModal({ open, onClose, product }: SaleModalProps) {
   };
 
   const quantity = Number(form.quantity) || 0;
+  const saldoNaUnidade = product?.stock?.find((s) => s.unitId === form.unitId)?.quantity ?? 0;
   const unitPrice = Number(form.unitPrice) || 0;
   const total = quantity * unitPrice;
 
@@ -68,15 +83,17 @@ export function SaleModal({ open, onClose, product }: SaleModalProps) {
     return total - Number(product.costPrice) * quantity;
   }, [product, total, quantity]);
 
-  const remaining = (product?.quantity ?? 0) - quantity;
+  const remaining = saldoNaUnidade - quantity;
 
   function validate(): boolean {
     const next: Partial<Record<keyof FormState, string>> = {};
 
     if (form.customerName.trim().length < 2) next.customerName = 'Informe o nome do cliente';
     if (quantity < 1) next.quantity = 'Quantidade mínima: 1';
-    if (product && quantity > product.quantity) {
-      next.quantity = `Estoque disponível: ${product.quantity}`;
+    if (!form.unitId) next.unitId = 'Selecione a unidade';
+    if (form.unitId && quantity > saldoNaUnidade) {
+      const nome = unidades.find((u) => u.id === form.unitId)?.name ?? 'unidade';
+      next.quantity = `Estoque insuficiente na ${nome}. Disponível: ${saldoNaUnidade}.`;
     }
     if (unitPrice < 0) next.unitPrice = 'Valor inválido';
     if (!form.paymentMethod) next.paymentMethod = 'Selecione a forma de pagamento';
@@ -92,6 +109,7 @@ export function SaleModal({ open, onClose, product }: SaleModalProps) {
     try {
       await createSale.mutateAsync({
         productId: product.id,
+        unitId: form.unitId,
         customerName: form.customerName.trim(),
         customerPhone: form.customerPhone.trim() || null,
         quantity,
@@ -169,8 +187,28 @@ export function SaleModal({ open, onClose, product }: SaleModalProps) {
             )}
           </div>
 
-          <Badge tone={product.quantity > 0 ? 'success' : 'danger'}>{product.quantity} em estoque</Badge>
+          <div className="flex shrink-0 flex-col gap-1">
+            {product.stock?.map((s) => (
+              <Badge key={s.unitId} tone={s.quantity > 0 ? 'success' : 'danger'}>
+                {s.unitName}: {s.quantity}
+              </Badge>
+            ))}
+          </div>
         </div>
+
+        <Select
+          label="Unidade da venda"
+          required
+          value={form.unitId}
+          onChange={(e) => set('unitId')(e.target.value)}
+          options={operaveis.map((u) => ({
+            value: u.id,
+            label: `${u.name} — ${product.stock?.find((s) => s.unitId === u.id)?.quantity ?? 0} em estoque`,
+          }))}
+          placeholder="Selecione…"
+          error={errors.unitId}
+          hint="De qual loja o produto está saindo"
+        />
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Input
@@ -197,7 +235,7 @@ export function SaleModal({ open, onClose, product }: SaleModalProps) {
             required
             type="number"
             min={1}
-            max={product.quantity}
+            max={saldoNaUnidade || undefined}
             value={form.quantity}
             onChange={(e) => set('quantity')(e.target.value)}
             error={errors.quantity}
@@ -244,7 +282,8 @@ export function SaleModal({ open, onClose, product }: SaleModalProps) {
                 </strong>
               </p>
               <p>
-                Estoque após a venda: <strong>{Math.max(0, remaining)} un.</strong>
+                {unidades.find((u) => u.id === form.unitId)?.name ?? 'Unidade'} após a venda:{' '}
+                <strong>{Math.max(0, remaining)} un.</strong>
               </p>
             </div>
           </div>
@@ -252,7 +291,7 @@ export function SaleModal({ open, onClose, product }: SaleModalProps) {
           {remaining === 0 && quantity > 0 && (
             <p className="mt-2 flex items-center gap-1.5 text-xs font-medium text-warning">
               <AlertTriangle className="h-3.5 w-3.5" />
-              Este produto ficará sem estoque e será marcado como vendido.
+              Esta unidade ficará sem estoque deste produto.
             </p>
           )}
         </div>

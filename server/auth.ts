@@ -12,7 +12,15 @@ declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
   namespace Express {
     interface Request {
-      usuario?: { id: string; nome: string; email: string; admin: boolean };
+      usuario?: {
+        id: string;
+        nome: string;
+        email: string;
+        papel: 'ADMIN' | 'GERENTE' | 'VENDEDOR';
+        admin: boolean;
+        /** Unidade do Gerente/Vendedor. Administrador não tem — vê todas. */
+        unidadeId?: string | null;
+      };
     }
   }
 }
@@ -58,11 +66,23 @@ async function segredo(): Promise<string> {
 const DURACAO = '7d';
 const DURACAO_REFRESH = '30d';
 
-async function gerarTokens(usuario: { id: string; name: string; email: string; role: string }) {
+async function gerarTokens(usuario: {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  unitId?: string | null;
+}) {
   const chave = await segredo();
   return {
     token: jwt.sign(
-      { sub: usuario.id, nome: usuario.name, email: usuario.email, role: usuario.role },
+      {
+        sub: usuario.id,
+        nome: usuario.name,
+        email: usuario.email,
+        role: usuario.role,
+        unidadeId: usuario.unitId ?? null,
+      },
       chave,
       { expiresIn: DURACAO },
     ),
@@ -72,11 +92,18 @@ async function gerarTokens(usuario: { id: string; name: string; email: string; r
   };
 }
 
-const publico = (u: { id: string; name: string; email: string; role: string }) => ({
+const publico = (u: {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  unitId?: string | null;
+}) => ({
   id: u.id,
   name: u.name,
   email: u.email,
   role: u.role,
+  unitId: u.unitId ?? null,
 });
 
 // -------------------------------------------------------------- Middlewares
@@ -96,14 +123,17 @@ export function autenticar(req: Request, _res: Response, next: NextFunction): vo
         sub: string;
         nome: string;
         email: string;
-        role: string;
+        role: 'ADMIN' | 'GERENTE' | 'VENDEDOR';
+        unidadeId?: string | null;
       };
 
       req.usuario = {
         id: dados.sub,
         nome: dados.nome,
         email: dados.email,
+        papel: dados.role,
         admin: dados.role === 'ADMIN',
+        unidadeId: dados.unidadeId ?? null,
       };
       next();
     } catch {
@@ -116,6 +146,15 @@ export function autenticar(req: Request, _res: Response, next: NextFunction): vo
 export function somenteAdmin(req: Request, _res: Response, next: NextFunction): void {
   if (!req.usuario) return next(new AppError('Não autorizado', 401));
   if (!req.usuario.admin) return next(new AppError('Apenas administradores podem fazer isso', 403));
+  next();
+}
+
+/** Administrador e Gerente — usado nas movimentações de estoque. */
+export function gerenteOuAdmin(req: Request, _res: Response, next: NextFunction): void {
+  if (!req.usuario) return next(new AppError('Não autorizado', 401));
+  if (req.usuario.papel === 'VENDEDOR') {
+    return next(new AppError('Vendedor não pode fazer esta operação.', 403));
+  }
   next();
 }
 

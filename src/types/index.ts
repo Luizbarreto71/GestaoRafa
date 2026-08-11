@@ -1,7 +1,39 @@
 export type ProductStatus = 'EM_ESTOQUE' | 'RESERVADO' | 'VENDIDO';
-export type MovementType = 'ENTRADA' | 'SAIDA' | 'AJUSTE' | 'EXCLUSAO';
+export type MovementType = 'ENTRADA' | 'SAIDA' | 'TRANSFERENCIA' | 'AJUSTE';
+
+export type MovementReason =
+  | 'COMPRA'
+  | 'CADASTRO'
+  | 'VENDA'
+  | 'DEFEITO'
+  | 'DEVOLUCAO_FORNECEDOR'
+  | 'PERDA'
+  | 'USO_INTERNO'
+  | 'AJUSTE'
+  | 'TRANSFERENCIA'
+  | 'CANCELAMENTO'
+  | 'EXCLUSAO'
+  | 'OUTRO';
+
+export type TransferStatus = 'PENDENTE' | 'EM_TRANSITO' | 'RECEBIDA' | 'CANCELADA';
+
+/** Matriz, Sede… Cada uma com seu estoque. */
+export interface Unit {
+  id: string;
+  name: string;
+  type: 'MATRIZ' | 'FILIAL';
+  active: boolean;
+  _count?: { stock: number; sales: number };
+}
+
+/** Saldo de um produto numa unidade. */
+export interface StockLine {
+  unitId: string;
+  unitName: string;
+  quantity: number;
+}
 export type PaymentMethod = 'PIX' | 'DINHEIRO' | 'DEBITO' | 'CREDITO' | 'TRANSFERENCIA';
-export type UserRole = 'ADMIN' | 'OPERADOR';
+export type UserRole = 'ADMIN' | 'GERENTE' | 'VENDEDOR';
 
 export interface User {
   id: string;
@@ -9,6 +41,8 @@ export interface User {
   email: string;
   role: UserRole;
   active?: boolean;
+  unitId?: string | null;
+  unit?: { id: string; name: string } | null;
   createdAt?: string;
 }
 
@@ -74,6 +108,14 @@ export interface Product {
   supplier?: Supplier | null;
   /** URLs das fotos, ex.: `/api/fotos/<id>`. A primeira é a principal. */
   photos: string[];
+  /** Saldo em cada unidade. */
+  stock: StockLine[];
+  /** Soma das unidades. */
+  totalQuantity?: number;
+  /** Em transferências ainda não recebidas. */
+  inTransit?: number;
+  totalAvailable?: number;
+  totalPhysical?: number;
   movements?: Movement[];
   sales?: Sale[];
 }
@@ -89,6 +131,8 @@ export interface Sale {
   notes?: string | null;
   productId: string;
   product: Pick<Product, 'id' | 'name' | 'model' | 'category'> & Partial<Product>;
+  unitId: string;
+  unit?: { id: string; name: string } | null;
   customerId?: string | null;
   customerName?: string | null;
   customerPhone?: string | null;
@@ -98,14 +142,33 @@ export interface Sale {
 export interface Movement {
   id: string;
   type: MovementType;
+  reason: MovementReason;
   quantity: number;
-  reason?: string | null;
-  balanceAfter?: number | null;
+  previousQuantity?: number | null;
+  newQuantity?: number | null;
+  notes?: string | null;
   createdAt: string;
   productId?: string | null;
   productName?: string | null;
   product?: { id: string; name: string; model?: string | null; category?: { name: string } } | null;
+  unitId?: string | null;
+  unit?: { id: string; name: string } | null;
+  originUnitName?: string | null;
+  destinationUnitName?: string | null;
+  transferId?: string | null;
   user?: { id: string; name: string } | null;
+}
+
+export interface Transfer {
+  id: string;
+  quantity: number;
+  status: TransferStatus;
+  notes?: string | null;
+  createdAt: string;
+  receivedAt?: string | null;
+  product: { id: string; name: string; model?: string | null };
+  originUnit: { id: string; name: string };
+  destinationUnit: { id: string; name: string };
 }
 
 export interface AuditLog {
@@ -151,6 +214,8 @@ export interface DashboardData {
     stockValueSale: number;
     lowStockCount: number;
     outOfStockCount: number;
+    entradas: number;
+    saidas: number;
     revenueMonth: number;
     profitMonth: number;
     itemsSoldMonth: number;
@@ -162,8 +227,15 @@ export interface DashboardData {
 }
 
 export interface AlertsData {
-  lowStock: { id: string; name: string; quantity: number; minQuantity: number; model?: string | null }[];
-  outOfStock: { id: string; name: string; model?: string | null }[];
+  lowStock: {
+    id: string;
+    name: string;
+    quantity: number;
+    minQuantity: number;
+    model?: string | null;
+    unitName?: string | null;
+  }[];
+  outOfStock: { id: string; name: string; model?: string | null; unitName?: string | null }[];
   soldToday: {
     id: string;
     customerName?: string | null;

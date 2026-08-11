@@ -5,7 +5,7 @@ import { Readable } from 'stream';
 import { autenticar, somenteAdmin } from './auth';
 import { AppError, limpar, numero, rota } from './core';
 import { db, registrarLog } from './db';
-import { linhaDaPlanilha, STATUS_LABEL, TIPO_LABEL } from './movimentacoes';
+import { MOTIVO_LABEL, movimentar, TIPO_LABEL } from './estoque';
 import { enviarParaPlanilha, planilhaConfigurada, reescreverPlanilha, statusPlanilha } from './planilha';
 
 /** Importação de planilha, backup e integração com o Google Sheets. */
@@ -31,28 +31,36 @@ rotasSistema.post(
       throw new AppError('Integração com Google Sheets não configurada. Preencha as variáveis GOOGLE_* no .env.');
     }
 
-    const movimentos = await db.movement.findMany({
-      orderBy: { createdAt: 'asc' },
-      include: {
-        user: { select: { name: true } },
-        product: { include: { category: true, supplier: true } },
-      },
-    });
+    const [movimentos, unidades] = await Promise.all([
+      db.stockMovement.findMany({
+        orderBy: { createdAt: 'asc' },
+        include: {
+          user: { select: { name: true } },
+          unit: { select: { name: true } },
+          product: { include: { category: true } },
+        },
+      }),
+      db.unit.findMany({ select: { id: true, name: true } }),
+    ]);
+
+    const nome = (id?: string | null) => unidades.find((u) => u.id === id)?.name ?? '';
 
     const total = await reescreverPlanilha(
       movimentos.map((m) => ({
         data: m.createdAt,
-        categoria: m.product?.category.name ?? '—',
         produto: m.productName ?? m.product?.name ?? '—',
-        marca: m.product?.brand ?? '',
-        modelo: m.product?.model ?? '',
-        quantidade: m.quantity,
-        custo: numero(m.product?.costPrice),
-        venda: numero(m.product?.salePrice),
-        fornecedor: m.product?.supplier?.name ?? '',
-        status: m.product ? (STATUS_LABEL[m.product.status] ?? m.product.status) : 'Excluído',
+        categoria: m.product?.category.name ?? '—',
+        unidade: m.unit?.name ?? '—',
         tipo: TIPO_LABEL[m.type],
+        quantidade: m.type === 'ENTRADA' ? m.quantity : -m.quantity,
+        estoqueAnterior: m.previousQuantity ?? 0,
+        estoquePosterior: m.newQuantity ?? 0,
+        origem: nome(m.originUnitId),
+        destino: nome(m.destinationUnitId),
         usuario: m.user?.name ?? '',
+        motivo: MOTIVO_LABEL[m.reason],
+        observacao: m.notes ?? '',
+        movimentoId: m.id,
       })),
     );
 
@@ -74,7 +82,7 @@ rotasSistema.get(
       // As imagens ficam de fora: o backup viraria centenas de megabytes.
       db.product.findMany(),
       db.sale.findMany(),
-      db.movement.findMany(),
+      db.stockMovement.findMany(),
       db.user.findMany({ select: { id: true, name: true, email: true, role: true, active: true, createdAt: true } }),
     ]);
 
@@ -266,6 +274,13 @@ rotasSistema.post(
     categorias.forEach((c) => porCategoria.set(semAcento(c.slug), c));
     const porFornecedor = new Map(fornecedores.map((f) => [semAcento(f.name), f]));
 
+    // Todo o arquivo entra numa unidade só: a do usuário, ou a primeira
+    // cadastrada quando quem importa é o administrador.
+    const unidadeDaImportacao =
+      req.usuario?.unidadeId ??
+      (await db.unit.findFirst({ where: { active: true }, orderBy: [{ type: 'asc' }, { name: 'asc' }] }))?.id ??
+      null;
+
     const erros: { row: number; message: string }[] = [];
     let importados = 0;
     let processadas = 0;
@@ -311,7 +326,6 @@ rotasSistema.post(
             model: dados.model || null,
             color: dados.color || null,
             capacity: dados.capacity || null,
-            quantity: quantidade,
             costPrice: paraNumero(dados.costPrice),
             salePrice: paraNumero(dados.salePrice),
             imei: dados.imei || null,
@@ -322,24 +336,20 @@ rotasSistema.post(
             categoryId: categoria.id,
             supplierId: fornecedorId,
           },
-          include: { category: true, supplier: true },
         });
 
-        if (quantidade > 0) {
-          await db.movement.create({
-            data: {
-              type: 'ENTRADA',
-              quantity: quantidade,
-              balanceAfter: quantidade,
-              reason: 'Importação de planilha',
-              productId: produto.id,
-              productName: produto.name,
-              userId: req.usuario?.id ?? null,
-            },
+        if (quantidade > 0 && unidadeDaImportacao) {
+          await movimentar({
+            produtoId: produto.id,
+            produtoNome: produto.name,
+            unidadeId: unidadeDaImportacao,
+            tipo: 'ENTRADA',
+            motivo: 'CADASTRO',
+            quantidade,
+            observacao: 'Importação de planilha',
+            usuarioId: req.usuario?.id,
+            usuarioNome: req.usuario?.nome,
           });
-          enviarParaPlanilha(
-            linhaDaPlanilha(produto, 'ENTRADA', quantidade, req.usuario?.nome, quantidade),
-          );
         }
 
         importados += 1;

@@ -1,12 +1,13 @@
 import { useAuth } from '@/contexts/AuthContext';
 import { cn } from '@/lib/cn';
 import {
-  ArrowLeftRight,
   BarChart3,
   ChevronLeft,
+  History,
   LayoutDashboard,
   LogOut,
   Package,
+  PackagePlus,
   Settings,
   ShoppingCart,
   Users,
@@ -26,7 +27,8 @@ const NAV_ITEMS: NavItem[] = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/estoque', label: 'Estoque', icon: Package },
   { to: '/vendas', label: 'Vendas', icon: ShoppingCart },
-  { to: '/movimentacoes', label: 'Movimentações', icon: ArrowLeftRight },
+  { to: '/movimentacao', label: 'Movimentação', icon: PackagePlus },
+  { to: '/movimentacoes', label: 'Histórico', icon: History },
   { to: '/clientes', label: 'Clientes', icon: Users },
   { to: '/relatorios', label: 'Relatórios', icon: BarChart3 },
   { to: '/configuracoes', label: 'Configurações', icon: Settings },

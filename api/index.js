@@ -242,7 +242,13 @@ async function gerarTokens(usuario) {
   const chave = await segredo();
   return {
     token: jwt.sign(
-      { sub: usuario.id, nome: usuario.name, email: usuario.email, role: usuario.role },
+      {
+        sub: usuario.id,
+        nome: usuario.name,
+        email: usuario.email,
+        role: usuario.role,
+        unidadeId: usuario.unitId ?? null
+      },
       chave,
       { expiresIn: DURACAO }
     ),
@@ -255,7 +261,8 @@ var publico = (u) => ({
   id: u.id,
   name: u.name,
   email: u.email,
-  role: u.role
+  role: u.role,
+  unitId: u.unitId ?? null
 });
 function autenticar(req, _res, next) {
   const cabecalho = req.headers.authorization;
@@ -270,7 +277,9 @@ function autenticar(req, _res, next) {
         id: dados.sub,
         nome: dados.nome,
         email: dados.email,
-        admin: dados.role === "ADMIN"
+        papel: dados.role,
+        admin: dados.role === "ADMIN",
+        unidadeId: dados.unidadeId ?? null
       };
       next();
     } catch {
@@ -281,6 +290,13 @@ function autenticar(req, _res, next) {
 function somenteAdmin(req, _res, next) {
   if (!req.usuario) return next(new AppError("N\xE3o autorizado", 401));
   if (!req.usuario.admin) return next(new AppError("Apenas administradores podem fazer isso", 403));
+  next();
+}
+function gerenteOuAdmin(req, _res, next) {
+  if (!req.usuario) return next(new AppError("N\xE3o autorizado", 401));
+  if (req.usuario.papel === "VENDEDOR") {
+    return next(new AppError("Vendedor n\xE3o pode fazer esta opera\xE7\xE3o.", 403));
+  }
   next();
 }
 var rotasAuth = Router();
@@ -747,12 +763,23 @@ rotasClientes.delete(
 );
 var rotasUsuarios = Router2();
 rotasUsuarios.use(autenticar, somenteAdmin);
-var campos = { id: true, name: true, email: true, role: true, active: true, createdAt: true };
+var campos = {
+  id: true,
+  name: true,
+  email: true,
+  role: true,
+  active: true,
+  createdAt: true,
+  unitId: true,
+  unit: { select: { id: true, name: true } }
+};
 var usuarioSchema = z2.object({
   name: z2.string().trim().min(2, "Informe o nome").max(120),
   email: z2.string().trim().toLowerCase().email("E-mail inv\xE1lido"),
   password: z2.string().trim().min(6, "A senha deve ter ao menos 6 caracteres"),
-  role: z2.enum(["ADMIN", "OPERADOR"]).default("OPERADOR"),
+  role: z2.enum(["ADMIN", "GERENTE", "VENDEDOR"]).default("VENDEDOR"),
+  /** Gerente e Vendedor precisam de unidade; Administrador vê todas. */
+  unitId: z2.string().uuid().optional().nullable(),
   active: z2.boolean().default(true)
 });
 var alterarUsuarioSchema = usuarioSchema.partial().extend({
@@ -807,7 +834,7 @@ rotasUsuarios.put(
     const dados = validar(alterarUsuarioSchema, req.body);
     const alvo = await db.user.findUnique({ where: { id: req.params.id } });
     if (!alvo) throw naoEncontrado("Usu\xE1rio");
-    if (alvo.role === "ADMIN" && (dados.role === "OPERADOR" || dados.active === false)) {
+    if (alvo.role === "ADMIN" && (dados.role !== void 0 && dados.role !== "ADMIN" || dados.active === false)) {
       await garantirOutroAdmin();
     }
     const usuario = await db.user.update({
@@ -837,24 +864,26 @@ rotasUsuarios.delete(
 // server/dashboard.ts
 import { Router as Router4 } from "express";
 
-// server/movimentacoes.ts
-import { Router as Router3 } from "express";
-import { z as z3 } from "zod";
+// server/estoque.ts
+import { Prisma as Prisma2 } from "@prisma/client";
 
 // server/planilha.ts
 var CABECALHO = [
   "Data",
-  "Categoria",
+  "Hora",
   "Produto",
-  "Marca",
-  "Modelo",
+  "Categoria",
+  "Unidade",
+  "Tipo de movimenta\xE7\xE3o",
   "Quantidade",
-  "Pre\xE7o de Custo",
-  "Pre\xE7o de Venda",
-  "Fornecedor",
-  "Status",
-  "Tipo da Movimenta\xE7\xE3o",
-  "Usu\xE1rio"
+  "Estoque anterior",
+  "Estoque posterior",
+  "Origem",
+  "Destino",
+  "Usu\xE1rio respons\xE1vel",
+  "Motivo",
+  "Observa\xE7\xE3o",
+  "ID da movimenta\xE7\xE3o"
 ];
 var conf = () => ({
   ativo: process.env.GOOGLE_SHEETS_ENABLED === "true",
@@ -892,20 +921,27 @@ async function conectar() {
   });
   return cliente2;
 }
-var valores = (l) => [
-  new Date(l.data).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" }),
-  l.categoria,
-  l.produto,
-  l.marca ?? "",
-  l.modelo ?? "",
-  l.quantidade,
-  Number(l.custo ?? 0).toFixed(2),
-  Number(l.venda ?? 0).toFixed(2),
-  l.fornecedor ?? "",
-  l.status,
-  l.tipo,
-  l.usuario ?? ""
-];
+var valores = (l) => {
+  const quando = new Date(l.data);
+  const emSP = (opcoes) => quando.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", ...opcoes });
+  return [
+    emSP({ day: "2-digit", month: "2-digit", year: "numeric" }),
+    emSP({ hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+    l.produto,
+    l.categoria,
+    l.unidade,
+    l.tipo,
+    l.quantidade,
+    l.estoqueAnterior,
+    l.estoquePosterior,
+    l.origem ?? "",
+    l.destino ?? "",
+    l.usuario ?? "",
+    l.motivo ?? "",
+    l.observacao ?? "",
+    l.movimentoId
+  ];
+};
 async function prepararAba(sheets) {
   if (cabecalhoOk) return;
   const c = conf();
@@ -919,7 +955,7 @@ async function prepararAba(sheets) {
   }
   const atual = await sheets.spreadsheets.values.get({
     spreadsheetId: c.planilha,
-    range: `${c.aba}!A1:L1`
+    range: `${c.aba}!A1:O1`
   });
   if (!atual.data.values?.length) {
     await sheets.spreadsheets.values.update({
@@ -942,7 +978,7 @@ function enviarParaPlanilha(linhas) {
       await prepararAba(sheets);
       await sheets.spreadsheets.values.append({
         spreadsheetId: c.planilha,
-        range: `${c.aba}!A:L`,
+        range: `${c.aba}!A:O`,
         valueInputOption: "USER_ENTERED",
         insertDataOption: "INSERT_ROWS",
         requestBody: { values: lista.map(valores) }
@@ -959,7 +995,7 @@ async function reescreverPlanilha(linhas) {
   await prepararAba(sheets);
   await sheets.spreadsheets.values.clear({
     spreadsheetId: c.planilha,
-    range: `${c.aba}!A2:L`
+    range: `${c.aba}!A2:O`
   });
   if (linhas.length) {
     await sheets.spreadsheets.values.update({
@@ -972,132 +1008,338 @@ async function reescreverPlanilha(linhas) {
   return linhas.length;
 }
 
-// server/movimentacoes.ts
+// server/estoque.ts
+var MOTIVO_LABEL = {
+  COMPRA: "Compra",
+  CADASTRO: "Cadastro de produto",
+  VENDA: "Venda",
+  DEFEITO: "Produto com defeito",
+  DEVOLUCAO_FORNECEDOR: "Devolu\xE7\xE3o ao fornecedor",
+  PERDA: "Perda",
+  USO_INTERNO: "Uso interno",
+  AJUSTE: "Ajuste de estoque",
+  TRANSFERENCIA: "Transfer\xEAncia",
+  CANCELAMENTO: "Cancelamento",
+  EXCLUSAO: "Exclus\xE3o",
+  OUTRO: "Outro"
+};
 var TIPO_LABEL = {
   ENTRADA: "Entrada",
   SAIDA: "Sa\xEDda",
-  AJUSTE: "Ajuste",
-  EXCLUSAO: "Exclus\xE3o"
+  TRANSFERENCIA: "Transfer\xEAncia",
+  AJUSTE: "Ajuste"
 };
-var STATUS_LABEL = {
+var STATUS_PRODUTO_LABEL = {
   EM_ESTOQUE: "Em estoque",
   RESERVADO: "Reservado",
   VENDIDO: "Vendido"
 };
-async function registrarMovimentacao(m) {
+async function saldo(produtoId, unidadeId, tx) {
+  const linha = await (tx ?? db).stock.findUnique({
+    where: { productId_unitId: { productId: produtoId, unitId: unidadeId } },
+    select: { quantity: true }
+  });
+  return linha?.quantity ?? 0;
+}
+async function saldosDoProduto(produtoId) {
+  const [unidades, linhas] = await Promise.all([
+    db.unit.findMany({ where: { active: true }, orderBy: [{ type: "asc" }, { name: "asc" }] }),
+    db.stock.findMany({ where: { productId: produtoId } })
+  ]);
+  return unidades.map((unidade) => ({
+    unitId: unidade.id,
+    unitName: unidade.name,
+    quantity: linhas.find((l) => l.unitId === unidade.id)?.quantity ?? 0
+  }));
+}
+async function movimentar(m) {
   const cliente3 = m.tx ?? db;
-  const saldo = m.saldo ?? m.produto.quantity;
-  const registro = await cliente3.movement.create({
+  if (m.quantidade <= 0) {
+    throw new AppError("A quantidade precisa ser maior que zero.");
+  }
+  const entra = m.sentido ? m.sentido === "entra" : m.tipo === "ENTRADA";
+  if (!m.sentido && m.tipo !== "ENTRADA" && m.tipo !== "SAIDA") {
+    throw new AppError(`Movimenta\xE7\xE3o do tipo ${m.tipo} precisa informar o sentido.`, 500);
+  }
+  const soma = entra ? m.quantidade : -m.quantidade;
+  const antes = await saldo(m.produtoId, m.unidadeId, cliente3);
+  if (soma < 0 && antes < m.quantidade) {
+    const unidade = await cliente3.unit.findUnique({ where: { id: m.unidadeId } });
+    throw new AppError(
+      `Estoque insuficiente na ${unidade?.name ?? "unidade"}. Estoque dispon\xEDvel: ${antes} unidade(s).`
+    );
+  }
+  let depois;
+  if (soma > 0) {
+    const linha = await cliente3.stock.upsert({
+      where: { productId_unitId: { productId: m.produtoId, unitId: m.unidadeId } },
+      update: { quantity: { increment: soma } },
+      create: { productId: m.produtoId, unitId: m.unidadeId, quantity: soma }
+    });
+    depois = linha.quantity;
+  } else {
+    const alterou = await cliente3.stock.updateMany({
+      where: { productId: m.produtoId, unitId: m.unidadeId, quantity: { gte: m.quantidade } },
+      data: { quantity: { decrement: m.quantidade } }
+    });
+    if (alterou.count === 0) {
+      throw new AppError("O estoque mudou durante a opera\xE7\xE3o. Confira o saldo e tente de novo.", 409);
+    }
+    depois = antes - m.quantidade;
+  }
+  const registro = await cliente3.stockMovement.create({
     data: {
       type: m.tipo,
+      reason: m.motivo,
       quantity: m.quantidade,
-      reason: m.motivo ?? null,
-      balanceAfter: saldo,
-      productId: m.produto.id,
-      productName: m.produto.name,
+      previousQuantity: antes,
+      newQuantity: depois,
+      notes: m.observacao ?? null,
+      productId: m.produtoId,
+      productName: m.produtoNome,
+      unitId: m.unidadeId,
+      originUnitId: m.origemId ?? null,
+      destinationUnitId: m.destinoId ?? null,
+      referenceId: m.referenciaId ?? m.vendaId ?? m.transferenciaId ?? null,
       saleId: m.vendaId ?? null,
+      transferId: m.transferenciaId ?? null,
       userId: m.usuarioId ?? null
     }
   });
-  enviarParaPlanilha(linhaDaPlanilha(m.produto, m.tipo, m.quantidade, m.usuarioNome, saldo));
-  return registro;
+  if (!m.semPlanilha) {
+    void enviarLinha(registro.id, m, antes, depois, entra);
+  }
+  return { antes, depois, id: registro.id };
 }
-function linhaDaPlanilha(produto, tipo, quantidade, usuario, saldo) {
-  const status = saldo === 0 && tipo === "SAIDA" ? "VENDIDO" : produto.status;
-  return {
-    data: /* @__PURE__ */ new Date(),
-    categoria: produto.category?.name ?? "\u2014",
-    produto: produto.name,
-    marca: produto.brand ?? "",
-    modelo: produto.model ?? "",
-    quantidade,
-    custo: numero(produto.costPrice),
-    venda: numero(produto.salePrice),
-    fornecedor: produto.supplier?.name ?? "",
-    status: STATUS_LABEL[status] ?? status,
-    tipo: TIPO_LABEL[tipo],
-    usuario: usuario ?? ""
-  };
+async function enviarLinha(movimentoId, m, antes, depois, entra) {
+  try {
+    const [produto, unidade, origem, destino] = await Promise.all([
+      db.product.findUnique({
+        where: { id: m.produtoId },
+        include: { category: true, supplier: true }
+      }),
+      db.unit.findUnique({ where: { id: m.unidadeId } }),
+      m.origemId ? db.unit.findUnique({ where: { id: m.origemId } }) : null,
+      m.destinoId ? db.unit.findUnique({ where: { id: m.destinoId } }) : null
+    ]);
+    enviarParaPlanilha({
+      data: /* @__PURE__ */ new Date(),
+      produto: m.produtoNome,
+      categoria: produto?.category?.name ?? "\u2014",
+      unidade: unidade?.name ?? "\u2014",
+      tipo: TIPO_LABEL[m.tipo],
+      quantidade: entra ? m.quantidade : -m.quantidade,
+      estoqueAnterior: antes,
+      estoquePosterior: depois,
+      origem: origem?.name ?? "",
+      destino: destino?.name ?? "",
+      usuario: m.usuarioNome ?? "",
+      motivo: MOTIVO_LABEL[m.motivo],
+      observacao: m.observacao ?? "",
+      movimentoId
+    });
+  } catch (erro) {
+    console.error("[planilha] n\xE3o consegui montar a linha:", erro.message);
+  }
 }
-async function idsComEstoqueBaixo(limite = 200) {
+async function transferir(t) {
+  if (t.origemId === t.destinoId) {
+    throw new AppError("A unidade de origem e a de destino precisam ser diferentes.");
+  }
+  return db.$transaction(async (tx) => {
+    const [produto, origem, destino] = await Promise.all([
+      tx.product.findUnique({ where: { id: t.produtoId } }),
+      tx.unit.findUnique({ where: { id: t.origemId } }),
+      tx.unit.findUnique({ where: { id: t.destinoId } })
+    ]);
+    if (!produto) throw new AppError("Produto n\xE3o encontrado", 404);
+    if (!origem || !destino) throw new AppError("Unidade n\xE3o encontrada", 404);
+    const transferencia = await tx.stockTransfer.create({
+      data: {
+        productId: produto.id,
+        originUnitId: origem.id,
+        destinationUnitId: destino.id,
+        quantity: t.quantidade,
+        status: "RECEBIDA",
+        receivedAt: /* @__PURE__ */ new Date(),
+        requestedById: t.usuarioId ?? null,
+        receivedById: t.usuarioId ?? null,
+        notes: t.observacao ?? null
+      }
+    });
+    const comum = {
+      produtoId: produto.id,
+      produtoNome: produto.name,
+      tipo: "TRANSFERENCIA",
+      motivo: "TRANSFERENCIA",
+      quantidade: t.quantidade,
+      origemId: origem.id,
+      destinoId: destino.id,
+      transferenciaId: transferencia.id,
+      usuarioId: t.usuarioId,
+      usuarioNome: t.usuarioNome,
+      tx
+    };
+    const saida = await movimentar({
+      ...comum,
+      sentido: "sai",
+      unidadeId: origem.id,
+      observacao: `Transfer\xEAncia para ${destino.name}${t.observacao ? ` \u2014 ${t.observacao}` : ""}`
+    });
+    const entrada = await movimentar({
+      ...comum,
+      sentido: "entra",
+      unidadeId: destino.id,
+      observacao: `Transfer\xEAncia da ${origem.name}${t.observacao ? ` \u2014 ${t.observacao}` : ""}`
+    });
+    return { transferencia, origem, destino, produto, saida, entrada };
+  });
+}
+async function cancelarTransferencia(transferenciaId, usuario) {
+  return db.$transaction(async (tx) => {
+    const t = await tx.stockTransfer.findUnique({
+      where: { id: transferenciaId },
+      include: { product: true, originUnit: true, destinationUnit: true }
+    });
+    if (!t) throw new AppError("Transfer\xEAncia n\xE3o encontrada", 404);
+    if (t.status === "CANCELADA") throw new AppError("Esta transfer\xEAncia j\xE1 foi cancelada.");
+    const comum = {
+      produtoId: t.productId,
+      produtoNome: t.product.name,
+      quantidade: t.quantity,
+      motivo: "CANCELAMENTO",
+      transferenciaId: t.id,
+      usuarioId: usuario?.id,
+      usuarioNome: usuario?.nome,
+      tx
+    };
+    await movimentar({
+      ...comum,
+      unidadeId: t.destinationUnitId,
+      tipo: "SAIDA",
+      observacao: `Cancelamento da transfer\xEAncia para ${t.destinationUnit.name}`
+    });
+    await movimentar({
+      ...comum,
+      unidadeId: t.originUnitId,
+      tipo: "ENTRADA",
+      observacao: `Devolu\xE7\xE3o por cancelamento \u2014 voltou para ${t.originUnit.name}`
+    });
+    return tx.stockTransfer.update({
+      where: { id: t.id },
+      data: { status: "CANCELADA" }
+    });
+  });
+}
+async function estoqueBaixo(unidadeId, limite = 50) {
   const linhas = await db.$queryRaw`
-    SELECT "id" FROM "products"
-    WHERE "quantity" > 0 AND "quantity" <= "minQuantity"
-    ORDER BY "quantity" ASC
+    SELECT s."productId", s."unitId", s."quantity", p."minQuantity"
+    FROM "stock" s
+    JOIN "products" p ON p."id" = s."productId"
+    WHERE s."quantity" > 0
+      AND s."quantity" <= p."minQuantity"
+      ${unidadeId ? Prisma2.sql`AND s."unitId" = ${unidadeId}` : Prisma2.empty}
+    ORDER BY s."quantity" ASC
     LIMIT ${limite}
   `;
-  return linhas.map((l) => l.id);
+  return linhas;
 }
-async function valorDoEstoque() {
+async function valorDoEstoque(unidadeId) {
   const [linha] = await db.$queryRaw`
     SELECT
-      SUM("quantity" * "costPrice")::text AS custo,
-      SUM("quantity" * "salePrice")::text AS venda
-    FROM "products" WHERE "quantity" > 0
+      SUM(s."quantity" * p."costPrice")::text AS custo,
+      SUM(s."quantity" * p."salePrice")::text AS venda
+    FROM "stock" s
+    JOIN "products" p ON p."id" = s."productId"
+    WHERE s."quantity" > 0
+      ${unidadeId ? Prisma2.sql`AND s."unitId" = ${unidadeId}` : Prisma2.empty}
   `;
   return { custo: Number(linha?.custo ?? 0), venda: Number(linha?.venda ?? 0) };
 }
-var rotasMovimentacoes = Router3();
-rotasMovimentacoes.use(autenticar);
-var filtros = z3.object({
-  page: z3.coerce.number().int().min(1).optional(),
-  pageSize: z3.coerce.number().int().min(1).max(200).optional(),
-  search: z3.string().trim().optional(),
-  type: z3.enum(["ENTRADA", "SAIDA", "AJUSTE", "EXCLUSAO"]).optional(),
-  productId: z3.string().uuid().optional(),
-  userId: z3.string().uuid().optional(),
-  categoryId: z3.string().uuid().optional(),
-  startDate: z3.coerce.date().optional(),
-  endDate: z3.coerce.date().optional(),
-  sortOrder: z3.enum(["asc", "desc"]).optional()
-});
-function filtrarMovimentacoes(q) {
-  const cond = [];
-  if (q.search) {
-    cond.push({
-      OR: [
-        { productName: contem(q.search) },
-        { reason: contem(q.search) },
-        { product: { model: contem(q.search) } }
-      ]
-    });
-  }
-  if (q.type) cond.push({ type: q.type });
-  if (q.productId) cond.push({ productId: q.productId });
-  if (q.userId) cond.push({ userId: q.userId });
-  if (q.categoryId) cond.push({ product: { categoryId: q.categoryId } });
-  const periodo2 = intervalo(q.startDate, q.endDate);
-  if (periodo2) cond.push({ createdAt: periodo2 });
-  return cond.length ? { AND: cond } : {};
+async function totalEmEstoque(unidadeId) {
+  const soma = await db.stock.aggregate({
+    where: unidadeId ? { unitId: unidadeId } : void 0,
+    _sum: { quantity: true }
+  });
+  return soma._sum.quantity ?? 0;
 }
-rotasMovimentacoes.get(
+
+// server/unidades.ts
+import { Router as Router3 } from "express";
+import { z as z3 } from "zod";
+var rotasUnidades = Router3();
+rotasUnidades.use(autenticar);
+var unidadeSchema = z3.object({
+  name: z3.string().trim().min(2, "Informe o nome da unidade").max(80),
+  type: z3.enum(["MATRIZ", "FILIAL"]).default("FILIAL"),
+  active: z3.boolean().optional()
+});
+function unidadePermitida(usuario, pedida) {
+  if (!usuario) return void 0;
+  if (usuario.admin) return pedida || void 0;
+  return usuario.unidadeId ?? "00000000-0000-0000-0000-000000000000";
+}
+function exigirAcessoNaUnidade(usuario, unidadeId) {
+  if (!usuario) throw new AppError("N\xE3o autorizado", 401);
+  if (usuario.admin) return;
+  if (usuario.unidadeId !== unidadeId) {
+    throw new AppError("Voc\xEA s\xF3 pode movimentar o estoque da sua unidade.", 403);
+  }
+}
+rotasUnidades.get(
   "/",
   rota(async (req, res) => {
-    const q = validar(filtros, req.query);
-    const p = paginacao(q);
-    const where = filtrarMovimentacoes(q);
-    const [lista, total, agrupado] = await Promise.all([
-      db.movement.findMany({
-        where,
-        skip: p.skip,
-        take: p.take,
-        orderBy: { createdAt: q.sortOrder === "asc" ? "asc" : "desc" },
-        include: {
-          user: { select: { id: true, name: true } },
-          product: { select: { id: true, name: true, model: true, category: { select: { name: true } } } }
-        }
-      }),
-      db.movement.count({ where }),
-      db.movement.groupBy({ by: ["type"], where, _sum: { quantity: true }, _count: true })
-    ]);
-    res.json(
-      limpar({
-        ...paginado(lista, total, p),
-        summary: Object.fromEntries(
-          agrupado.map((g) => [g.type, { count: g._count, quantity: g._sum.quantity ?? 0 }])
-        )
-      })
-    );
+    const unidades = await db.unit.findMany({
+      orderBy: [{ type: "asc" }, { name: "asc" }],
+      include: { _count: { select: { stock: true, sales: true } } }
+    });
+    const visiveis = req.usuario?.admin ? unidades : unidades.filter((u) => u.id === req.usuario?.unidadeId);
+    res.json(limpar(visiveis));
+  })
+);
+rotasUnidades.post(
+  "/",
+  somenteAdmin,
+  rota(async (req, res) => {
+    const unidade = await db.unit.create({ data: validar(unidadeSchema, req.body) });
+    await registrarLog({ acao: "CREATE", entidade: "Unit", id: unidade.id, req });
+    res.status(201).json(limpar(unidade));
+  })
+);
+rotasUnidades.put(
+  "/:id",
+  somenteAdmin,
+  rota(async (req, res) => {
+    const unidade = await db.unit.update({
+      where: { id: req.params.id },
+      data: validar(unidadeSchema.partial(), req.body)
+    });
+    await registrarLog({ acao: "UPDATE", entidade: "Unit", id: unidade.id, req });
+    res.json(limpar(unidade));
+  })
+);
+rotasUnidades.delete(
+  "/:id",
+  somenteAdmin,
+  rota(async (req, res) => {
+    const unidade = await db.unit.findUnique({
+      where: { id: req.params.id },
+      include: { _count: { select: { stock: true, sales: true, movements: true } } }
+    });
+    if (!unidade) throw naoEncontrado("Unidade");
+    const temHistorico = unidade._count.stock > 0 || unidade._count.sales > 0 || unidade._count.movements > 0;
+    if (temHistorico) {
+      await db.unit.update({ where: { id: unidade.id }, data: { active: false } });
+      await registrarLog({ acao: "DEACTIVATE", entidade: "Unit", id: unidade.id, req });
+      res.json({
+        message: `A ${unidade.name} tem movimenta\xE7\xF5es registradas e foi desativada em vez de exclu\xEDda.`,
+        deactivated: true
+      });
+      return;
+    }
+    await db.unit.delete({ where: { id: unidade.id } });
+    await registrarLog({ acao: "DELETE", entidade: "Unit", id: unidade.id, req });
+    res.json({ message: "Unidade exclu\xEDda com sucesso", deactivated: false });
   })
 );
 
@@ -1108,67 +1350,77 @@ rotasDashboard.get(
   "/",
   rota(async (req, res) => {
     const dias = Math.min(90, Math.max(7, Number(req.query.days) || 14));
+    const unidade = unidadePermitida(req.usuario, req.query.unitId);
+    const naUnidade = unidade ? { unitId: unidade } : {};
     const hoje = /* @__PURE__ */ new Date();
     const inicioHoje = inicioDoDia(hoje);
     const fimHoje = fimDoDia(hoje);
     const inicioGrafico = inicioDoDia(somarDias(hoje, -(dias - 1)));
     const inicioDoMes = inicioDoDia(new Date(hoje.getFullYear(), hoje.getMonth(), 1));
-    const idsBaixos = await idsComEstoqueBaixo(10);
+    const baixos = await estoqueBaixo(unidade, 10);
     const [
       totalProdutos,
-      somaEstoque,
+      itensEmEstoque,
       vendidosHoje,
       faturamentoHoje,
-      estoqueBaixo,
+      produtosBaixos,
       semEstoque,
       ultimasVendas,
       vendasDoPeriodo,
       movimentosDoPeriodo,
-      porCategoria,
+      linhasDeEstoque,
       categorias,
       mes,
       valor
     ] = await Promise.all([
       db.product.count(),
-      db.product.aggregate({ _sum: { quantity: true } }),
+      totalEmEstoque(unidade),
       db.sale.aggregate({
-        where: { saleDate: { gte: inicioHoje, lte: fimHoje } },
+        where: { saleDate: { gte: inicioHoje, lte: fimHoje }, ...naUnidade },
         _sum: { quantity: true },
         _count: true
       }),
       db.sale.aggregate({
-        where: { saleDate: { gte: inicioHoje, lte: fimHoje } },
+        where: { saleDate: { gte: inicioHoje, lte: fimHoje }, ...naUnidade },
         _sum: { totalPrice: true, costAtSale: true }
       }),
       db.product.findMany({
-        where: { id: { in: idsBaixos } },
-        include: { category: true, photos: { select: { id: true }, take: 1 } },
-        orderBy: { quantity: "asc" }
+        where: { id: { in: baixos.map((b) => b.productId) } },
+        include: {
+          category: true,
+          photos: { select: { id: true }, take: 1 },
+          stock: { include: { unit: { select: { name: true } } } }
+        }
       }),
-      db.product.count({ where: { quantity: 0 } }),
+      db.stock.count({ where: { quantity: 0, ...naUnidade } }),
       db.sale.findMany({
+        where: naUnidade,
         orderBy: { saleDate: "desc" },
         take: 8,
         include: {
           product: { select: { name: true, model: true, category: { select: { name: true } } } },
-          user: { select: { name: true } }
+          user: { select: { name: true } },
+          unit: { select: { name: true } }
         }
       }),
       db.sale.findMany({
-        where: { saleDate: { gte: inicioGrafico, lte: fimHoje } },
+        where: { saleDate: { gte: inicioGrafico, lte: fimHoje }, ...naUnidade },
         select: { saleDate: true, totalPrice: true, quantity: true }
       }),
-      db.movement.findMany({
-        where: { createdAt: { gte: inicioGrafico, lte: fimHoje } },
+      db.stockMovement.findMany({
+        where: { createdAt: { gte: inicioGrafico, lte: fimHoje }, ...naUnidade },
         select: { createdAt: true, type: true, quantity: true }
       }),
-      db.product.groupBy({ by: ["categoryId"], _sum: { quantity: true }, _count: true }),
+      db.stock.findMany({
+        where: naUnidade,
+        select: { quantity: true, product: { select: { categoryId: true } } }
+      }),
       db.category.findMany(),
       db.sale.aggregate({
-        where: { saleDate: { gte: inicioDoMes } },
+        where: { saleDate: { gte: inicioDoMes }, ...naUnidade },
         _sum: { totalPrice: true, costAtSale: true, quantity: true }
       }),
-      valorDoEstoque()
+      valorDoEstoque(unidade)
     ]);
     const dia = (d) => inicioDoDia(d).toISOString().slice(0, 10);
     const baldes = /* @__PURE__ */ new Map();
@@ -1188,41 +1440,56 @@ rotasDashboard.get(
       if (mov.type === "ENTRADA") balde.entradas += mov.quantity;
       if (mov.type === "SAIDA") balde.saidas += mov.quantity;
     }
+    const porCategoria = /* @__PURE__ */ new Map();
+    for (const linha of linhasDeEstoque) {
+      const id = linha.product.categoryId;
+      const atual = porCategoria.get(id) ?? { quantidade: 0, produtos: 0 };
+      atual.quantidade += linha.quantity;
+      atual.produtos += 1;
+      porCategoria.set(id, atual);
+    }
     const receitaHoje = numero(faturamentoHoje._sum.totalPrice);
-    const custoHoje = numero(faturamentoHoje._sum.costAtSale);
     const receitaMes = numero(mes._sum.totalPrice);
     res.json(
       limpar({
+        unitId: unidade ?? null,
         cards: {
           totalProducts: totalProdutos,
-          itemsInStock: somaEstoque._sum.quantity ?? 0,
+          itemsInStock: itensEmEstoque,
           soldToday: vendidosHoje._sum.quantity ?? 0,
           salesCountToday: vendidosHoje._count,
           revenueToday: receitaHoje,
-          profitToday: receitaHoje - custoHoje,
+          profitToday: receitaHoje - numero(faturamentoHoje._sum.costAtSale),
           stockValueCost: valor.custo,
           stockValueSale: valor.venda,
-          lowStockCount: estoqueBaixo.length,
+          lowStockCount: baixos.length,
           outOfStockCount: semEstoque,
           revenueMonth: receitaMes,
           profitMonth: receitaMes - numero(mes._sum.costAtSale),
-          itemsSoldMonth: mes._sum.quantity ?? 0
+          itemsSoldMonth: mes._sum.quantity ?? 0,
+          entradas: movimentosDoPeriodo.filter((m) => m.type === "ENTRADA").reduce((s, m) => s + m.quantity, 0),
+          saidas: movimentosDoPeriodo.filter((m) => m.type === "SAIDA").reduce((s, m) => s + m.quantity, 0)
         },
         chart: Array.from(baldes.values()),
-        categories: porCategoria.map((linha) => {
-          const categoria = categorias.find((c) => c.id === linha.categoryId);
+        categories: Array.from(porCategoria.entries()).map(([id, dados]) => {
+          const categoria = categorias.find((c) => c.id === id);
           return {
-            categoryId: linha.categoryId,
+            categoryId: id,
             name: categoria?.name ?? "Sem categoria",
             color: categoria?.color ?? "#64748B",
-            products: linha._count,
-            quantity: linha._sum.quantity ?? 0
+            products: dados.produtos,
+            quantity: dados.quantidade
           };
         }),
-        lowStockProducts: estoqueBaixo.map((p) => ({
-          ...p,
-          photos: p.photos.map((f) => `/api/fotos/${f.id}`)
-        })),
+        lowStockProducts: produtosBaixos.map((p) => {
+          const linha = baixos.find((b) => b.productId === p.id);
+          return {
+            ...p,
+            photos: p.photos.map((f) => `/api/fotos/${f.id}`),
+            quantity: linha?.quantity ?? 0,
+            unitName: p.stock.find((s) => s.unitId === linha?.unitId)?.unit.name ?? null
+          };
+        }),
         latestSales: ultimasVendas
       })
     );
@@ -1230,37 +1497,50 @@ rotasDashboard.get(
 );
 rotasDashboard.get(
   "/alerts",
-  rota(async (_req, res) => {
-    const idsBaixos = await idsComEstoqueBaixo(20);
-    const [estoqueBaixo, semEstoque, vendasHoje, valor] = await Promise.all([
+  rota(async (req, res) => {
+    const unidade = unidadePermitida(req.usuario, req.query.unitId);
+    const naUnidade = unidade ? { unitId: unidade } : {};
+    const baixos = await estoqueBaixo(unidade, 20);
+    const [produtos, zerados, vendasHoje, valor] = await Promise.all([
       db.product.findMany({
-        where: { id: { in: idsBaixos } },
-        select: { id: true, name: true, quantity: true, minQuantity: true, model: true },
-        orderBy: { quantity: "asc" }
+        where: { id: { in: baixos.map((b) => b.productId) } },
+        select: { id: true, name: true, minQuantity: true, model: true }
       }),
-      db.product.findMany({
-        where: { quantity: 0 },
-        select: { id: true, name: true, model: true },
+      db.stock.findMany({
+        where: { quantity: 0, ...naUnidade },
+        select: { product: { select: { id: true, name: true, model: true } }, unit: { select: { name: true } } },
         take: 20
       }),
       db.sale.findMany({
-        where: { saleDate: { gte: inicioDoDia(), lte: fimDoDia() } },
+        where: { saleDate: { gte: inicioDoDia(), lte: fimDoDia() }, ...naUnidade },
         select: {
           id: true,
           customerName: true,
           totalPrice: true,
           quantity: true,
           saleDate: true,
-          product: { select: { name: true } }
+          product: { select: { name: true } },
+          unit: { select: { name: true } }
         },
         orderBy: { saleDate: "desc" }
       }),
-      valorDoEstoque()
+      valorDoEstoque(unidade)
     ]);
+    const unidades = await db.unit.findMany({ select: { id: true, name: true } });
     res.json(
       limpar({
-        lowStock: estoqueBaixo,
-        outOfStock: semEstoque,
+        lowStock: baixos.map((b) => {
+          const produto = produtos.find((p) => p.id === b.productId);
+          return {
+            id: b.productId,
+            name: produto?.name ?? "\u2014",
+            model: produto?.model ?? null,
+            quantity: b.quantity,
+            minQuantity: b.minQuantity,
+            unitName: unidades.find((u) => u.id === b.unitId)?.name ?? null
+          };
+        }),
+        outOfStock: zerados.map((z8) => ({ ...z8.product, unitName: z8.unit.name })),
         soldToday: vendasHoje,
         soldTodayCount: vendasHoje.reduce((s, v) => s + v.quantity, 0),
         revenueToday: vendasHoje.reduce((s, v) => s + numero(v.totalPrice), 0),
@@ -1271,24 +1551,324 @@ rotasDashboard.get(
   })
 );
 
-// server/produtos.ts
+// server/movimentacoes.ts
 import { Router as Router5 } from "express";
 import { z as z4 } from "zod";
-var rotasProdutos = Router5();
+var rotasMovimentacoes = Router5();
+rotasMovimentacoes.use(autenticar);
+var MOTIVOS = [
+  "COMPRA",
+  "VENDA",
+  "DEFEITO",
+  "DEVOLUCAO_FORNECEDOR",
+  "PERDA",
+  "USO_INTERNO",
+  "AJUSTE",
+  "OUTRO"
+];
+var entradaSchema = z4.object({
+  productId: z4.string().uuid("Selecione o produto"),
+  unitId: z4.string().uuid("Selecione a unidade"),
+  quantity: z4.coerce.number().int().min(1, "A quantidade deve ser no m\xEDnimo 1"),
+  supplierId: z4.string().uuid().optional().nullable(),
+  costPrice: z4.coerce.number().min(0).optional(),
+  date: z4.coerce.date().optional(),
+  notes: z4.string().trim().max(1e3).optional().nullable(),
+  reason: z4.enum(MOTIVOS).default("COMPRA")
+});
+rotasMovimentacoes.post(
+  "/entrada",
+  gerenteOuAdmin,
+  rota(async (req, res) => {
+    const dados = validar(entradaSchema, req.body);
+    exigirAcessoNaUnidade(req.usuario, dados.unitId);
+    const produto = await db.product.findUnique({ where: { id: dados.productId } });
+    if (!produto) throw naoEncontrado("Produto");
+    if (dados.costPrice !== void 0 || dados.supplierId) {
+      await db.product.update({
+        where: { id: produto.id },
+        data: {
+          ...dados.costPrice !== void 0 ? { costPrice: dados.costPrice } : {},
+          ...dados.supplierId ? { supplierId: dados.supplierId } : {}
+        }
+      });
+    }
+    const resultado = await movimentar({
+      produtoId: produto.id,
+      produtoNome: produto.name,
+      unidadeId: dados.unitId,
+      tipo: "ENTRADA",
+      motivo: dados.reason,
+      quantidade: dados.quantity,
+      observacao: dados.notes,
+      usuarioId: req.usuario?.id,
+      usuarioNome: req.usuario?.nome
+    });
+    await registrarLog({ acao: "ENTRADA", entidade: "Stock", id: produto.id, req });
+    res.status(201).json({ ...resultado, message: `Entrada de ${dados.quantity} un. registrada.` });
+  })
+);
+var saidaSchema = z4.object({
+  productId: z4.string().uuid("Selecione o produto"),
+  unitId: z4.string().uuid("Selecione a unidade"),
+  quantity: z4.coerce.number().int().min(1, "A quantidade deve ser no m\xEDnimo 1"),
+  reason: z4.enum(MOTIVOS, { errorMap: () => ({ message: "Selecione o motivo" }) }),
+  date: z4.coerce.date().optional(),
+  notes: z4.string().trim().max(1e3).optional().nullable()
+});
+rotasMovimentacoes.post(
+  "/saida",
+  gerenteOuAdmin,
+  rota(async (req, res) => {
+    const dados = validar(saidaSchema, req.body);
+    exigirAcessoNaUnidade(req.usuario, dados.unitId);
+    const produto = await db.product.findUnique({ where: { id: dados.productId } });
+    if (!produto) throw naoEncontrado("Produto");
+    const resultado = await movimentar({
+      produtoId: produto.id,
+      produtoNome: produto.name,
+      unidadeId: dados.unitId,
+      tipo: "SAIDA",
+      motivo: dados.reason,
+      quantidade: dados.quantity,
+      observacao: dados.notes,
+      usuarioId: req.usuario?.id,
+      usuarioNome: req.usuario?.nome
+    });
+    await registrarLog({ acao: "SAIDA", entidade: "Stock", id: produto.id, req });
+    res.status(201).json({ ...resultado, message: `Sa\xEDda de ${dados.quantity} un. registrada.` });
+  })
+);
+var transferenciaSchema = z4.object({
+  productId: z4.string().uuid("Selecione o produto"),
+  originUnitId: z4.string().uuid("Selecione a unidade de origem"),
+  destinationUnitId: z4.string().uuid("Selecione a unidade de destino"),
+  quantity: z4.coerce.number().int().min(1, "A quantidade deve ser no m\xEDnimo 1"),
+  date: z4.coerce.date().optional(),
+  notes: z4.string().trim().max(1e3).optional().nullable()
+});
+rotasMovimentacoes.post(
+  "/transferencia",
+  gerenteOuAdmin,
+  rota(async (req, res) => {
+    const dados = validar(transferenciaSchema, req.body);
+    exigirAcessoNaUnidade(req.usuario, dados.originUnitId);
+    const r = await transferir({
+      produtoId: dados.productId,
+      origemId: dados.originUnitId,
+      destinoId: dados.destinationUnitId,
+      quantidade: dados.quantity,
+      observacao: dados.notes,
+      usuarioId: req.usuario?.id,
+      usuarioNome: req.usuario?.nome
+    });
+    await registrarLog({
+      acao: "TRANSFERENCIA",
+      entidade: "StockTransfer",
+      id: r.transferencia.id,
+      req
+    });
+    res.status(201).json(
+      limpar({
+        transfer: r.transferencia,
+        message: `${dados.quantity} un. de ${r.produto.name} transferidas da ${r.origem.name} para a ${r.destino.name}. ${r.origem.name}: ${r.saida.antes} \u2192 ${r.saida.depois} \xB7 ${r.destino.name}: ${r.entrada.antes} \u2192 ${r.entrada.depois}`
+      })
+    );
+  })
+);
+var filtroTransferencias = z4.object({
+  page: z4.coerce.number().int().min(1).optional(),
+  pageSize: z4.coerce.number().int().min(1).max(200).optional(),
+  status: z4.enum(["PENDENTE", "EM_TRANSITO", "RECEBIDA", "CANCELADA"]).optional(),
+  unitId: z4.string().uuid().optional()
+});
+rotasMovimentacoes.get(
+  "/transferencias",
+  rota(async (req, res) => {
+    const q = validar(filtroTransferencias, req.query);
+    const p = paginacao(q);
+    const unidade = unidadePermitida(req.usuario, q.unitId);
+    const where = {
+      ...q.status ? { status: q.status } : {},
+      // Aparece para quem enviou e para quem recebeu.
+      ...unidade ? { OR: [{ originUnitId: unidade }, { destinationUnitId: unidade }] } : {}
+    };
+    const [lista, total] = await Promise.all([
+      db.stockTransfer.findMany({
+        where,
+        skip: p.skip,
+        take: p.take,
+        orderBy: { createdAt: "desc" },
+        include: {
+          product: { select: { id: true, name: true, model: true } },
+          originUnit: { select: { id: true, name: true } },
+          destinationUnit: { select: { id: true, name: true } }
+        }
+      }),
+      db.stockTransfer.count({ where })
+    ]);
+    res.json(limpar(paginado(lista, total, p)));
+  })
+);
+rotasMovimentacoes.post(
+  "/transferencias/:id/cancelar",
+  somenteAdmin,
+  rota(async (req, res) => {
+    const t = await cancelarTransferencia(req.params.id, req.usuario);
+    await registrarLog({ acao: "CANCEL", entidade: "StockTransfer", id: t.id, req });
+    res.json({ message: "Transfer\xEAncia cancelada e estoque devolvido \xE0 origem." });
+  })
+);
+var filtros = z4.object({
+  page: z4.coerce.number().int().min(1).optional(),
+  pageSize: z4.coerce.number().int().min(1).max(200).optional(),
+  search: z4.string().trim().optional(),
+  type: z4.enum(["ENTRADA", "SAIDA", "TRANSFERENCIA", "AJUSTE"]).optional(),
+  reason: z4.enum(MOTIVOS).optional(),
+  productId: z4.string().uuid().optional(),
+  categoryId: z4.string().uuid().optional(),
+  unitId: z4.string().uuid().optional(),
+  userId: z4.string().uuid().optional(),
+  startDate: z4.coerce.date().optional(),
+  endDate: z4.coerce.date().optional(),
+  sortOrder: z4.enum(["asc", "desc"]).optional()
+});
+function filtrarMovimentacoes(q, unidade) {
+  const cond = [];
+  if (q.search) {
+    cond.push({
+      OR: [
+        { productName: contem(q.search) },
+        { notes: contem(q.search) },
+        { product: { model: contem(q.search) } }
+      ]
+    });
+  }
+  if (q.type) cond.push({ type: q.type });
+  if (q.reason) cond.push({ reason: q.reason });
+  if (q.productId) cond.push({ productId: q.productId });
+  if (q.userId) cond.push({ userId: q.userId });
+  if (q.categoryId) cond.push({ product: { categoryId: q.categoryId } });
+  if (unidade) cond.push({ unitId: unidade });
+  const periodo2 = intervalo(q.startDate, q.endDate);
+  if (periodo2) cond.push({ createdAt: periodo2 });
+  return cond.length ? { AND: cond } : {};
+}
+rotasMovimentacoes.get(
+  "/",
+  rota(async (req, res) => {
+    const q = validar(filtros, req.query);
+    const p = paginacao(q);
+    const unidade = unidadePermitida(req.usuario, q.unitId);
+    const where = filtrarMovimentacoes(q, unidade);
+    const [lista, total, agrupado] = await Promise.all([
+      db.stockMovement.findMany({
+        where,
+        skip: p.skip,
+        take: p.take,
+        orderBy: { createdAt: q.sortOrder === "asc" ? "asc" : "desc" },
+        include: {
+          user: { select: { id: true, name: true } },
+          unit: { select: { id: true, name: true } },
+          product: {
+            select: { id: true, name: true, model: true, category: { select: { name: true } } }
+          }
+        }
+      }),
+      db.stockMovement.count({ where }),
+      db.stockMovement.groupBy({ by: ["type"], where, _sum: { quantity: true }, _count: true })
+    ]);
+    const unidades = await db.unit.findMany({ select: { id: true, name: true } });
+    const nome = (id) => unidades.find((u) => u.id === id)?.name ?? null;
+    res.json(
+      limpar({
+        ...paginado(
+          lista.map((m) => ({
+            ...m,
+            originUnitName: nome(m.originUnitId),
+            destinationUnitName: nome(m.destinationUnitId)
+          })),
+          total,
+          p
+        ),
+        summary: Object.fromEntries(
+          agrupado.map((g) => [g.type, { count: g._count, quantity: g._sum.quantity ?? 0 }])
+        )
+      })
+    );
+  })
+);
+var ajusteSchema = z4.object({
+  productId: z4.string().uuid(),
+  unitId: z4.string().uuid(),
+  /** Saldo que o estoque deve passar a ter naquela unidade. */
+  newQuantity: z4.coerce.number().int().min(0, "O saldo n\xE3o pode ser negativo"),
+  notes: z4.string().trim().min(3, "Explique o motivo da corre\xE7\xE3o").max(1e3)
+});
+rotasMovimentacoes.post(
+  "/ajuste",
+  gerenteOuAdmin,
+  rota(async (req, res) => {
+    const dados = validar(ajusteSchema, req.body);
+    exigirAcessoNaUnidade(req.usuario, dados.unitId);
+    const produto = await db.product.findUnique({ where: { id: dados.productId } });
+    if (!produto) throw naoEncontrado("Produto");
+    const atual = await db.stock.findUnique({
+      where: { productId_unitId: { productId: dados.productId, unitId: dados.unitId } }
+    });
+    const saldoAtual = atual?.quantity ?? 0;
+    const diferenca = dados.newQuantity - saldoAtual;
+    if (diferenca === 0) {
+      throw new AppError(`O saldo j\xE1 \xE9 ${saldoAtual}. Nada a corrigir.`);
+    }
+    const resultado = await movimentar({
+      produtoId: produto.id,
+      produtoNome: produto.name,
+      unidadeId: dados.unitId,
+      tipo: "AJUSTE",
+      motivo: "AJUSTE",
+      sentido: diferenca > 0 ? "entra" : "sai",
+      quantidade: Math.abs(diferenca),
+      observacao: dados.notes,
+      usuarioId: req.usuario?.id,
+      usuarioNome: req.usuario?.nome
+    });
+    await registrarLog({ acao: "AJUSTE", entidade: "Stock", id: produto.id, req });
+    res.json({ ...resultado, message: `Saldo corrigido de ${saldoAtual} para ${dados.newQuantity}.` });
+  })
+);
+
+// server/produtos.ts
+import { Router as Router6 } from "express";
+import { z as z5 } from "zod";
+var rotasProdutos = Router6();
 rotasProdutos.use(autenticar);
 var COM_RELACOES = {
   category: true,
   supplier: true,
-  photos: { select: { id: true }, orderBy: { createdAt: "asc" } }
+  photos: { select: { id: true }, orderBy: { createdAt: "asc" } },
+  stock: { include: { unit: { select: { id: true, name: true, type: true } } } }
 };
-function formatar(produto) {
-  return limpar({ ...produto, photos: produto.photos.map((f) => `/api/fotos/${f.id}`) });
+function formatar(produto, unidadeId) {
+  const porUnidade = produto.stock.map((linha) => ({
+    unitId: linha.unitId,
+    unitName: linha.unit.name,
+    quantity: linha.quantity
+  }));
+  const total = porUnidade.reduce((soma, u) => soma + u.quantity, 0);
+  const daUnidade = unidadeId ? porUnidade.find((u) => u.unitId === unidadeId)?.quantity ?? 0 : total;
+  return limpar({
+    ...produto,
+    photos: produto.photos.map((f) => `/api/fotos/${f.id}`),
+    stock: porUnidade,
+    totalQuantity: total,
+    quantity: daUnidade
+  });
 }
 var ORDENAVEIS = [
   "name",
   "brand",
   "model",
-  "quantity",
   "costPrice",
   "salePrice",
   "status",
@@ -1297,45 +1877,48 @@ var ORDENAVEIS = [
   "category.name",
   "supplier.name"
 ];
-var texto2 = z4.string().trim().max(500).optional().nullable().transform((v) => v || null);
-var dinheiro = z4.coerce.number().min(0, "O valor n\xE3o pode ser negativo").max(99999999);
-var foto = z4.string().max(4e6);
-var produtoSchema = z4.object({
-  name: z4.string().trim().min(2, "Informe o nome do produto").max(180),
-  categoryId: z4.string().uuid("Selecione uma categoria"),
-  supplierId: z4.string().uuid().optional().nullable().or(z4.literal("").transform(() => null)),
+var texto2 = z5.string().trim().max(500).optional().nullable().transform((v) => v || null);
+var dinheiro = z5.coerce.number().min(0, "O valor n\xE3o pode ser negativo").max(99999999);
+var foto = z5.string().max(4e6);
+var produtoSchema = z5.object({
+  name: z5.string().trim().min(2, "Informe o nome do produto").max(180),
+  categoryId: z5.string().uuid("Selecione uma categoria"),
+  supplierId: z5.string().uuid().optional().nullable().or(z5.literal("").transform(() => null)),
   brand: texto2,
   model: texto2,
   color: texto2,
   capacity: texto2,
   lote: texto2,
-  quantity: z4.coerce.number().int().min(0, "A quantidade n\xE3o pode ser negativa").default(0),
-  minQuantity: z4.coerce.number().int().min(0).default(1),
+  quantity: z5.coerce.number().int().min(0, "A quantidade n\xE3o pode ser negativa").default(0),
+  /** Onde o estoque inicial entra. */
+  unitId: z5.string().uuid().optional().nullable(),
+  minQuantity: z5.coerce.number().int().min(0).default(1),
   costPrice: dinheiro.default(0),
   salePrice: dinheiro.default(0),
   imei: texto2,
   serialNumber: texto2,
   barcode: texto2,
-  notes: z4.string().trim().max(2e3).optional().nullable(),
-  status: z4.enum(["EM_ESTOQUE", "RESERVADO", "VENDIDO"]).default("EM_ESTOQUE"),
-  entryDate: z4.coerce.date().optional(),
-  photos: z4.array(foto).max(8).optional()
+  notes: z5.string().trim().max(2e3).optional().nullable(),
+  status: z5.enum(["EM_ESTOQUE", "RESERVADO", "VENDIDO"]).default("EM_ESTOQUE"),
+  entryDate: z5.coerce.date().optional(),
+  photos: z5.array(foto).max(8).optional()
 });
-var alterarSchema = produtoSchema.partial().extend({ reason: z4.string().trim().max(200).optional() });
-var filtrosSchema = z4.object({
-  page: z4.coerce.number().int().min(1).optional(),
-  pageSize: z4.coerce.number().int().min(1).max(200).optional(),
-  search: z4.string().trim().optional(),
-  categoryId: z4.string().uuid().optional(),
-  supplierId: z4.string().uuid().optional(),
-  status: z4.enum(["EM_ESTOQUE", "RESERVADO", "VENDIDO"]).optional(),
-  brand: z4.string().trim().optional(),
-  model: z4.string().trim().optional(),
-  lowStock: z4.enum(["true", "false"]).optional(),
-  sortBy: z4.string().optional(),
-  sortOrder: z4.enum(["asc", "desc"]).optional()
+var alterarSchema = produtoSchema.partial().extend({ reason: z5.string().trim().max(200).optional() });
+var filtrosSchema = z5.object({
+  page: z5.coerce.number().int().min(1).optional(),
+  pageSize: z5.coerce.number().int().min(1).max(200).optional(),
+  search: z5.string().trim().optional(),
+  categoryId: z5.string().uuid().optional(),
+  supplierId: z5.string().uuid().optional(),
+  status: z5.enum(["EM_ESTOQUE", "RESERVADO", "VENDIDO"]).optional(),
+  brand: z5.string().trim().optional(),
+  model: z5.string().trim().optional(),
+  lowStock: z5.enum(["true", "false"]).optional(),
+  unitId: z5.string().uuid().optional(),
+  sortBy: z5.string().optional(),
+  sortOrder: z5.enum(["asc", "desc"]).optional()
 });
-async function filtrarProdutos(q) {
+async function filtrarProdutos(q, unidadeId) {
   const cond = [];
   if (q.search) {
     cond.push({
@@ -1358,7 +1941,11 @@ async function filtrarProdutos(q) {
   if (q.status) cond.push({ status: q.status });
   if (q.brand) cond.push({ brand: contem(q.brand) });
   if (q.model) cond.push({ model: contem(q.model) });
-  if (q.lowStock === "true") cond.push({ id: { in: await idsComEstoqueBaixo(500) } });
+  if (q.lowStock === "true") {
+    const baixos = await estoqueBaixo(unidadeId, 500);
+    cond.push({ id: { in: baixos.map((b) => b.productId) } });
+  }
+  if (unidadeId) cond.push({ stock: { some: { unitId: unidadeId } } });
   return cond.length ? { AND: cond } : {};
 }
 function separarFotos(fotos) {
@@ -1415,7 +2002,7 @@ rotasProdutos.get(
       })
     ]);
     res.json({
-      products: produtos.map(formatar),
+      products: produtos.map((produto) => formatar(produto)),
       sales: limpar(vendas),
       customers: limpar(clientes)
     });
@@ -1449,18 +2036,20 @@ rotasProdutos.get(
   rota(async (req, res) => {
     const q = validar(filtrosSchema, req.query);
     const p = paginacao(q);
-    const where = await filtrarProdutos(q);
+    const unidade = unidadePermitida(req.usuario, q.unitId);
+    const where = await filtrarProdutos(q, unidade);
+    const ordem = q.sortBy === "quantity" ? "name" : q.sortBy;
     const [lista, total] = await Promise.all([
       db.product.findMany({
         where,
         include: COM_RELACOES,
         skip: p.skip,
         take: p.take,
-        orderBy: ordenar(q.sortBy, q.sortOrder, ORDENAVEIS, { createdAt: "desc" })
+        orderBy: ordenar(ordem, q.sortOrder, ORDENAVEIS, { createdAt: "desc" })
       }),
       db.product.count({ where })
     ]);
-    res.json(paginado(lista.map(formatar), total, p));
+    res.json(paginado(lista.map((produto) => formatar(produto, unidade)), total, p));
   })
 );
 rotasProdutos.get(
@@ -1473,20 +2062,44 @@ rotasProdutos.get(
         movements: {
           orderBy: { createdAt: "desc" },
           take: 20,
-          include: { user: { select: { name: true } } }
+          include: { user: { select: { name: true } }, unit: { select: { name: true } } }
         },
-        sales: { orderBy: { saleDate: "desc" }, take: 10 }
+        sales: { orderBy: { saleDate: "desc" }, take: 10, include: { unit: { select: { name: true } } } }
       }
     });
     if (!produto) throw naoEncontrado("Produto");
-    res.json(formatar(produto));
+    const porUnidade = await saldosDoProduto(produto.id);
+    const emTransito = await db.stockTransfer.aggregate({
+      where: { productId: produto.id, status: { in: ["PENDENTE", "EM_TRANSITO"] } },
+      _sum: { quantity: true }
+    });
+    const disponivel = porUnidade.reduce((soma, u) => soma + u.quantity, 0);
+    const transito = emTransito._sum.quantity ?? 0;
+    res.json({
+      ...formatar(produto),
+      stock: porUnidade,
+      inTransit: transito,
+      totalAvailable: disponivel,
+      totalPhysical: disponivel + transito
+    });
   })
 );
 rotasProdutos.post(
   "/",
   rota(async (req, res) => {
-    const { photos, ...dados } = validar(produtoSchema, req.body);
+    const { photos, quantity, unitId, ...dados } = validar(produtoSchema, req.body);
     const { novas } = separarFotos(photos ?? []);
+    let unidadeDestino = unitId ?? req.usuario?.unidadeId ?? null;
+    if (!unidadeDestino) {
+      const matriz = await db.unit.findFirst({
+        where: { active: true },
+        orderBy: [{ type: "asc" }, { name: "asc" }]
+      });
+      unidadeDestino = matriz?.id ?? null;
+    }
+    if (quantity > 0 && !unidadeDestino) {
+      throw new AppError("Cadastre uma unidade antes de lan\xE7ar estoque.");
+    }
     const produto = await db.product.create({
       data: {
         ...dados,
@@ -1495,25 +2108,34 @@ rotasProdutos.post(
       },
       include: COM_RELACOES
     });
-    if (produto.quantity > 0) {
-      await registrarMovimentacao({
+    if (quantity > 0 && unidadeDestino) {
+      await movimentar({
+        produtoId: produto.id,
+        produtoNome: produto.name,
+        unidadeId: unidadeDestino,
         tipo: "ENTRADA",
-        quantidade: produto.quantity,
-        saldo: produto.quantity,
-        motivo: "Cadastro de produto",
-        produto,
+        motivo: "CADASTRO",
+        quantidade: quantity,
+        observacao: "Estoque inicial do cadastro",
         usuarioId: req.usuario?.id,
         usuarioNome: req.usuario?.nome
       });
     }
     await registrarLog({ acao: "CREATE", entidade: "Product", id: produto.id, req });
-    res.status(201).json(formatar(produto));
+    const completo = await db.product.findUnique({
+      where: { id: produto.id },
+      include: COM_RELACOES
+    });
+    res.status(201).json(formatar(completo));
   })
 );
 rotasProdutos.put(
   "/:id",
   rota(async (req, res) => {
-    const { photos, reason, ...dados } = validar(alterarSchema, req.body);
+    const { photos, reason, quantity: _ignorada, unitId: _tambem, ...dados } = validar(
+      alterarSchema,
+      req.body
+    );
     const atual = await db.product.findUnique({ where: { id: req.params.id }, include: COM_RELACOES });
     if (!atual) throw naoEncontrado("Produto");
     const produto = await db.$transaction(async (tx) => {
@@ -1537,55 +2159,45 @@ rotasProdutos.put(
         include: COM_RELACOES
       });
     });
-    const diferenca = produto.quantity - atual.quantity;
-    await registrarMovimentacao({
-      tipo: diferenca > 0 ? "ENTRADA" : diferenca < 0 ? "SAIDA" : "AJUSTE",
-      quantidade: Math.abs(diferenca),
-      saldo: produto.quantity,
-      motivo: reason ?? (diferenca ? "Altera\xE7\xE3o manual do produto" : "Altera\xE7\xE3o de cadastro"),
-      produto,
-      usuarioId: req.usuario?.id,
-      usuarioNome: req.usuario?.nome
+    await registrarLog({
+      acao: "UPDATE",
+      entidade: "Product",
+      id: produto.id,
+      alteracoes: { motivo: reason },
+      req
     });
-    await registrarLog({ acao: "UPDATE", entidade: "Product", id: produto.id, req });
     res.json(formatar(produto));
   })
 );
 rotasProdutos.patch(
   "/:id/stock",
   rota(async (req, res) => {
-    const { quantity, reason } = validar(
-      z4.object({
-        quantity: z4.coerce.number().int().refine((v) => v !== 0, "Informe uma quantidade diferente de zero"),
-        reason: z4.string().trim().min(3, "Informe o motivo do ajuste").max(200)
+    const { quantity, reason, unitId } = validar(
+      z5.object({
+        quantity: z5.coerce.number().int().refine((v) => v !== 0, "Informe uma quantidade diferente de zero"),
+        reason: z5.string().trim().min(3, "Informe o motivo do ajuste").max(200),
+        unitId: z5.string().uuid("Selecione a unidade").optional()
       }),
       req.body
     );
-    const atual = await db.product.findUnique({ where: { id: req.params.id } });
-    if (!atual) throw naoEncontrado("Produto");
-    const novaQuantidade = Math.max(0, atual.quantity + quantity);
-    const produto = await db.product.update({
-      where: { id: atual.id },
-      data: { quantity: novaQuantidade },
-      include: COM_RELACOES
-    });
-    await registrarMovimentacao({
+    const unidade = unitId ?? req.usuario?.unidadeId;
+    if (!unidade) throw new AppError("Selecione a unidade onde o estoque ser\xE1 ajustado.");
+    const produto = await db.product.findUnique({ where: { id: req.params.id } });
+    if (!produto) throw naoEncontrado("Produto");
+    await movimentar({
+      produtoId: produto.id,
+      produtoNome: produto.name,
+      unidadeId: unidade,
       tipo: quantity > 0 ? "ENTRADA" : "SAIDA",
+      motivo: "AJUSTE",
       quantidade: Math.abs(quantity),
-      saldo: novaQuantidade,
-      motivo: reason,
-      produto,
+      observacao: reason,
       usuarioId: req.usuario?.id,
       usuarioNome: req.usuario?.nome
     });
-    await registrarLog({
-      acao: "ADJUST_STOCK",
-      entidade: "Product",
-      id: produto.id,
-      alteracoes: { de: atual.quantity, para: novaQuantidade, motivo: reason },
-      req
-    });
-    res.json(formatar(produto));
+    await registrarLog({ acao: "ADJUST_STOCK", entidade: "Product", id: produto.id, req });
+    const completo = await db.product.findUnique({ where: { id: produto.id }, include: COM_RELACOES });
+    res.json(formatar(completo));
   })
 );
 rotasProdutos.delete(
@@ -1594,21 +2206,24 @@ rotasProdutos.delete(
   rota(async (req, res) => {
     const produto = await db.product.findUnique({ where: { id: req.params.id }, include: COM_RELACOES });
     if (!produto) throw naoEncontrado("Produto");
-    await registrarMovimentacao({
-      tipo: "EXCLUSAO",
-      quantidade: produto.quantity,
-      saldo: 0,
-      motivo: req.query.reason || "Produto exclu\xEDdo do sistema",
-      produto,
-      usuarioId: req.usuario?.id,
-      usuarioNome: req.usuario?.nome
-    });
+    const motivo = req.query.reason || "Produto exclu\xEDdo do sistema";
+    for (const linha of produto.stock) {
+      if (linha.quantity <= 0) continue;
+      await movimentar({
+        produtoId: produto.id,
+        produtoNome: produto.name,
+        unidadeId: linha.unitId,
+        tipo: "SAIDA",
+        motivo: "EXCLUSAO",
+        quantidade: linha.quantity,
+        observacao: motivo,
+        usuarioId: req.usuario?.id,
+        usuarioNome: req.usuario?.nome
+      });
+    }
     const vendas = await db.sale.count({ where: { productId: produto.id } });
     if (vendas > 0) {
-      await db.product.update({
-        where: { id: produto.id },
-        data: { quantity: 0, status: "VENDIDO" }
-      });
+      await db.product.update({ where: { id: produto.id }, data: { status: "VENDIDO" } });
       await registrarLog({ acao: "ARCHIVE", entidade: "Product", id: produto.id, req });
       res.json({
         message: "Produto possui vendas registradas: estoque zerado e arquivado como vendido.",
@@ -1621,7 +2236,7 @@ rotasProdutos.delete(
     res.json({ message: "Produto exclu\xEDdo com sucesso", archived: false });
   })
 );
-var rotasFotos = Router5();
+var rotasFotos = Router6();
 rotasFotos.get(
   "/:id",
   rota(async (req, res) => {
@@ -1634,8 +2249,8 @@ rotasFotos.get(
 );
 
 // server/relatorios.ts
-import { Router as Router6 } from "express";
-import { z as z5 } from "zod";
+import { Router as Router7 } from "express";
+import { z as z6 } from "zod";
 
 // server/exportar.ts
 import ExcelJS from "exceljs";
@@ -1795,16 +2410,17 @@ var reais = (v) => Number(v ?? 0).toLocaleString("pt-BR", { style: "currency", c
 var decimal = (v) => Number(v ?? 0).toFixed(2).replace(".", ",");
 
 // server/relatorios.ts
-var rotasRelatorios = Router6();
+var rotasRelatorios = Router7();
 rotasRelatorios.use(autenticar);
-var base = z5.object({
-  format: z5.enum(["json", "pdf", "xlsx", "csv"]).default("json"),
-  startDate: z5.coerce.date().optional(),
-  endDate: z5.coerce.date().optional(),
-  categoryId: z5.string().uuid().optional(),
-  supplierId: z5.string().uuid().optional(),
-  status: z5.enum(["EM_ESTOQUE", "RESERVADO", "VENDIDO"]).optional(),
-  paymentMethod: z5.enum(["PIX", "DINHEIRO", "DEBITO", "CREDITO", "TRANSFERENCIA"]).optional()
+var base = z6.object({
+  format: z6.enum(["json", "pdf", "xlsx", "csv"]).default("json"),
+  startDate: z6.coerce.date().optional(),
+  endDate: z6.coerce.date().optional(),
+  categoryId: z6.string().uuid().optional(),
+  supplierId: z6.string().uuid().optional(),
+  status: z6.enum(["EM_ESTOQUE", "RESERVADO", "VENDIDO"]).optional(),
+  paymentMethod: z6.enum(["PIX", "DINHEIRO", "DEBITO", "CREDITO", "TRANSFERENCIA"]).optional(),
+  unitId: z6.string().uuid().optional()
 });
 var PAGAMENTO_LABEL = {
   PIX: "Pix",
@@ -1834,30 +2450,38 @@ rotasRelatorios.get(
   "/stock",
   rota(async (req, res) => {
     const q = validar(base, req.query);
+    const unidade = unidadePermitida(req.usuario, q.unitId);
     const entrada = intervalo(q.startDate, q.endDate);
-    const produtos = await db.product.findMany({
+    const linhasDeEstoque = await db.stock.findMany({
       where: {
-        ...q.categoryId ? { categoryId: q.categoryId } : {},
-        ...q.supplierId ? { supplierId: q.supplierId } : {},
-        ...q.status ? { status: q.status } : {},
-        ...entrada ? { entryDate: entrada } : {}
+        ...unidade ? { unitId: unidade } : {},
+        product: {
+          ...q.categoryId ? { categoryId: q.categoryId } : {},
+          ...q.supplierId ? { supplierId: q.supplierId } : {},
+          ...q.status ? { status: q.status } : {},
+          ...entrada ? { entryDate: entrada } : {}
+        }
       },
-      include: { category: true, supplier: true },
-      orderBy: [{ category: { name: "asc" } }, { name: "asc" }]
+      include: {
+        unit: { select: { name: true } },
+        product: { include: { category: true, supplier: true } }
+      },
+      orderBy: [{ unit: { name: "asc" } }, { product: { name: "asc" } }]
     });
-    const linhas = produtos.map((p) => ({
+    const linhas = linhasDeEstoque.map(({ product: p, unit, quantity }) => ({
+      unit: unit.name,
       name: p.name,
       category: p.category.name,
       brand: p.brand ?? "\u2014",
       model: p.model ?? "\u2014",
       lote: p.lote ?? "\u2014",
-      quantity: p.quantity,
+      quantity,
       costPrice: numero(p.costPrice),
       salePrice: numero(p.salePrice),
-      totalCost: numero(p.costPrice) * p.quantity,
-      totalSale: numero(p.salePrice) * p.quantity,
+      totalCost: numero(p.costPrice) * quantity,
+      totalSale: numero(p.salePrice) * quantity,
       supplier: p.supplier?.name ?? "\u2014",
-      status: STATUS_LABEL[p.status] ?? p.status,
+      status: STATUS_PRODUTO_LABEL[p.status] ?? p.status,
       entryDate: dataBR(p.entryDate)
     }));
     const custo = linhas.reduce((s, l) => s + l.totalCost, 0);
@@ -1866,23 +2490,23 @@ rotasRelatorios.get(
       title: "Relat\xF3rio de Estoque",
       subtitle: periodo(q),
       columns: [
-        { header: "Produto", key: "name", width: 26 },
-        { header: "Categoria", key: "category", width: 14 },
-        { header: "Marca", key: "brand", width: 12 },
-        { header: "Modelo", key: "model", width: 14 },
-        { header: "Lote", key: "lote", width: 12 },
+        { header: "Unidade", key: "unit", width: 12 },
+        { header: "Produto", key: "name", width: 24 },
+        { header: "Categoria", key: "category", width: 13 },
+        { header: "Marca", key: "brand", width: 11 },
+        { header: "Modelo", key: "model", width: 13 },
+        { header: "Lote", key: "lote", width: 11 },
         qtd("Qtd", "quantity", 6),
-        money("Custo", "costPrice", 11),
-        money("Venda", "salePrice", 11),
-        money("Total custo", "totalCost"),
-        money("Total venda", "totalSale"),
-        { header: "Fornecedor", key: "supplier", width: 18 },
-        { header: "Status", key: "status", width: 12 },
-        { header: "Entrada", key: "entryDate", width: 11 }
+        money("Custo", "costPrice", 10),
+        money("Venda", "salePrice", 10),
+        money("Total custo", "totalCost", 12),
+        money("Total venda", "totalSale", 12),
+        { header: "Fornecedor", key: "supplier", width: 16 },
+        { header: "Status", key: "status", width: 11 }
       ],
       rows: linhas,
       summary: [
-        { label: "Produtos listados", value: String(linhas.length) },
+        { label: "Linhas listadas", value: String(linhas.length) },
         { label: "Itens em estoque", value: String(linhas.reduce((s, l) => s + l.quantity, 0)) },
         { label: "Valor total (custo)", value: reais(custo) },
         { label: "Valor total (venda)", value: reais(venda) },
@@ -1954,14 +2578,19 @@ rotasRelatorios.get(
   "/by-category",
   rota(async (req, res) => {
     const q = validar(base, req.query);
+    const unidade = unidadePermitida(req.usuario, q.unitId);
     const quando = intervalo(q.startDate, q.endDate);
-    const [categorias, vendas] = await Promise.all([
-      db.category.findMany({
-        include: { products: { select: { quantity: true, costPrice: true, salePrice: true } } },
-        orderBy: { name: "asc" }
+    const [categorias, linhasDeEstoque, vendas] = await Promise.all([
+      db.category.findMany({ orderBy: { name: "asc" } }),
+      db.stock.findMany({
+        where: unidade ? { unitId: unidade } : {},
+        select: {
+          quantity: true,
+          product: { select: { categoryId: true, costPrice: true, salePrice: true } }
+        }
       }),
       db.sale.findMany({
-        where: quando ? { saleDate: quando } : {},
+        where: { ...quando ? { saleDate: quando } : {}, ...unidade ? { unitId: unidade } : {} },
         select: {
           quantity: true,
           totalPrice: true,
@@ -1971,15 +2600,16 @@ rotasRelatorios.get(
       })
     ]);
     const linhas = categorias.map((c) => {
+      const doEstoque = linhasDeEstoque.filter((l) => l.product.categoryId === c.id);
       const daCategoria = vendas.filter((v) => v.product.categoryId === c.id);
       const faturamento = daCategoria.reduce((s, v) => s + numero(v.totalPrice), 0);
       const custo = daCategoria.reduce((s, v) => s + numero(v.costAtSale) * v.quantity, 0);
       return {
         category: c.name,
-        products: c.products.length,
-        stockQty: c.products.reduce((s, p) => s + p.quantity, 0),
-        stockCost: c.products.reduce((s, p) => s + numero(p.costPrice) * p.quantity, 0),
-        stockSale: c.products.reduce((s, p) => s + numero(p.salePrice) * p.quantity, 0),
+        products: doEstoque.length,
+        stockQty: doEstoque.reduce((s, l) => s + l.quantity, 0),
+        stockCost: doEstoque.reduce((s, l) => s + numero(l.product.costPrice) * l.quantity, 0),
+        stockSale: doEstoque.reduce((s, l) => s + numero(l.product.salePrice) * l.quantity, 0),
         soldQty: daCategoria.reduce((s, v) => s + v.quantity, 0),
         revenue: faturamento,
         profit: faturamento - custo
@@ -2011,14 +2641,16 @@ rotasRelatorios.get(
   "/by-supplier",
   rota(async (req, res) => {
     const q = validar(base, req.query);
+    const unidade = unidadePermitida(req.usuario, q.unitId);
     const quando = intervalo(q.startDate, q.endDate);
-    const [fornecedores, vendas] = await Promise.all([
-      db.supplier.findMany({
-        include: { products: { select: { quantity: true, costPrice: true } } },
-        orderBy: { name: "asc" }
+    const [fornecedores, linhasDeEstoque, vendas] = await Promise.all([
+      db.supplier.findMany({ orderBy: { name: "asc" } }),
+      db.stock.findMany({
+        where: unidade ? { unitId: unidade } : {},
+        select: { quantity: true, product: { select: { supplierId: true, costPrice: true } } }
       }),
       db.sale.findMany({
-        where: quando ? { saleDate: quando } : {},
+        where: { ...quando ? { saleDate: quando } : {}, ...unidade ? { unitId: unidade } : {} },
         select: {
           quantity: true,
           totalPrice: true,
@@ -2028,15 +2660,16 @@ rotasRelatorios.get(
       })
     ]);
     const linhas = fornecedores.map((f) => {
+      const doEstoque = linhasDeEstoque.filter((l) => l.product.supplierId === f.id);
       const doFornecedor = vendas.filter((v) => v.product.supplierId === f.id);
       const faturamento = doFornecedor.reduce((s, v) => s + numero(v.totalPrice), 0);
       const custo = doFornecedor.reduce((s, v) => s + numero(v.costAtSale) * v.quantity, 0);
       return {
         supplier: f.name,
         active: f.active ? "Sim" : "N\xE3o",
-        products: f.products.length,
-        stockQty: f.products.reduce((s, p) => s + p.quantity, 0),
-        invested: f.products.reduce((s, p) => s + numero(p.costPrice) * p.quantity, 0),
+        products: doEstoque.length,
+        stockQty: doEstoque.reduce((s, l) => s + l.quantity, 0),
+        invested: doEstoque.reduce((s, l) => s + numero(l.product.costPrice) * l.quantity, 0),
         soldQty: doFornecedor.reduce((s, v) => s + v.quantity, 0),
         revenue: faturamento,
         profit: faturamento - custo
@@ -2067,7 +2700,7 @@ rotasRelatorios.get(
 rotasRelatorios.get(
   "/by-period",
   rota(async (req, res) => {
-    const q = validar(base.extend({ groupBy: z5.enum(["day", "month"]).default("day") }), req.query);
+    const q = validar(base.extend({ groupBy: z6.enum(["day", "month"]).default("day") }), req.query);
     const quando = intervalo(q.startDate, q.endDate);
     const [vendas, movimentos] = await Promise.all([
       db.sale.findMany({
@@ -2075,7 +2708,7 @@ rotasRelatorios.get(
         select: { saleDate: true, quantity: true, totalPrice: true, costAtSale: true },
         orderBy: { saleDate: "asc" }
       }),
-      db.movement.findMany({
+      db.stockMovement.findMany({
         where: quando ? { createdAt: quando } : {},
         select: { createdAt: true, type: true, quantity: true }
       })
@@ -2129,32 +2762,41 @@ rotasRelatorios.get(
   "/movements",
   rota(async (req, res) => {
     const q = validar(
-      base.extend({ type: z5.enum(["ENTRADA", "SAIDA", "AJUSTE", "EXCLUSAO"]).optional() }),
+      base.extend({ type: z6.enum(["ENTRADA", "SAIDA", "TRANSFERENCIA", "AJUSTE"]).optional() }),
       req.query
     );
+    const unidade = unidadePermitida(req.usuario, q.unitId);
     const quando = intervalo(q.startDate, q.endDate);
-    const movimentos = await db.movement.findMany({
+    const movimentos = await db.stockMovement.findMany({
       where: {
         ...quando ? { createdAt: quando } : {},
         ...q.type ? { type: q.type } : {},
+        ...unidade ? { unitId: unidade } : {},
         ...q.categoryId ? { product: { categoryId: q.categoryId } } : {}
       },
       include: {
         user: { select: { name: true } },
+        unit: { select: { name: true } },
         product: { select: { model: true, category: { select: { name: true } } } }
       },
       orderBy: { createdAt: "desc" }
     });
+    const unidades = await db.unit.findMany({ select: { id: true, name: true } });
+    const nome = (id) => unidades.find((u) => u.id === id)?.name ?? "\u2014";
     const linhas = movimentos.map((m) => ({
       date: dataHoraBR(m.createdAt),
+      unit: m.unit?.name ?? "\u2014",
       type: TIPO_LABEL[m.type] ?? m.type,
+      reason: MOTIVO_LABEL[m.reason] ?? m.reason,
       product: m.productName ?? "\u2014",
       category: m.product?.category.name ?? "\u2014",
-      model: m.product?.model ?? "\u2014",
-      quantity: m.quantity,
-      balance: m.balanceAfter ?? "\u2014",
-      reason: m.reason ?? "\u2014",
-      user: m.user?.name ?? "\u2014"
+      quantity: m.type === "ENTRADA" ? m.quantity : -m.quantity,
+      previous: m.previousQuantity ?? "\u2014",
+      balance: m.newQuantity ?? "\u2014",
+      origin: m.originUnitId ? nome(m.originUnitId) : "\u2014",
+      destination: m.destinationUnitId ? nome(m.destinationUnitId) : "\u2014",
+      user: m.user?.name ?? "\u2014",
+      notes: m.notes ?? "\u2014"
     }));
     const somaPor = (tipo) => movimentos.filter((m) => m.type === tipo).reduce((s, m) => s + m.quantity, 0);
     await exportar(res, q.format, {
@@ -2162,20 +2804,24 @@ rotasRelatorios.get(
       subtitle: periodo(q),
       columns: [
         { header: "Data", key: "date", width: 15 },
-        { header: "Tipo", key: "type", width: 10 },
-        { header: "Produto", key: "product", width: 24 },
-        { header: "Categoria", key: "category", width: 13 },
-        { header: "Modelo", key: "model", width: 13 },
+        { header: "Unidade", key: "unit", width: 11 },
+        { header: "Tipo", key: "type", width: 11 },
+        { header: "Motivo", key: "reason", width: 15 },
+        { header: "Produto", key: "product", width: 22 },
+        { header: "Categoria", key: "category", width: 12 },
         qtd("Qtd", "quantity", 6),
-        qtd("Saldo", "balance", 7),
-        { header: "Motivo", key: "reason", width: 24 },
-        { header: "Usu\xE1rio", key: "user", width: 14 }
+        qtd("Antes", "previous", 7),
+        qtd("Depois", "balance", 7),
+        { header: "Origem", key: "origin", width: 11 },
+        { header: "Destino", key: "destination", width: 11 },
+        { header: "Usu\xE1rio", key: "user", width: 13 }
       ],
       rows: linhas,
       summary: [
         { label: "Movimenta\xE7\xF5es", value: String(linhas.length) },
         { label: "Entradas", value: String(somaPor("ENTRADA")) },
-        { label: "Sa\xEDdas", value: String(somaPor("SAIDA")) }
+        { label: "Sa\xEDdas", value: String(somaPor("SAIDA")) },
+        { label: "Transfer\xEAncias", value: String(somaPor("TRANSFERENCIA")) }
       ]
     });
   })
@@ -2183,10 +2829,10 @@ rotasRelatorios.get(
 
 // server/sistema.ts
 import ExcelJS2 from "exceljs";
-import { Router as Router7 } from "express";
+import { Router as Router8 } from "express";
 import multer from "multer";
 import { Readable } from "stream";
-var rotasSistema = Router7();
+var rotasSistema = Router8();
 rotasSistema.use(autenticar);
 rotasSistema.get(
   "/sheets/status",
@@ -2201,27 +2847,34 @@ rotasSistema.post(
     if (!planilhaConfigurada()) {
       throw new AppError("Integra\xE7\xE3o com Google Sheets n\xE3o configurada. Preencha as vari\xE1veis GOOGLE_* no .env.");
     }
-    const movimentos = await db.movement.findMany({
-      orderBy: { createdAt: "asc" },
-      include: {
-        user: { select: { name: true } },
-        product: { include: { category: true, supplier: true } }
-      }
-    });
+    const [movimentos, unidades] = await Promise.all([
+      db.stockMovement.findMany({
+        orderBy: { createdAt: "asc" },
+        include: {
+          user: { select: { name: true } },
+          unit: { select: { name: true } },
+          product: { include: { category: true } }
+        }
+      }),
+      db.unit.findMany({ select: { id: true, name: true } })
+    ]);
+    const nome = (id) => unidades.find((u) => u.id === id)?.name ?? "";
     const total = await reescreverPlanilha(
       movimentos.map((m) => ({
         data: m.createdAt,
-        categoria: m.product?.category.name ?? "\u2014",
         produto: m.productName ?? m.product?.name ?? "\u2014",
-        marca: m.product?.brand ?? "",
-        modelo: m.product?.model ?? "",
-        quantidade: m.quantity,
-        custo: numero(m.product?.costPrice),
-        venda: numero(m.product?.salePrice),
-        fornecedor: m.product?.supplier?.name ?? "",
-        status: m.product ? STATUS_LABEL[m.product.status] ?? m.product.status : "Exclu\xEDdo",
+        categoria: m.product?.category.name ?? "\u2014",
+        unidade: m.unit?.name ?? "\u2014",
         tipo: TIPO_LABEL[m.type],
-        usuario: m.user?.name ?? ""
+        quantidade: m.type === "ENTRADA" ? m.quantity : -m.quantity,
+        estoqueAnterior: m.previousQuantity ?? 0,
+        estoquePosterior: m.newQuantity ?? 0,
+        origem: nome(m.originUnitId),
+        destino: nome(m.destinationUnitId),
+        usuario: m.user?.name ?? "",
+        motivo: MOTIVO_LABEL[m.reason],
+        observacao: m.notes ?? "",
+        movimentoId: m.id
       }))
     );
     await registrarLog({ acao: "SHEETS_SYNC", entidade: "Setting", req });
@@ -2239,7 +2892,7 @@ rotasSistema.get(
       // As imagens ficam de fora: o backup viraria centenas de megabytes.
       db.product.findMany(),
       db.sale.findMany(),
-      db.movement.findMany(),
+      db.stockMovement.findMany(),
       db.user.findMany({ select: { id: true, name: true, email: true, role: true, active: true, createdAt: true } })
     ]);
     const backup = limpar({
@@ -2399,6 +3052,7 @@ rotasSistema.post(
     const porCategoria = new Map(categorias.map((c) => [semAcento(c.name), c]));
     categorias.forEach((c) => porCategoria.set(semAcento(c.slug), c));
     const porFornecedor = new Map(fornecedores.map((f) => [semAcento(f.name), f]));
+    const unidadeDaImportacao = req.usuario?.unidadeId ?? (await db.unit.findFirst({ where: { active: true }, orderBy: [{ type: "asc" }, { name: "asc" }] }))?.id ?? null;
     const erros = [];
     let importados = 0;
     let processadas = 0;
@@ -2437,7 +3091,6 @@ rotasSistema.post(
             model: dados.model || null,
             color: dados.color || null,
             capacity: dados.capacity || null,
-            quantity: quantidade,
             costPrice: paraNumero(dados.costPrice),
             salePrice: paraNumero(dados.salePrice),
             imei: dados.imei || null,
@@ -2447,24 +3100,20 @@ rotasSistema.post(
             notes: dados.notes || null,
             categoryId: categoria.id,
             supplierId: fornecedorId
-          },
-          include: { category: true, supplier: true }
+          }
         });
-        if (quantidade > 0) {
-          await db.movement.create({
-            data: {
-              type: "ENTRADA",
-              quantity: quantidade,
-              balanceAfter: quantidade,
-              reason: "Importa\xE7\xE3o de planilha",
-              productId: produto.id,
-              productName: produto.name,
-              userId: req.usuario?.id ?? null
-            }
+        if (quantidade > 0 && unidadeDaImportacao) {
+          await movimentar({
+            produtoId: produto.id,
+            produtoNome: produto.name,
+            unidadeId: unidadeDaImportacao,
+            tipo: "ENTRADA",
+            motivo: "CADASTRO",
+            quantidade,
+            observacao: "Importa\xE7\xE3o de planilha",
+            usuarioId: req.usuario?.id,
+            usuarioNome: req.usuario?.nome
           });
-          enviarParaPlanilha(
-            linhaDaPlanilha(produto, "ENTRADA", quantidade, req.usuario?.nome, quantidade)
-          );
         }
         importados += 1;
       } catch (erro) {
@@ -2487,40 +3136,44 @@ rotasSistema.post(
 );
 
 // server/vendas.ts
-import { Prisma as Prisma2 } from "@prisma/client";
-import { Router as Router8 } from "express";
-import { z as z6 } from "zod";
-var rotasVendas = Router8();
+import { Prisma as Prisma3 } from "@prisma/client";
+import { Router as Router9 } from "express";
+import { z as z7 } from "zod";
+var rotasVendas = Router9();
 rotasVendas.use(autenticar);
 var COM_RELACOES2 = {
   product: { include: { category: true, supplier: true } },
   customer: true,
-  user: { select: { id: true, name: true } }
+  user: { select: { id: true, name: true } },
+  unit: { select: { id: true, name: true } }
 };
 var PAGAMENTOS = ["PIX", "DINHEIRO", "DEBITO", "CREDITO", "TRANSFERENCIA"];
-var vendaSchema = z6.object({
-  productId: z6.string().uuid("Selecione o produto"),
-  customerName: z6.string().trim().min(2, "Informe o nome do cliente").max(180),
-  customerPhone: z6.string().trim().max(30).optional().nullable().transform((v) => v || null),
-  customerId: z6.string().uuid().optional().nullable(),
-  quantity: z6.coerce.number().int().min(1, "A quantidade deve ser no m\xEDnimo 1"),
-  unitPrice: z6.coerce.number().min(0, "Informe o valor vendido"),
-  paymentMethod: z6.enum(PAGAMENTOS, { errorMap: () => ({ message: "Selecione a forma de pagamento" }) }),
-  saleDate: z6.coerce.date().optional(),
-  notes: z6.string().trim().max(1e3).optional().nullable()
+var vendaSchema = z7.object({
+  productId: z7.string().uuid("Selecione o produto"),
+  /** Obrigatória: é o que diz de qual loja o produto saiu. */
+  unitId: z7.string().uuid("Selecione a unidade da venda"),
+  customerName: z7.string().trim().min(2, "Informe o nome do cliente").max(180),
+  customerPhone: z7.string().trim().max(30).optional().nullable().transform((v) => v || null),
+  customerId: z7.string().uuid().optional().nullable(),
+  quantity: z7.coerce.number().int().min(1, "A quantidade deve ser no m\xEDnimo 1"),
+  unitPrice: z7.coerce.number().min(0, "Informe o valor vendido"),
+  paymentMethod: z7.enum(PAGAMENTOS, { errorMap: () => ({ message: "Selecione a forma de pagamento" }) }),
+  saleDate: z7.coerce.date().optional(),
+  notes: z7.string().trim().max(1e3).optional().nullable()
 });
-var filtrosSchema2 = z6.object({
-  page: z6.coerce.number().int().min(1).optional(),
-  pageSize: z6.coerce.number().int().min(1).max(200).optional(),
-  search: z6.string().trim().optional(),
-  productId: z6.string().uuid().optional(),
-  categoryId: z6.string().uuid().optional(),
-  supplierId: z6.string().uuid().optional(),
-  paymentMethod: z6.enum(PAGAMENTOS).optional(),
-  startDate: z6.coerce.date().optional(),
-  endDate: z6.coerce.date().optional(),
-  sortBy: z6.string().optional(),
-  sortOrder: z6.enum(["asc", "desc"]).optional()
+var filtrosSchema2 = z7.object({
+  page: z7.coerce.number().int().min(1).optional(),
+  pageSize: z7.coerce.number().int().min(1).max(200).optional(),
+  search: z7.string().trim().optional(),
+  productId: z7.string().uuid().optional(),
+  categoryId: z7.string().uuid().optional(),
+  supplierId: z7.string().uuid().optional(),
+  paymentMethod: z7.enum(PAGAMENTOS).optional(),
+  unitId: z7.string().uuid().optional(),
+  startDate: z7.coerce.date().optional(),
+  endDate: z7.coerce.date().optional(),
+  sortBy: z7.string().optional(),
+  sortOrder: z7.enum(["asc", "desc"]).optional()
 });
 function filtrarVendas(q) {
   const cond = [];
@@ -2542,6 +3195,7 @@ function filtrarVendas(q) {
   if (q.categoryId) cond.push({ product: { categoryId: q.categoryId } });
   if (q.supplierId) cond.push({ product: { supplierId: q.supplierId } });
   if (q.paymentMethod) cond.push({ paymentMethod: q.paymentMethod });
+  if (q.unitId) cond.push({ unitId: q.unitId });
   const periodo2 = intervalo(q.startDate, q.endDate);
   if (periodo2) cond.push({ saleDate: periodo2 });
   return cond.length ? { AND: cond } : {};
@@ -2551,7 +3205,7 @@ rotasVendas.get(
   rota(async (req, res) => {
     const q = validar(filtrosSchema2, req.query);
     const p = paginacao(q);
-    const where = filtrarVendas(q);
+    const where = filtrarVendas({ ...q, unitId: unidadePermitida(req.usuario, q.unitId) });
     const [lista, total, somas] = await Promise.all([
       db.sale.findMany({
         where,
@@ -2589,28 +3243,10 @@ rotasVendas.post(
   rota(async (req, res) => {
     const dados = validar(vendaSchema, req.body);
     const usuario = req.usuario;
+    exigirAcessoNaUnidade(usuario, dados.unitId);
     const resultado = await db.$transaction(async (tx) => {
-      const produto = await tx.product.findUnique({
-        where: { id: dados.productId },
-        include: { category: true, supplier: true }
-      });
+      const produto = await tx.product.findUnique({ where: { id: dados.productId } });
       if (!produto) throw naoEncontrado("Produto");
-      if (produto.quantity < dados.quantity) {
-        throw new AppError(
-          `Estoque insuficiente para "${produto.name}". Dispon\xEDvel: ${produto.quantity}.`
-        );
-      }
-      const baixa = await tx.product.updateMany({
-        where: { id: produto.id, quantity: { gte: dados.quantity } },
-        data: { quantity: { decrement: dados.quantity } }
-      });
-      if (baixa.count === 0) {
-        throw new AppError("O estoque mudou durante a opera\xE7\xE3o. Tente novamente.", 409);
-      }
-      const restante = produto.quantity - dados.quantity;
-      if (restante === 0) {
-        await tx.product.update({ where: { id: produto.id }, data: { status: "VENDIDO" } });
-      }
       let clienteId = dados.customerId ?? null;
       if (!clienteId) {
         const existente = dados.customerPhone ? await tx.customer.findFirst({ where: { phone: dados.customerPhone } }) : await tx.customer.findFirst({
@@ -2623,12 +3259,13 @@ rotasVendas.post(
       const venda = await tx.sale.create({
         data: {
           productId: produto.id,
+          unitId: dados.unitId,
           customerId: clienteId,
           customerName: dados.customerName,
           customerPhone: dados.customerPhone ?? null,
           quantity: dados.quantity,
-          unitPrice: new Prisma2.Decimal(dados.unitPrice),
-          totalPrice: new Prisma2.Decimal(dados.unitPrice).mul(dados.quantity),
+          unitPrice: new Prisma3.Decimal(dados.unitPrice),
+          totalPrice: new Prisma3.Decimal(dados.unitPrice).mul(dados.quantity),
           // Guarda o custo do momento: o lucro histórico não muda depois.
           costAtSale: produto.costPrice,
           paymentMethod: dados.paymentMethod,
@@ -2638,23 +3275,28 @@ rotasVendas.post(
         },
         include: COM_RELACOES2
       });
-      await tx.movement.create({
-        data: {
-          type: "SAIDA",
-          quantity: dados.quantity,
-          balanceAfter: restante,
-          reason: `Venda para ${dados.customerName}`,
-          productId: produto.id,
-          productName: produto.name,
-          saleId: venda.id,
-          userId: usuario?.id ?? null
-        }
+      const baixa = await movimentar({
+        produtoId: produto.id,
+        produtoNome: produto.name,
+        unidadeId: dados.unitId,
+        tipo: "SAIDA",
+        motivo: "VENDA",
+        quantidade: dados.quantity,
+        observacao: `Venda para ${dados.customerName}`,
+        vendaId: venda.id,
+        usuarioId: usuario?.id,
+        usuarioNome: usuario?.nome,
+        tx
       });
-      return { venda, produto, restante };
+      const restante = await tx.stock.aggregate({
+        where: { productId: produto.id },
+        _sum: { quantity: true }
+      });
+      if ((restante._sum.quantity ?? 0) === 0) {
+        await tx.product.update({ where: { id: produto.id }, data: { status: "VENDIDO" } });
+      }
+      return { venda, baixa };
     });
-    enviarParaPlanilha(
-      linhaDaPlanilha(resultado.produto, "SAIDA", dados.quantity, usuario?.nome, resultado.restante)
-    );
     await registrarLog({ acao: "CREATE", entidade: "Sale", id: resultado.venda.id, req });
     res.status(201).json(limpar(resultado.venda));
   })
@@ -2664,45 +3306,31 @@ rotasVendas.delete(
   somenteAdmin,
   rota(async (req, res) => {
     const usuario = req.usuario;
-    const resultado = await db.$transaction(async (tx) => {
+    await db.$transaction(async (tx) => {
       const venda = await tx.sale.findUnique({
         where: { id: req.params.id },
-        include: { product: true }
+        include: { product: true, unit: true }
       });
       if (!venda) throw naoEncontrado("Venda");
-      const produto = await tx.product.update({
-        where: { id: venda.productId },
-        data: {
-          quantity: { increment: venda.quantity },
-          status: venda.product.status === "VENDIDO" ? "EM_ESTOQUE" : void 0
-        },
-        include: { category: true, supplier: true }
+      await movimentar({
+        produtoId: venda.productId,
+        produtoNome: venda.product.name,
+        unidadeId: venda.unitId,
+        tipo: "ENTRADA",
+        motivo: "CANCELAMENTO",
+        quantidade: venda.quantity,
+        observacao: `Cancelamento de venda (${venda.customerName ?? "cliente"}) \u2014 voltou para a ${venda.unit.name}`,
+        usuarioId: usuario?.id,
+        usuarioNome: usuario?.nome,
+        tx
       });
-      await tx.movement.create({
-        data: {
-          type: "ENTRADA",
-          quantity: venda.quantity,
-          balanceAfter: produto.quantity,
-          reason: `Cancelamento de venda (${venda.customerName ?? "cliente"})`,
-          productId: produto.id,
-          productName: produto.name,
-          userId: usuario?.id ?? null
-        }
-      });
+      if (venda.product.status === "VENDIDO") {
+        await tx.product.update({ where: { id: venda.productId }, data: { status: "EM_ESTOQUE" } });
+      }
       await tx.sale.delete({ where: { id: venda.id } });
-      return { venda, produto };
     });
-    enviarParaPlanilha(
-      linhaDaPlanilha(
-        resultado.produto,
-        "ENTRADA",
-        resultado.venda.quantity,
-        usuario?.nome,
-        resultado.produto.quantity
-      )
-    );
     await registrarLog({ acao: "DELETE", entidade: "Sale", id: req.params.id, req });
-    res.json({ message: "Venda cancelada e estoque devolvido" });
+    res.json({ message: "Venda cancelada e estoque devolvido \xE0 unidade de origem." });
   })
 );
 
@@ -2773,6 +3401,7 @@ function createApp() {
   app2.use("/api/fotos", rotasFotos);
   app2.use("/api/sales", rotasVendas);
   app2.use("/api/movements", rotasMovimentacoes);
+  app2.use("/api/units", rotasUnidades);
   app2.use("/api/categories", rotasCategorias);
   app2.use("/api/suppliers", rotasFornecedores);
   app2.use("/api/customers", rotasClientes);

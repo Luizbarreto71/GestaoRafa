@@ -7,11 +7,14 @@ import { AlertTriangle, Bell, CloudOff, Menu, Moon, PackageX, RefreshCw, Sun, Wa
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { GlobalSearch } from './GlobalSearch';
+import { UnitSelector } from './UnitSelector';
+import { useUnit } from '@/contexts/UnitContext';
 
 export function Topbar({ onOpenMobileMenu }: { onOpenMobileMenu: () => void }) {
   const { theme, toggleTheme } = useTheme();
   const { online, queue } = useOnlineStatus();
-  const { data: alerts } = useAlerts();
+  const { unidadeId } = useUnit();
+  const { data: alerts } = useAlerts(true, unidadeId);
   const [showAlerts, setShowAlerts] = useState(false);
   const alertRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
@@ -36,6 +39,8 @@ export function Topbar({ onOpenMobileMenu }: { onOpenMobileMenu: () => void }) {
       >
         <Menu className="h-5 w-5" />
       </button>
+
+      <UnitSelector />
 
       <GlobalSearch />
 
@@ -121,7 +126,9 @@ export function Topbar({ onOpenMobileMenu }: { onOpenMobileMenu: () => void }) {
                       <span className="block truncate text-sm font-medium text-navy-900 dark:text-slate-100">
                         {product.name}
                       </span>
-                      <span className="text-xs text-danger">Estoque zerado</span>
+                      <span className="text-xs text-danger">
+                        Estoque zerado{product.unitName ? ` na ${product.unitName}` : ''}
+                      </span>
                     </span>
                   </button>
                 ))}
@@ -142,7 +149,8 @@ export function Topbar({ onOpenMobileMenu }: { onOpenMobileMenu: () => void }) {
                         {product.name}
                       </span>
                       <span className="text-xs text-warning">
-                        Restam {product.quantity} un. (mínimo {product.minQuantity})
+                        {product.unitName ? `${product.unitName}: ` : ''}
+                        restam {product.quantity} un. (mínimo {product.minQuantity})
                       </span>
                     </span>
                   </button>

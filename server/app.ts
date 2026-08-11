@@ -10,6 +10,7 @@ import { rotasMovimentacoes } from './movimentacoes';
 import { rotasFotos, rotasProdutos } from './produtos';
 import { rotasRelatorios } from './relatorios';
 import { rotasSistema } from './sistema';
+import { rotasUnidades } from './unidades';
 import { rotasVendas } from './vendas';
 
 /**
@@ -113,6 +114,7 @@ export function createApp(): Application {
   app.use('/api/fotos', rotasFotos);
   app.use('/api/sales', rotasVendas);
   app.use('/api/movements', rotasMovimentacoes);
+  app.use('/api/units', rotasUnidades);
   app.use('/api/categories', rotasCategorias);
   app.use('/api/suppliers', rotasFornecedores);
   app.use('/api/customers', rotasClientes);

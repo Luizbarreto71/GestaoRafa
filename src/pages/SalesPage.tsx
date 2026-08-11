@@ -16,6 +16,7 @@ import type { Sale } from '@/types';
 import { Download, Package, Receipt, Search, Trash2, TrendingUp, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { useUnit } from '@/contexts/UnitContext';
 
 export default function SalesPage() {
   const [searchParams] = useSearchParams();
@@ -36,6 +37,7 @@ export default function SalesPage() {
 
   const toast = useToast();
   const { isAdmin } = useAuth();
+  const { unidadeId } = useUnit();
   const debouncedSearch = useDebounce(search, 350);
   const { data: categories } = useCategories();
 
@@ -46,9 +48,10 @@ export default function SalesPage() {
       search: debouncedSearch,
       sortBy,
       sortOrder,
+      ...(unidadeId ? { unitId: unidadeId } : {}),
       ...Object.fromEntries(Object.entries(filters).filter(([, value]) => value)),
     }),
-    [page, pageSize, debouncedSearch, sortBy, sortOrder, filters],
+    [page, pageSize, debouncedSearch, sortBy, sortOrder, filters, unidadeId],
   );
 
   const { data, isLoading } = useSales(query);
@@ -81,7 +84,7 @@ export default function SalesPage() {
 
   async function exportSales(format: 'xlsx' | 'pdf' | 'csv') {
     try {
-      await downloadFile('/reports/sales', { format, ...filters }, `vendas.${format}`);
+      await downloadFile('/reports/sales', { format, ...filters, ...(unidadeId ? { unitId: unidadeId } : {}) }, `vendas.${format}`);
       toast.success('Relatório gerado');
     } catch {
       toast.error('Não foi possível exportar');
@@ -145,6 +148,15 @@ export default function SalesPage() {
       sortKey: 'totalPrice',
       align: 'right',
       render: (sale) => <span className="font-bold text-success">{formatCurrency(sale.totalPrice)}</span>,
+    },
+    {
+      key: 'unit',
+      header: 'Unidade',
+      render: (sale) => (
+        <span className="text-sm font-medium text-navy-900 dark:text-slate-100">
+          {sale.unit?.name ?? '—'}
+        </span>
+      ),
     },
     {
       key: 'payment',
@@ -317,6 +329,7 @@ export default function SalesPage() {
                   </p>
                   <p className="truncate text-xs text-slate-500 dark:text-slate-400">
                     {sale.quantity}× {sale.product?.name}
+                    {sale.unit ? ` · ${sale.unit.name}` : ''}
                   </p>
                 </div>
                 <span className="shrink-0 text-sm font-bold text-success">

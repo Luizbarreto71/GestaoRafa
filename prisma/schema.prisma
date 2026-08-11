@@ -16,7 +16,8 @@ datasource db {
 
 enum UserRole {
   ADMIN
-  OPERADOR
+  GERENTE
+  VENDEDOR
 }
 
 enum ProductStatus {
@@ -28,8 +29,32 @@ enum ProductStatus {
 enum MovementType {
   ENTRADA
   SAIDA
+  TRANSFERENCIA
   AJUSTE
+}
+
+/// Por que o estoque se mexeu. Fica separado do tipo porque uma saída pode
+/// ser venda, perda, defeito… e o relatório precisa distinguir.
+enum MovementReason {
+  COMPRA
+  CADASTRO
+  VENDA
+  DEFEITO
+  DEVOLUCAO_FORNECEDOR
+  PERDA
+  USO_INTERNO
+  AJUSTE
+  TRANSFERENCIA
+  CANCELAMENTO
   EXCLUSAO
+  OUTRO
+}
+
+enum TransferStatus {
+  PENDENTE
+  EM_TRANSITO
+  RECEBIDA
+  CANCELADA
 }
 
 enum PaymentMethod {
@@ -40,20 +65,45 @@ enum PaymentMethod {
   TRANSFERENCIA
 }
 
+/// Matriz, Sede… Cada uma tem seu estoque, que nunca se mistura.
+model Unit {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  /// MATRIZ ou FILIAL — só para exibição e ordenação.
+  type      String   @default("FILIAL")
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  stock        Stock[]
+  movements    StockMovement[]
+  sales        Sale[]
+  users        User[]
+  transfersOut StockTransfer[] @relation("origem")
+  transfersIn  StockTransfer[] @relation("destino")
+
+  @@map("units")
+}
+
 model User {
   id        String   @id @default(uuid())
   name      String
   email     String   @unique
   password  String
-  role      UserRole @default(OPERADOR)
+  role      UserRole @default(VENDEDOR)
   active    Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  movements Movement[]
+  /// Gerente e Vendedor enxergam só esta unidade. Administrador vê todas.
+  unitId String?
+  unit   Unit?   @relation(fields: [unitId], references: [id], onDelete: SetNull)
+
+  movements StockMovement[]
   sales     Sale[]
   auditLogs AuditLog[]
 
+  @@index([unitId])
   @@map("users")
 }
 
@@ -117,7 +167,7 @@ model Product {
   color        String?
   capacity     String?
   lote         String?
-  quantity     Int           @default(0)
+  /// Estoque mínimo por unidade — abaixo disso entra no alerta.
   minQuantity  Int           @default(1)
   costPrice    Decimal       @default(0) @db.Decimal(12, 2)
   salePrice    Decimal       @default(0) @db.Decimal(12, 2)
@@ -136,9 +186,14 @@ model Product {
   supplierId String?
   supplier   Supplier? @relation(fields: [supplierId], references: [id], onDelete: SetNull)
 
+  /// A quantidade vive aqui, uma linha por unidade. Nunca no produto:
+  /// misturar os estoques da Matriz e da Sede seria o mesmo que não tê-los
+  /// separados.
+  stock     Stock[]
   photos    ProductPhoto[]
   sales     Sale[]
-  movements Movement[]
+  movements StockMovement[]
+  transfers StockTransfer[]
 
   @@index([name])
   @@index([brand])
@@ -192,28 +247,73 @@ model Sale {
   userId String?
   user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
 
-  movements Movement[]
+  /// De qual unidade o produto saiu. Obrigatório: sem isso não dá para
+  /// saber quanto cada loja vendeu.
+  unitId String
+  unit   Unit   @relation(fields: [unitId], references: [id])
 
+  movements StockMovement[]
+
+  @@index([unitId])
   @@index([saleDate])
   @@index([productId])
   @@index([customerId])
   @@map("sales")
 }
 
-model Movement {
-  id           String       @id @default(uuid())
-  type         MovementType
-  quantity     Int
-  reason       String?
-  balanceAfter Int?
-  createdAt    DateTime     @default(now())
+/// Saldo de um produto numa unidade. É a fonte da verdade do estoque.
+model Stock {
+  id        String   @id @default(uuid())
+  quantity  Int      @default(0)
+  updatedAt DateTime @updatedAt
+
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  unitId String
+  unit   Unit   @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, unitId])
+  @@index([unitId])
+  @@map("stock")
+}
+
+/// Histórico de tudo que mexeu no estoque. Nunca é apagado: corrigir é
+/// lançar uma movimentação de ajuste, não editar o passado.
+model StockMovement {
+  id       String         @id @default(uuid())
+  type     MovementType
+  reason   MovementReason @default(OUTRO)
+  quantity Int
+
+  /// Saldo da unidade antes e depois — permite auditar sem recalcular tudo.
+  previousQuantity Int?
+  newQuantity      Int?
+
+  notes     String?
+  createdAt DateTime @default(now())
 
   productId   String?
   product     Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  /// Guardado em texto para o histórico sobreviver à exclusão do produto.
   productName String?
+
+  /// Unidade afetada por esta linha.
+  unitId String?
+  unit   Unit?   @relation(fields: [unitId], references: [id], onDelete: SetNull)
+
+  /// Preenchidos nas transferências.
+  originUnitId      String?
+  destinationUnitId String?
+
+  /// Venda ou transferência que originou o movimento.
+  referenceId String?
 
   saleId String?
   sale   Sale?   @relation(fields: [saleId], references: [id], onDelete: SetNull)
+
+  transferId String?
+  transfer   StockTransfer? @relation(fields: [transferId], references: [id], onDelete: SetNull)
 
   userId String?
   user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
@@ -221,7 +321,38 @@ model Movement {
   @@index([createdAt])
   @@index([type])
   @@index([productId])
-  @@map("movements")
+  @@index([unitId])
+  @@map("stock_movements")
+}
+
+/// Transferência entre unidades. Gera sempre duas movimentações ligadas:
+/// a saída da origem e a entrada no destino.
+model StockTransfer {
+  id       String         @id @default(uuid())
+  quantity Int
+  status   TransferStatus @default(RECEBIDA)
+  notes    String?
+
+  createdAt  DateTime  @default(now())
+  receivedAt DateTime?
+
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+
+  originUnitId String
+  originUnit   Unit   @relation("origem", fields: [originUnitId], references: [id])
+
+  destinationUnitId String
+  destinationUnit   Unit   @relation("destino", fields: [destinationUnitId], references: [id])
+
+  requestedById String?
+  receivedById  String?
+
+  movements StockMovement[]
+
+  @@index([createdAt])
+  @@index([status])
+  @@map("stock_transfers")
 }
 
 model AuditLog {

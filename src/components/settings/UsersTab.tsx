@@ -7,14 +7,15 @@ import { Input, Select } from '@/components/ui/Field';
 import { Modal } from '@/components/ui/Modal';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/contexts/ToastContext';
-import { useCrudMutation, useUsers } from '@/hooks/queries';
+import { useCrudMutation, useUnits, useUsers } from '@/hooks/queries';
+import { ROLE_LABEL } from '@/lib/format';
 import { formatDate } from '@/lib/format';
 import { userService } from '@/services';
 import type { User } from '@/types';
 import { Pencil, Plus, ShieldCheck, Trash2 } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 
-const EMPTY = { name: '', email: '', password: '', role: 'OPERADOR', active: true };
+const EMPTY = { name: '', email: '', password: '', role: 'VENDEDOR', active: true, unitId: '' };
 
 export function UsersTab() {
   const [formOpen, setFormOpen] = useState(false);
@@ -25,6 +26,7 @@ export function UsersTab() {
   const toast = useToast();
   const { user: currentUser, isAdmin } = useAuth();
   const { data, isLoading } = useUsers({ pageSize: 50 }, isAdmin);
+  const { data: unidades } = useUnits();
 
   const saveUser = useCrudMutation(
     (variables: { id?: string; data: Record<string, unknown> }) =>
@@ -51,7 +53,14 @@ export function UsersTab() {
     setEditing(user ?? null);
     setForm(
       user
-        ? { name: user.name, email: user.email, password: '', role: user.role, active: user.active ?? true }
+        ? {
+            name: user.name,
+            email: user.email,
+            password: '',
+            role: user.role,
+            active: user.active ?? true,
+            unitId: user.unitId ?? '',
+          }
         : EMPTY,
     );
     setFormOpen(true);
@@ -65,6 +74,10 @@ export function UsersTab() {
     if (!editing && form.password.length < 6) {
       return toast.warning('A senha deve ter ao menos 6 caracteres');
     }
+    // Gerente e vendedor precisam de unidade: é ela que define o que enxergam.
+    if (form.role !== 'ADMIN' && !form.unitId) {
+      return toast.warning('Escolha a unidade deste usuário');
+    }
 
     try {
       await saveUser.mutateAsync({
@@ -74,6 +87,7 @@ export function UsersTab() {
           email: form.email.trim().toLowerCase(),
           role: form.role,
           active: form.active,
+          unitId: form.role === 'ADMIN' ? null : form.unitId,
           ...(form.password ? { password: form.password } : {}),
         },
       });
@@ -120,9 +134,18 @@ export function UsersTab() {
       key: 'role',
       header: 'Perfil',
       render: (user) => (
-        <Badge tone={user.role === 'ADMIN' ? 'info' : 'neutral'}>
-          {user.role === 'ADMIN' ? 'Administrador' : 'Operador'}
+        <Badge tone={user.role === 'ADMIN' ? 'info' : user.role === 'GERENTE' ? 'purple' : 'neutral'}>
+          {ROLE_LABEL[user.role]}
         </Badge>
+      ),
+    },
+    {
+      key: 'unit',
+      header: 'Unidade',
+      render: (user) => (
+        <span className="text-sm text-slate-600 dark:text-slate-400">
+          {user.role === 'ADMIN' ? 'Todas' : (user.unit?.name ?? '—')}
+        </span>
       ),
     },
     {
@@ -190,8 +213,8 @@ export function UsersTab() {
                 <p className="truncate text-xs text-slate-500 dark:text-slate-400">{user.email}</p>
               </div>
               <div className="flex items-center gap-2">
-                <Badge tone={user.role === 'ADMIN' ? 'info' : 'neutral'}>
-                  {user.role === 'ADMIN' ? 'Admin' : 'Operador'}
+                <Badge tone={user.role === 'ADMIN' ? 'info' : user.role === 'GERENTE' ? 'purple' : 'neutral'}>
+                  {ROLE_LABEL[user.role]}
                 </Badge>
                 <Button size="icon" variant="ghost" onClick={() => openForm(user)}>
                   <Pencil className="h-4 w-4" />
@@ -249,7 +272,8 @@ export function UsersTab() {
               value={form.role}
               onChange={(event) => setForm((f) => ({ ...f, role: event.target.value }))}
               options={[
-                { value: 'OPERADOR', label: 'Operador' },
+                { value: 'VENDEDOR', label: 'Vendedor' },
+                { value: 'GERENTE', label: 'Gerente' },
                 { value: 'ADMIN', label: 'Administrador' },
               ]}
             />
@@ -264,10 +288,30 @@ export function UsersTab() {
             />
           </div>
 
-          <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600 dark:bg-navy-800 dark:text-slate-400">
-            <strong>Operador</strong> cadastra produtos e registra vendas. <strong>Administrador</strong>{' '}
-            também exclui registros, gerencia usuários e acessa backups.
-          </p>
+          {form.role !== 'ADMIN' && (
+            <Select
+              label="Unidade"
+              required
+              value={form.unitId}
+              onChange={(event) => setForm((f) => ({ ...f, unitId: event.target.value }))}
+              options={(unidades ?? []).map((u) => ({ value: u.id, label: u.name }))}
+              placeholder="Selecione…"
+              hint="O usuário só verá o estoque e as vendas desta unidade"
+            />
+          )}
+
+          <div className="rounded-lg bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-600 dark:bg-navy-800 dark:text-slate-400">
+            <p>
+              <strong>Vendedor</strong> — registra vendas e vê o estoque da sua unidade.
+            </p>
+            <p>
+              <strong>Gerente</strong> — também faz entradas, saídas e transferências da sua unidade.
+            </p>
+            <p>
+              <strong>Administrador</strong> — vê todas as unidades, exclui registros, gerencia
+              usuários e acessa backups.
+            </p>
+          </div>
         </form>
       </Modal>
 

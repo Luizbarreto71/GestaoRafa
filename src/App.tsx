@@ -9,6 +9,7 @@ const DashboardPage = lazy(() => import('./pages/DashboardPage'));
 const StockPage = lazy(() => import('./pages/StockPage'));
 const SalesPage = lazy(() => import('./pages/SalesPage'));
 const MovementsPage = lazy(() => import('./pages/MovementsPage'));
+const StockMovementPage = lazy(() => import('./pages/StockMovementPage'));
 const CustomersPage = lazy(() => import('./pages/CustomersPage'));
 const ReportsPage = lazy(() => import('./pages/ReportsPage'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
@@ -68,6 +69,14 @@ export function App() {
           element={
             <Suspense fallback={<FullScreenLoader />}>
               <SalesPage />
+            </Suspense>
+          }
+        />
+        <Route
+          path="/movimentacao"
+          element={
+            <Suspense fallback={<FullScreenLoader />}>
+              <StockMovementPage />
             </Suspense>
           }
         />

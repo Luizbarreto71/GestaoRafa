@@ -10,32 +10,37 @@ import type { sheets_v4 } from 'googleapis';
 
 export interface Linha {
   data: Date | string;
-  categoria: string;
   produto: string;
-  marca?: string | null;
-  modelo?: string | null;
-  quantidade: number;
-  custo: number;
-  venda: number;
-  fornecedor?: string | null;
-  status: string;
+  categoria: string;
+  unidade: string;
   tipo: string;
+  quantidade: number;
+  estoqueAnterior: number;
+  estoquePosterior: number;
+  origem?: string | null;
+  destino?: string | null;
   usuario?: string | null;
+  motivo?: string | null;
+  observacao?: string | null;
+  movimentoId: string;
 }
 
 const CABECALHO = [
   'Data',
-  'Categoria',
+  'Hora',
   'Produto',
-  'Marca',
-  'Modelo',
+  'Categoria',
+  'Unidade',
+  'Tipo de movimentação',
   'Quantidade',
-  'Preço de Custo',
-  'Preço de Venda',
-  'Fornecedor',
-  'Status',
-  'Tipo da Movimentação',
-  'Usuário',
+  'Estoque anterior',
+  'Estoque posterior',
+  'Origem',
+  'Destino',
+  'Usuário responsável',
+  'Motivo',
+  'Observação',
+  'ID da movimentação',
 ];
 
 const conf = () => ({
@@ -86,20 +91,29 @@ async function conectar(): Promise<sheets_v4.Sheets | null> {
   return cliente;
 }
 
-const valores = (l: Linha) => [
-  new Date(l.data).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
-  l.categoria,
-  l.produto,
-  l.marca ?? '',
-  l.modelo ?? '',
-  l.quantidade,
-  Number(l.custo ?? 0).toFixed(2),
-  Number(l.venda ?? 0).toFixed(2),
-  l.fornecedor ?? '',
-  l.status,
-  l.tipo,
-  l.usuario ?? '',
-];
+const valores = (l: Linha) => {
+  const quando = new Date(l.data);
+  const emSP = (opcoes: Intl.DateTimeFormatOptions) =>
+    quando.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', ...opcoes });
+
+  return [
+    emSP({ day: '2-digit', month: '2-digit', year: 'numeric' }),
+    emSP({ hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+    l.produto,
+    l.categoria,
+    l.unidade,
+    l.tipo,
+    l.quantidade,
+    l.estoqueAnterior,
+    l.estoquePosterior,
+    l.origem ?? '',
+    l.destino ?? '',
+    l.usuario ?? '',
+    l.motivo ?? '',
+    l.observacao ?? '',
+    l.movimentoId,
+  ];
+};
 
 /** Garante que a aba existe e tem cabeçalho. */
 async function prepararAba(sheets: sheets_v4.Sheets): Promise<void> {
@@ -118,7 +132,7 @@ async function prepararAba(sheets: sheets_v4.Sheets): Promise<void> {
 
   const atual = await sheets.spreadsheets.values.get({
     spreadsheetId: c.planilha,
-    range: `${c.aba}!A1:L1`,
+    range: `${c.aba}!A1:O1`,
   });
 
   if (!atual.data.values?.length) {
@@ -147,7 +161,7 @@ export function enviarParaPlanilha(linhas: Linha | Linha[]): void {
       await prepararAba(sheets);
       await sheets.spreadsheets.values.append({
         spreadsheetId: c.planilha,
-        range: `${c.aba}!A:L`,
+        range: `${c.aba}!A:O`,
         valueInputOption: 'USER_ENTERED',
         insertDataOption: 'INSERT_ROWS',
         requestBody: { values: lista.map(valores) },
@@ -167,7 +181,7 @@ export async function reescreverPlanilha(linhas: Linha[]): Promise<number> {
   await prepararAba(sheets);
   await sheets.spreadsheets.values.clear({
     spreadsheetId: c.planilha,
-    range: `${c.aba}!A2:L`,
+    range: `${c.aba}!A2:O`,
   });
 
   if (linhas.length) {

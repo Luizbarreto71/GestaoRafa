@@ -2,9 +2,10 @@ import { Prisma } from '@prisma/client';
 import { Router } from 'express';
 import { z } from 'zod';
 import { autenticar, somenteAdmin } from './auth';
-import { contem, limpar, naoEncontrado, ordenar, paginacao, paginado, rota, validar } from './core';
+import { AppError, contem, limpar, naoEncontrado, ordenar, paginacao, paginado, rota, validar } from './core';
 import { db, registrarLog } from './db';
-import { idsComEstoqueBaixo, registrarMovimentacao } from './movimentacoes';
+import { estoqueBaixo, movimentar, saldosDoProduto } from './estoque';
+import { unidadePermitida } from './unidades';
 
 /** Cadastro, busca, edição, ajuste de estoque e exclusão de produtos. */
 
@@ -15,20 +16,44 @@ const COM_RELACOES = {
   category: true,
   supplier: true,
   photos: { select: { id: true }, orderBy: { createdAt: 'asc' } as const },
+  stock: { include: { unit: { select: { id: true, name: true, type: true } } } },
 } satisfies Prisma.ProductInclude;
 
 type ProdutoCru = Prisma.ProductGetPayload<{ include: typeof COM_RELACOES }>;
 
-/** As fotos viram URLs; a imagem em si é servida por `/api/fotos/:id`. */
-function formatar<T extends ProdutoCru>(produto: T) {
-  return limpar({ ...produto, photos: produto.photos.map((f) => `/api/fotos/${f.id}`) });
+/**
+ * Formata o produto para o frontend:
+ * - fotos viram URLs (`/api/fotos/:id`);
+ * - o estoque vira uma lista por unidade + o total.
+ *
+ * `quantity` continua existindo por comodidade das telas, mas agora é a
+ * soma das unidades — ou o saldo de uma unidade só, quando há filtro.
+ */
+function formatar<T extends ProdutoCru>(produto: T, unidadeId?: string) {
+  const porUnidade = produto.stock.map((linha) => ({
+    unitId: linha.unitId,
+    unitName: linha.unit.name,
+    quantity: linha.quantity,
+  }));
+
+  const total = porUnidade.reduce((soma, u) => soma + u.quantity, 0);
+  const daUnidade = unidadeId
+    ? (porUnidade.find((u) => u.unitId === unidadeId)?.quantity ?? 0)
+    : total;
+
+  return limpar({
+    ...produto,
+    photos: produto.photos.map((f) => `/api/fotos/${f.id}`),
+    stock: porUnidade,
+    totalQuantity: total,
+    quantity: daUnidade,
+  });
 }
 
 const ORDENAVEIS = [
   'name',
   'brand',
   'model',
-  'quantity',
   'costPrice',
   'salePrice',
   'status',
@@ -72,6 +97,8 @@ const produtoSchema = z.object({
   capacity: texto,
   lote: texto,
   quantity: z.coerce.number().int().min(0, 'A quantidade não pode ser negativa').default(0),
+  /** Onde o estoque inicial entra. */
+  unitId: z.string().uuid().optional().nullable(),
   minQuantity: z.coerce.number().int().min(0).default(1),
   costPrice: dinheiro.default(0),
   salePrice: dinheiro.default(0),
@@ -96,13 +123,17 @@ const filtrosSchema = z.object({
   brand: z.string().trim().optional(),
   model: z.string().trim().optional(),
   lowStock: z.enum(['true', 'false']).optional(),
+  unitId: z.string().uuid().optional(),
   sortBy: z.string().optional(),
   sortOrder: z.enum(['asc', 'desc']).optional(),
 });
 
 export type FiltrosProduto = z.infer<typeof filtrosSchema>;
 
-export async function filtrarProdutos(q: FiltrosProduto): Promise<Prisma.ProductWhereInput> {
+export async function filtrarProdutos(
+  q: FiltrosProduto,
+  unidadeId?: string,
+): Promise<Prisma.ProductWhereInput> {
   const cond: Prisma.ProductWhereInput[] = [];
 
   if (q.search) {
@@ -127,7 +158,13 @@ export async function filtrarProdutos(q: FiltrosProduto): Promise<Prisma.Product
   if (q.status) cond.push({ status: q.status });
   if (q.brand) cond.push({ brand: contem(q.brand) });
   if (q.model) cond.push({ model: contem(q.model) });
-  if (q.lowStock === 'true') cond.push({ id: { in: await idsComEstoqueBaixo(500) } });
+  if (q.lowStock === 'true') {
+    const baixos = await estoqueBaixo(unidadeId, 500);
+    cond.push({ id: { in: baixos.map((b) => b.productId) } });
+  }
+
+  // Quem só enxerga uma unidade não deve ver produtos que não existem lá.
+  if (unidadeId) cond.push({ stock: { some: { unitId: unidadeId } } });
 
   return cond.length ? { AND: cond } : {};
 }
@@ -200,7 +237,7 @@ rotasProdutos.get(
     ]);
 
     res.json({
-      products: produtos.map(formatar),
+      products: produtos.map((produto) => formatar(produto)),
       sales: limpar(vendas),
       customers: limpar(clientes),
     });
@@ -238,7 +275,12 @@ rotasProdutos.get(
   rota(async (req, res) => {
     const q = validar(filtrosSchema, req.query);
     const p = paginacao(q as Record<string, unknown>);
-    const where = await filtrarProdutos(q);
+    const unidade = unidadePermitida(req.usuario, q.unitId);
+    const where = await filtrarProdutos(q, unidade);
+
+    // "quantity" não é mais coluna do produto: ordenar por ela seria ordenar
+    // por algo que não existe. Nesse caso caímos no nome.
+    const ordem = q.sortBy === 'quantity' ? 'name' : q.sortBy;
 
     const [lista, total] = await Promise.all([
       db.product.findMany({
@@ -246,12 +288,12 @@ rotasProdutos.get(
         include: COM_RELACOES,
         skip: p.skip,
         take: p.take,
-        orderBy: ordenar(q.sortBy, q.sortOrder, ORDENAVEIS, { createdAt: 'desc' }) as never,
+        orderBy: ordenar(ordem, q.sortOrder, ORDENAVEIS, { createdAt: 'desc' }) as never,
       }),
       db.product.count({ where }),
     ]);
 
-    res.json(paginado(lista.map(formatar), total, p));
+    res.json(paginado(lista.map((produto) => formatar(produto, unidade)), total, p));
   }),
 );
 
@@ -265,22 +307,58 @@ rotasProdutos.get(
         movements: {
           orderBy: { createdAt: 'desc' },
           take: 20,
-          include: { user: { select: { name: true } } },
+          include: { user: { select: { name: true } }, unit: { select: { name: true } } },
         },
-        sales: { orderBy: { saleDate: 'desc' }, take: 10 },
+        sales: { orderBy: { saleDate: 'desc' }, take: 10, include: { unit: { select: { name: true } } } },
       },
     });
 
     if (!produto) throw naoEncontrado('Produto');
-    res.json(formatar(produto));
+
+    // Saldos por unidade, incluindo as que ainda não têm linha de estoque.
+    const porUnidade = await saldosDoProduto(produto.id);
+
+    // Transferências ainda não recebidas: o produto saiu da origem mas não
+    // chegou ao destino. Fica visível para ninguém achar que sumiu.
+    const emTransito = await db.stockTransfer.aggregate({
+      where: { productId: produto.id, status: { in: ['PENDENTE', 'EM_TRANSITO'] } },
+      _sum: { quantity: true },
+    });
+
+    const disponivel = porUnidade.reduce((soma, u) => soma + u.quantity, 0);
+    const transito = emTransito._sum.quantity ?? 0;
+
+    res.json({
+      ...formatar(produto),
+      stock: porUnidade,
+      inTransit: transito,
+      totalAvailable: disponivel,
+      totalPhysical: disponivel + transito,
+    });
   }),
 );
 
 rotasProdutos.post(
   '/',
   rota(async (req, res) => {
-    const { photos, ...dados } = validar(produtoSchema, req.body);
+    const { photos, quantity, unitId, ...dados } = validar(produtoSchema, req.body);
     const { novas } = separarFotos(photos ?? []);
+
+    // A quantidade informada no cadastro entra como estoque de uma unidade.
+    // Sem unidade não dá para saber onde o produto está, então usamos a do
+    // usuário e, no caso do administrador, a Matriz.
+    let unidadeDestino = unitId ?? req.usuario?.unidadeId ?? null;
+    if (!unidadeDestino) {
+      const matriz = await db.unit.findFirst({
+        where: { active: true },
+        orderBy: [{ type: 'asc' }, { name: 'asc' }],
+      });
+      unidadeDestino = matriz?.id ?? null;
+    }
+
+    if (quantity > 0 && !unidadeDestino) {
+      throw new AppError('Cadastre uma unidade antes de lançar estoque.');
+    }
 
     const produto = await db.product.create({
       data: {
@@ -291,27 +369,39 @@ rotasProdutos.post(
       include: COM_RELACOES,
     });
 
-    if (produto.quantity > 0) {
-      await registrarMovimentacao({
+    if (quantity > 0 && unidadeDestino) {
+      await movimentar({
+        produtoId: produto.id,
+        produtoNome: produto.name,
+        unidadeId: unidadeDestino,
         tipo: 'ENTRADA',
-        quantidade: produto.quantity,
-        saldo: produto.quantity,
-        motivo: 'Cadastro de produto',
-        produto,
+        motivo: 'CADASTRO',
+        quantidade: quantity,
+        observacao: 'Estoque inicial do cadastro',
         usuarioId: req.usuario?.id,
         usuarioNome: req.usuario?.nome,
       });
     }
 
     await registrarLog({ acao: 'CREATE', entidade: 'Product', id: produto.id, req });
-    res.status(201).json(formatar(produto));
+
+    const completo = await db.product.findUnique({
+      where: { id: produto.id },
+      include: COM_RELACOES,
+    });
+    res.status(201).json(formatar(completo!));
   }),
 );
 
 rotasProdutos.put(
   '/:id',
   rota(async (req, res) => {
-    const { photos, reason, ...dados } = validar(alterarSchema, req.body);
+    // `quantity` é ignorada de propósito: mexer no estoque é papel da tela
+    // de Movimentação, que registra unidade, motivo e responsável.
+    const { photos, reason, quantity: _ignorada, unitId: _tambem, ...dados } = validar(
+      alterarSchema,
+      req.body,
+    );
 
     const atual = await db.product.findUnique({ where: { id: req.params.id }, include: COM_RELACOES });
     if (!atual) throw naoEncontrado('Produto');
@@ -342,65 +432,52 @@ rotasProdutos.put(
       });
     });
 
-    const diferenca = produto.quantity - atual.quantity;
-
-    await registrarMovimentacao({
-      tipo: diferenca > 0 ? 'ENTRADA' : diferenca < 0 ? 'SAIDA' : 'AJUSTE',
-      quantidade: Math.abs(diferenca),
-      saldo: produto.quantity,
-      motivo: reason ?? (diferenca ? 'Alteração manual do produto' : 'Alteração de cadastro'),
-      produto,
-      usuarioId: req.usuario?.id,
-      usuarioNome: req.usuario?.nome,
+    await registrarLog({
+      acao: 'UPDATE',
+      entidade: 'Product',
+      id: produto.id,
+      alteracoes: { motivo: reason },
+      req,
     });
-
-    await registrarLog({ acao: 'UPDATE', entidade: 'Product', id: produto.id, req });
     res.json(formatar(produto));
   }),
 );
 
-/** Entrada ou baixa avulsa, sempre com motivo. */
+/** Entrada ou baixa avulsa numa unidade, sempre com motivo. */
 rotasProdutos.patch(
   '/:id/stock',
   rota(async (req, res) => {
-    const { quantity, reason } = validar(
+    const { quantity, reason, unitId } = validar(
       z.object({
         quantity: z.coerce.number().int().refine((v) => v !== 0, 'Informe uma quantidade diferente de zero'),
         reason: z.string().trim().min(3, 'Informe o motivo do ajuste').max(200),
+        unitId: z.string().uuid('Selecione a unidade').optional(),
       }),
       req.body,
     );
 
-    const atual = await db.product.findUnique({ where: { id: req.params.id } });
-    if (!atual) throw naoEncontrado('Produto');
+    const unidade = unitId ?? req.usuario?.unidadeId;
+    if (!unidade) throw new AppError('Selecione a unidade onde o estoque será ajustado.');
 
-    const novaQuantidade = Math.max(0, atual.quantity + quantity);
+    const produto = await db.product.findUnique({ where: { id: req.params.id } });
+    if (!produto) throw naoEncontrado('Produto');
 
-    const produto = await db.product.update({
-      where: { id: atual.id },
-      data: { quantity: novaQuantidade },
-      include: COM_RELACOES,
-    });
-
-    await registrarMovimentacao({
+    await movimentar({
+      produtoId: produto.id,
+      produtoNome: produto.name,
+      unidadeId: unidade,
       tipo: quantity > 0 ? 'ENTRADA' : 'SAIDA',
+      motivo: 'AJUSTE',
       quantidade: Math.abs(quantity),
-      saldo: novaQuantidade,
-      motivo: reason,
-      produto,
+      observacao: reason,
       usuarioId: req.usuario?.id,
       usuarioNome: req.usuario?.nome,
     });
 
-    await registrarLog({
-      acao: 'ADJUST_STOCK',
-      entidade: 'Product',
-      id: produto.id,
-      alteracoes: { de: atual.quantity, para: novaQuantidade, motivo: reason },
-      req,
-    });
+    await registrarLog({ acao: 'ADJUST_STOCK', entidade: 'Product', id: produto.id, req });
 
-    res.json(formatar(produto));
+    const completo = await db.product.findUnique({ where: { id: produto.id }, include: COM_RELACOES });
+    res.json(formatar(completo!));
   }),
 );
 
@@ -411,25 +488,30 @@ rotasProdutos.delete(
     const produto = await db.product.findUnique({ where: { id: req.params.id }, include: COM_RELACOES });
     if (!produto) throw naoEncontrado('Produto');
 
-    // A movimentação vem antes: guarda o histórico mesmo sem o produto.
-    await registrarMovimentacao({
-      tipo: 'EXCLUSAO',
-      quantidade: produto.quantity,
-      saldo: 0,
-      motivo: (req.query.reason as string) || 'Produto excluído do sistema',
-      produto,
-      usuarioId: req.usuario?.id,
-      usuarioNome: req.usuario?.nome,
-    });
+    const motivo = (req.query.reason as string) || 'Produto excluído do sistema';
+
+    // Zera o estoque de cada unidade com uma saída registrada — assim o
+    // histórico mostra de onde o produto saiu, e não só que ele sumiu.
+    for (const linha of produto.stock) {
+      if (linha.quantity <= 0) continue;
+      await movimentar({
+        produtoId: produto.id,
+        produtoNome: produto.name,
+        unidadeId: linha.unitId,
+        tipo: 'SAIDA',
+        motivo: 'EXCLUSAO',
+        quantidade: linha.quantity,
+        observacao: motivo,
+        usuarioId: req.usuario?.id,
+        usuarioNome: req.usuario?.nome,
+      });
+    }
 
     // Com vendas registradas, arquiva em vez de excluir: o histórico
     // financeiro precisa continuar batendo.
     const vendas = await db.sale.count({ where: { productId: produto.id } });
     if (vendas > 0) {
-      await db.product.update({
-        where: { id: produto.id },
-        data: { quantity: 0, status: 'VENDIDO' },
-      });
+      await db.product.update({ where: { id: produto.id }, data: { status: 'VENDIDO' } });
       await registrarLog({ acao: 'ARCHIVE', entidade: 'Product', id: produto.id, req });
       res.json({
         message: 'Produto possui vendas registradas: estoque zerado e arquivado como vendido.',
@@ -438,7 +520,7 @@ rotasProdutos.delete(
       return;
     }
 
-    // As fotos saem junto (onDelete: Cascade).
+    // As fotos e as linhas de estoque saem junto (onDelete: Cascade).
     await db.product.delete({ where: { id: produto.id } });
     await registrarLog({ acao: 'DELETE', entidade: 'Product', id: produto.id, req });
 

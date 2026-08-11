@@ -7,11 +7,12 @@ import { Pagination } from '@/components/ui/Pagination';
 import { StatCard } from '@/components/ui/StatCard';
 import { useToast } from '@/contexts/ToastContext';
 import { useCategories, useMovements } from '@/hooks/queries';
+import { useUnit } from '@/contexts/UnitContext';
 import { useDebounce } from '@/hooks/useDebounce';
 import { downloadFile } from '@/lib/api';
-import { formatDateTime, MOVEMENT_LABEL } from '@/lib/format';
+import { formatDateTime, MOVEMENT_LABEL, REASON_LABEL } from '@/lib/format';
 import type { Movement, MovementType } from '@/types';
-import { ArrowDownLeft, ArrowUpRight, Download, Search, Settings2, Trash2, X } from 'lucide-react';
+import { ArrowDownLeft, ArrowLeftRight, ArrowUpRight, Download, Search, Settings2, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 
 const TYPE_OPTIONS = (Object.keys(MOVEMENT_LABEL) as MovementType[]).map((value) => ({
@@ -25,6 +26,7 @@ export default function MovementsPage() {
   const [pageSize, setPageSize] = useState(20);
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [filters, setFilters] = useState({ type: '', categoryId: '', startDate: '', endDate: '' });
+  const { unidadeId } = useUnit();
 
   const toast = useToast();
   const debouncedSearch = useDebounce(search, 350);
@@ -36,9 +38,10 @@ export default function MovementsPage() {
       pageSize,
       search: debouncedSearch,
       sortOrder,
+      ...(unidadeId ? { unitId: unidadeId } : {}),
       ...Object.fromEntries(Object.entries(filters).filter(([, value]) => value)),
     }),
-    [page, pageSize, debouncedSearch, sortOrder, filters],
+    [page, pageSize, debouncedSearch, sortOrder, filters, unidadeId],
   );
 
   const { data, isLoading } = useMovements(query);
@@ -51,7 +54,7 @@ export default function MovementsPage() {
 
   async function exportMovements(format: 'xlsx' | 'pdf' | 'csv') {
     try {
-      await downloadFile('/reports/movements', { format, ...filters }, `movimentacoes.${format}`);
+      await downloadFile('/reports/movements', { format, ...filters, ...(unidadeId ? { unitId: unidadeId } : {}) }, `movimentacoes.${format}`);
       toast.success('Relatório gerado');
     } catch {
       toast.error('Não foi possível exportar');
@@ -109,19 +112,50 @@ export default function MovementsPage() {
       ),
     },
     {
+      key: 'unit',
+      header: 'Unidade',
+      render: (movement) => (
+        <span className="text-sm font-medium text-navy-900 dark:text-slate-100">
+          {movement.unit?.name ?? '—'}
+        </span>
+      ),
+    },
+    {
+      key: 'rota',
+      header: 'Origem → Destino',
+      hideOnMobile: true,
+      render: (movement) =>
+        movement.originUnitName || movement.destinationUnitName ? (
+          <span className="whitespace-nowrap text-sm text-slate-600 dark:text-slate-400">
+            {movement.originUnitName ?? '—'} → {movement.destinationUnitName ?? '—'}
+          </span>
+        ) : (
+          <span className="text-sm text-slate-400">—</span>
+        ),
+    },
+    {
       key: 'balance',
       header: 'Saldo',
       align: 'center',
       hideOnMobile: true,
       render: (movement) => (
-        <span className="text-sm text-slate-600 dark:text-slate-400">{movement.balanceAfter ?? '—'}</span>
+        <span className="whitespace-nowrap text-sm text-slate-600 dark:text-slate-400">
+          {movement.previousQuantity ?? '—'} → {movement.newQuantity ?? '—'}
+        </span>
       ),
     },
     {
       key: 'reason',
       header: 'Motivo',
       render: (movement) => (
-        <span className="text-sm text-slate-600 dark:text-slate-400">{movement.reason ?? '—'}</span>
+        <div className="min-w-[120px]">
+          <p className="text-sm text-navy-900 dark:text-slate-200">
+            {REASON_LABEL[movement.reason] ?? movement.reason}
+          </p>
+          {movement.notes && (
+            <p className="truncate text-xs text-slate-500 dark:text-slate-400">{movement.notes}</p>
+          )}
+        </div>
       ),
     },
     {
@@ -141,7 +175,7 @@ export default function MovementsPage() {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-extrabold tracking-tight text-navy-900 dark:text-slate-50">
-            Movimentações
+            📋 Histórico de Estoque
           </h1>
           <p className="mt-0.5 text-sm text-slate-500 dark:text-slate-400">
             Histórico completo de entradas, saídas, ajustes e exclusões
@@ -194,11 +228,11 @@ export default function MovementsPage() {
           loading={isLoading}
         />
         <StatCard
-          label="Exclusões"
-          value={summary.EXCLUSAO?.count ?? 0}
-          hint="Produtos removidos"
-          icon={Trash2}
-          tone="danger"
+          label="Transferências"
+          value={summary.TRANSFERENCIA?.quantity ?? 0}
+          hint={`${(summary.TRANSFERENCIA?.count ?? 0) / 2} entre unidades`}
+          icon={ArrowLeftRight}
+          tone="purple"
           loading={isLoading}
         />
       </div>
@@ -275,7 +309,9 @@ export default function MovementsPage() {
                 </p>
                 <MovementBadge type={movement.type} />
               </div>
-              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{movement.reason ?? '—'}</p>
+              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                {movement.unit?.name} · {REASON_LABEL[movement.reason] ?? movement.reason}
+              </p>
               <div className="mt-2 flex items-center justify-between text-xs">
                 <span className="text-slate-500 dark:text-slate-400">
                   {formatDateTime(movement.createdAt)} · {movement.user?.name ?? '—'}

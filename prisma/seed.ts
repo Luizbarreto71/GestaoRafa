@@ -17,6 +17,12 @@ const db = new PrismaClient();
  */
 const criarExemplos = process.argv.includes('--exemplos');
 
+/// As duas unidades da loja. Sem elas não há onde guardar estoque.
+const UNIDADES = [
+  { name: 'Matriz', type: 'MATRIZ' },
+  { name: 'Sede', type: 'FILIAL' },
+];
+
 const CATEGORIAS = [
   { name: 'Celulares', slug: 'celulares', color: '#3B82F6' },
   { name: 'TG (Tirzepatida)', slug: 'tg', color: '#8B5CF6' },
@@ -27,6 +33,15 @@ const CATEGORIAS = [
 
 async function main() {
   console.log('🌱 Preparando o banco...');
+
+  for (const unidade of UNIDADES) {
+    await db.unit.upsert({
+      where: { name: unidade.name },
+      update: { type: unidade.type },
+      create: unidade,
+    });
+  }
+  console.log(`✅ ${UNIDADES.length} unidades: ${UNIDADES.map((u) => u.name).join(', ')}`);
 
   for (const categoria of CATEGORIAS) {
     const padrao = camposParaJson(PADROES[categoria.slug] ?? PADRAO_GENERICO);
@@ -67,6 +82,8 @@ async function main() {
   }
 
   const admin = await db.user.findFirst({ where: { role: 'ADMIN' } });
+  const matriz = await db.unit.findUniqueOrThrow({ where: { name: 'Matriz' } });
+  const sede = await db.unit.findUniqueOrThrow({ where: { name: 'Sede' } });
 
   const fornecedores = await Promise.all(
     [
@@ -79,107 +96,47 @@ async function main() {
   const categorias = await db.category.findMany();
   const id = (slug: string) => categorias.find((c) => c.slug === slug)!.id;
 
+  /** Estoque dividido entre as duas unidades, para dar o que olhar. */
   const produtos = [
-    {
-      name: 'iPhone 15 Pro Max',
-      brand: 'Apple',
-      model: '15 Pro Max',
-      color: 'Titânio Natural',
-      capacity: '256GB',
-      quantity: 3,
-      minQuantity: 2,
-      costPrice: 6200,
-      salePrice: 7899,
-      imei: '356938035643809',
-      categoryId: id('celulares'),
-      supplierId: fornecedores[0].id,
-    },
-    {
-      name: 'Samsung Galaxy S24 Ultra',
-      brand: 'Samsung',
-      model: 'S24 Ultra',
-      color: 'Preto',
-      capacity: '512GB',
-      quantity: 2,
-      minQuantity: 2,
-      costPrice: 5100,
-      salePrice: 6499,
-      imei: '351756051523999',
-      categoryId: id('celulares'),
-      supplierId: fornecedores[1].id,
-    },
-    {
-      name: 'Tirzepatida 5mg',
-      brand: 'Mounjaro',
-      model: '5mg',
-      capacity: '4 canetas',
-      quantity: 12,
-      minQuantity: 5,
-      costPrice: 890,
-      salePrice: 1450,
-      categoryId: id('tg'),
-      supplierId: fornecedores[2].id,
-    },
-    {
-      name: 'JBL Boombox 3',
-      brand: 'JBL',
-      model: 'Boombox 3',
-      color: 'Preto',
-      quantity: 1,
-      minQuantity: 2,
-      costPrice: 1900,
-      salePrice: 2799,
-      serialNumber: 'JBLBB3-99201',
-      categoryId: id('jbl'),
-      supplierId: fornecedores[0].id,
-    },
-    {
-      name: 'Notebook Dell Inspiron 15',
-      brand: 'Dell',
-      model: 'Inspiron 15 3520',
-      color: 'Prata',
-      capacity: '512GB SSD / 16GB RAM',
-      quantity: 4,
-      minQuantity: 2,
-      costPrice: 2700,
-      salePrice: 3699,
-      serialNumber: 'DL15-2024-4412',
-      categoryId: id('notebooks'),
-      supplierId: fornecedores[0].id,
-    },
-    {
-      name: 'PlayStation 5 Slim',
-      brand: 'Sony',
-      model: 'PS5 Slim',
-      color: 'Branco',
-      capacity: '1TB',
-      quantity: 2,
-      minQuantity: 1,
-      costPrice: 3100,
-      salePrice: 3999,
-      serialNumber: 'PS5S-77120',
-      categoryId: id('video-games'),
-      supplierId: fornecedores[1].id,
-    },
+    { dados: { name: 'iPhone 15 Pro Max', brand: 'Apple', model: '15 Pro Max', color: 'Titânio Natural', capacity: '256GB', minQuantity: 2, costPrice: 6200, salePrice: 7899, imei: '356938035643809', categoryId: id('celulares'), supplierId: fornecedores[0].id }, matriz: 5, sede: 2 },
+    { dados: { name: 'Samsung Galaxy S24 Ultra', brand: 'Samsung', model: 'S24 Ultra', color: 'Preto', capacity: '512GB', minQuantity: 2, costPrice: 5100, salePrice: 6499, imei: '351756051523999', categoryId: id('celulares'), supplierId: fornecedores[1].id }, matriz: 2, sede: 1 },
+    { dados: { name: 'Tirzepatida 5mg', brand: 'Mounjaro', model: '5mg', lote: 'LT-2026-04', minQuantity: 5, costPrice: 890, salePrice: 1450, categoryId: id('tg'), supplierId: fornecedores[2].id }, matriz: 8, sede: 4 },
+    { dados: { name: 'JBL Boombox 3', brand: 'JBL', model: 'Boombox 3', color: 'Preto', minQuantity: 2, costPrice: 1900, salePrice: 2799, serialNumber: 'JBLBB3-99201', categoryId: id('jbl'), supplierId: fornecedores[0].id }, matriz: 1, sede: 0 },
+    { dados: { name: 'Notebook Dell Inspiron 15', brand: 'Dell', model: 'Inspiron 15 3520', capacity: '512GB SSD / 16GB RAM', minQuantity: 2, costPrice: 2700, salePrice: 3699, serialNumber: 'DL15-2024-4412', categoryId: id('notebooks'), supplierId: fornecedores[0].id }, matriz: 3, sede: 1 },
+    { dados: { name: 'PlayStation 5 Slim', brand: 'Sony', model: 'PS5 Slim', color: 'Branco', capacity: '1TB', minQuantity: 1, costPrice: 3100, salePrice: 3999, serialNumber: 'PS5S-77120', categoryId: id('video-games'), supplierId: fornecedores[1].id }, matriz: 2, sede: 0 },
   ];
 
-  for (const dados of produtos) {
+  for (const { dados, matriz: naMatriz, sede: naSede } of produtos) {
     const produto = await db.product.create({ data: dados });
-    await db.movement.create({
-      data: {
-        type: 'ENTRADA',
-        quantity: produto.quantity,
-        balanceAfter: produto.quantity,
-        reason: 'Carga inicial de estoque',
-        productId: produto.id,
-        productName: produto.name,
-        userId: admin?.id ?? null,
-      },
-    });
-  }
-  console.log(`✅ ${produtos.length} produtos de exemplo`);
 
-  // Uma venda para o dashboard não nascer vazio.
+    for (const [unidade, quantidade] of [
+      [matriz, naMatriz],
+      [sede, naSede],
+    ] as const) {
+      if (quantidade <= 0) continue;
+
+      await db.stock.create({
+        data: { productId: produto.id, unitId: unidade.id, quantity: quantidade },
+      });
+      await db.stockMovement.create({
+        data: {
+          type: 'ENTRADA',
+          reason: 'CADASTRO',
+          quantity: quantidade,
+          previousQuantity: 0,
+          newQuantity: quantidade,
+          notes: 'Carga inicial de estoque',
+          productId: produto.id,
+          productName: produto.name,
+          unitId: unidade.id,
+          userId: admin?.id ?? null,
+        },
+      });
+    }
+  }
+  console.log(`✅ ${produtos.length} produtos com estoque na Matriz e na Sede`);
+
+  // Uma venda na Sede, para o dashboard não nascer vazio.
   const cliente = await db.customer.create({
     data: { name: 'Maria Silva', phone: '(11) 98123-4567' },
   });
@@ -189,6 +146,7 @@ async function main() {
     const venda = await db.sale.create({
       data: {
         productId: iphone.id,
+        unitId: sede.id,
         customerId: cliente.id,
         customerName: cliente.name,
         customerPhone: cliente.phone,
@@ -202,24 +160,27 @@ async function main() {
       },
     });
 
-    const atualizado = await db.product.update({
-      where: { id: iphone.id },
+    const linha = await db.stock.update({
+      where: { productId_unitId: { productId: iphone.id, unitId: sede.id } },
       data: { quantity: { decrement: 1 } },
     });
 
-    await db.movement.create({
+    await db.stockMovement.create({
       data: {
         type: 'SAIDA',
+        reason: 'VENDA',
         quantity: 1,
-        balanceAfter: atualizado.quantity,
-        reason: 'Venda para Maria Silva',
+        previousQuantity: linha.quantity + 1,
+        newQuantity: linha.quantity,
+        notes: 'Venda para Maria Silva',
         productId: iphone.id,
         productName: iphone.name,
+        unitId: sede.id,
         saleId: venda.id,
         userId: admin?.id ?? null,
       },
     });
-    console.log('✅ 1 venda de demonstração');
+    console.log('✅ 1 venda de demonstração (na Sede)');
   }
 
   console.log('🎉 Pronto!');

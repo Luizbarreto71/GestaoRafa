@@ -3,6 +3,7 @@ import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { Input, Select } from '@/components/ui/Field';
 import { useToast } from '@/contexts/ToastContext';
 import { useCategories, useSuppliers } from '@/hooks/queries';
+import { useUnit } from '@/contexts/UnitContext';
 import { downloadFile } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import { PAYMENT_OPTIONS, STATUS_OPTIONS, toInputDate } from '@/lib/format';
@@ -112,6 +113,7 @@ export default function ReportsPage() {
   const [downloading, setDownloading] = useState<string | null>(null);
 
   const toast = useToast();
+  const { unidadeId, rotulo } = useUnit();
   const { data: categories } = useCategories();
   const { data: suppliers } = useSuppliers({ all: 'true' });
 
@@ -121,6 +123,8 @@ export default function ReportsPage() {
 
     // Envia só os filtros que o relatório aceita.
     const params: Record<string, string> = { format };
+    // Os relatórios seguem a unidade escolhida lá em cima.
+    if (unidadeId) params.unitId = unidadeId;
     if (report.fields.includes('period')) {
       if (filters.startDate) params.startDate = filters.startDate;
       if (filters.endDate) params.endDate = filters.endDate;
@@ -153,7 +157,7 @@ export default function ReportsPage() {
       <div>
         <h1 className="text-2xl font-extrabold tracking-tight text-navy-900 dark:text-slate-50">Relatórios</h1>
         <p className="mt-0.5 text-sm text-slate-500 dark:text-slate-400">
-          Exporte em PDF, Excel ou CSV com os filtros aplicados abaixo.
+          Exporte em PDF, Excel ou CSV. Os dados são de <strong>{rotulo}</strong>.
         </p>
       </div>
 

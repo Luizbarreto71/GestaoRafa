@@ -12,6 +12,8 @@ import type {
   Sale,
   SalesPage,
   Supplier,
+  Transfer,
+  Unit,
   User,
 } from '@/types';
 
@@ -29,6 +31,7 @@ const clean = (params: object): Record<string, unknown> =>
 // ------------------------------------------------------------------ Produtos
 
 export interface ProductFilters {
+  unitId?: string;
   page?: number;
   pageSize?: number;
   search?: string;
@@ -49,7 +52,7 @@ export const productService = {
   create: (data: Record<string, unknown>) => api.post<Product>('/products', data).then((r) => r.data),
   update: (id: string, data: Record<string, unknown>) =>
     api.put<Product>(`/products/${id}`, data).then((r) => r.data),
-  adjustStock: (id: string, data: { quantity: number; reason: string }) =>
+  adjustStock: (id: string, data: { quantity: number; reason: string; unitId?: string }) =>
     api.patch<Product>(`/products/${id}/stock`, data).then((r) => r.data),
   remove: (id: string, reason?: string) =>
     api.delete<{ message: string; archived: boolean }>(`/products/${id}`, { params: clean({ reason }) }).then((r) => r.data),
@@ -61,6 +64,7 @@ export const productService = {
 // -------------------------------------------------------------------- Vendas
 
 export interface SaleFilters {
+  unitId?: string;
   page?: number;
   pageSize?: number;
   search?: string;
@@ -83,6 +87,8 @@ export const saleService = {
 // ------------------------------------------------------------- Movimentações
 
 export interface MovementFilters {
+  unitId?: string;
+  reason?: string;
   page?: number;
   pageSize?: number;
   search?: string;
@@ -98,13 +104,42 @@ export interface MovementFilters {
 export const movementService = {
   list: (filters: MovementFilters) =>
     api.get<MovementsPage>('/movements', { params: clean(filters) }).then((r) => r.data),
+
+  entrada: (data: Record<string, unknown>) =>
+    api.post<{ message: string; antes: number; depois: number }>('/movements/entrada', data).then((r) => r.data),
+
+  saida: (data: Record<string, unknown>) =>
+    api.post<{ message: string; antes: number; depois: number }>('/movements/saida', data).then((r) => r.data),
+
+  transferir: (data: Record<string, unknown>) =>
+    api.post<{ message: string }>('/movements/transferencia', data).then((r) => r.data),
+
+  ajustar: (data: Record<string, unknown>) =>
+    api.post<{ message: string }>('/movements/ajuste', data).then((r) => r.data),
+
+  transferencias: (params: { page?: number; status?: string; unitId?: string } = {}) =>
+    api.get<Paginated<Transfer>>('/movements/transferencias', { params: clean(params) }).then((r) => r.data),
+
+  cancelarTransferencia: (id: string) =>
+    api.post<{ message: string }>(`/movements/transferencias/${id}/cancelar`).then((r) => r.data),
+};
+
+/** Unidades (Matriz, Sede…). */
+export const unitService = {
+  list: () => api.get<Unit[]>('/units').then((r) => r.data),
+  create: (data: Record<string, unknown>) => api.post<Unit>('/units', data).then((r) => r.data),
+  update: (id: string, data: Record<string, unknown>) => api.put<Unit>(`/units/${id}`, data).then((r) => r.data),
+  remove: (id: string) =>
+    api.delete<{ message: string; deactivated: boolean }>(`/units/${id}`).then((r) => r.data),
 };
 
 // ----------------------------------------------------------------- Dashboard
 
 export const dashboardService = {
-  overview: (days = 14) => api.get<DashboardData>('/dashboard', { params: { days } }).then((r) => r.data),
-  alerts: () => api.get<AlertsData>('/dashboard/alerts').then((r) => r.data),
+  overview: (days = 14, unitId?: string) =>
+    api.get<DashboardData>('/dashboard', { params: clean({ days, unitId }) }).then((r) => r.data),
+  alerts: (unitId?: string) =>
+    api.get<AlertsData>('/dashboard/alerts', { params: clean({ unitId }) }).then((r) => r.data),
 };
 
 // ----------------------------------------------------------------- Cadastros

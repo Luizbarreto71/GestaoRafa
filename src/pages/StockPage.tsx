@@ -1,6 +1,6 @@
 import { ProductFormModal } from '@/components/products/ProductFormModal';
 import { SaleModal } from '@/components/sales/SaleModal';
-import { StatusBadge, StockBadge } from '@/components/ui/Badge';
+import { Badge, StatusBadge, StockBadge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
@@ -38,6 +38,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { useUnit } from '@/contexts/UnitContext';
 
 export default function StockPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -63,10 +64,11 @@ export default function StockPage() {
   const [saleProduct, setSaleProduct] = useState<Product | null>(null);
   const [deleting, setDeleting] = useState<Product | null>(null);
   const [adjusting, setAdjusting] = useState<Product | null>(null);
-  const [adjustForm, setAdjustForm] = useState({ quantity: '1', reason: '' });
+  const [adjustForm, setAdjustForm] = useState({ quantity: '1', reason: '', unitId: '' });
 
   const toast = useToast();
   const { isAdmin } = useAuth();
+  const { unidadeId, unidades } = useUnit();
   const debouncedSearch = useDebounce(search, 350);
 
   const { data: categories } = useCategories();
@@ -80,9 +82,10 @@ export default function StockPage() {
       search: debouncedSearch,
       sortBy,
       sortOrder,
+      ...(unidadeId ? { unitId: unidadeId } : {}),
       ...Object.fromEntries(Object.entries(filters).filter(([, value]) => value)),
     }),
-    [page, pageSize, debouncedSearch, sortBy, sortOrder, filters],
+    [page, pageSize, debouncedSearch, sortBy, sortOrder, filters, unidadeId],
   );
 
   const { data, isLoading, isFetching } = useProducts(query);
@@ -148,10 +151,11 @@ export default function StockPage() {
         id: adjusting.id,
         quantity,
         reason: adjustForm.reason.trim(),
+        unitId: adjustForm.unitId,
       });
       toast.success('Estoque ajustado', `${adjusting.name}: ${quantity > 0 ? '+' : ''}${quantity} un.`);
       setAdjusting(null);
-      setAdjustForm({ quantity: '1', reason: '' });
+      setAdjustForm({ quantity: '1', reason: '', unitId: '' });
     } catch (error) {
       toast.error('Falha no ajuste', error instanceof Error ? error.message : undefined);
     }
@@ -159,7 +163,11 @@ export default function StockPage() {
 
   async function exportStock(format: 'xlsx' | 'pdf' | 'csv') {
     try {
-      await downloadFile('/reports/stock', { format, ...filters }, `estoque.${format}`);
+      await downloadFile(
+        '/reports/stock',
+        { format, ...filters, ...(unidadeId ? { unitId: unidadeId } : {}) },
+        `estoque.${format}`,
+      );
       toast.success('Relatório gerado');
     } catch {
       toast.error('Não foi possível exportar o relatório');
@@ -223,10 +231,24 @@ export default function StockPage() {
     },
     {
       key: 'quantity',
-      header: 'Qtd',
-      sortKey: 'quantity',
+      header: unidadeId ? 'Estoque' : 'Estoque por unidade',
       align: 'center',
-      render: (product) => <StockBadge quantity={product.quantity} minQuantity={product.minQuantity} />,
+      render: (product) =>
+        unidadeId ? (
+          <StockBadge quantity={product.quantity} minQuantity={product.minQuantity} />
+        ) : (
+          <div className="flex flex-wrap justify-center gap-1">
+            {product.stock?.length ? (
+              product.stock.map((s) => (
+                <Badge key={s.unitId} tone={s.quantity > product.minQuantity ? 'success' : s.quantity > 0 ? 'warning' : 'danger'}>
+                  {s.unitName}: {s.quantity}
+                </Badge>
+              ))
+            ) : (
+              <Badge tone="danger">Sem estoque</Badge>
+            )}
+          </div>
+        ),
     },
     {
       key: 'costPrice',
@@ -286,7 +308,11 @@ export default function StockPage() {
             variant="ghost"
             onClick={() => {
               setAdjusting(product);
-              setAdjustForm({ quantity: '1', reason: '' });
+              setAdjustForm({
+                quantity: '1',
+                reason: '',
+                unitId: unidadeId ?? product.stock?.[0]?.unitId ?? '',
+              });
             }}
             title="Ajustar estoque"
           >
@@ -327,7 +353,8 @@ export default function StockPage() {
         <div>
           <h1 className="text-2xl font-extrabold tracking-tight text-navy-900 dark:text-slate-50">Estoque</h1>
           <p className="mt-0.5 text-sm text-slate-500 dark:text-slate-400">
-            {data?.meta.total ?? 0} produto(s) cadastrado(s)
+            {data?.meta.total ?? 0} produto(s)
+            {unidadeId ? ` na ${unidades.find((u) => u.id === unidadeId)?.name ?? 'unidade'}` : ' no total'}
           </p>
         </div>
 
@@ -483,8 +510,13 @@ export default function StockPage() {
                 </div>
 
                 <p className="truncate text-xs text-slate-500 dark:text-slate-400">
-                  {[product.category?.name, product.model, product.supplier?.name].filter(Boolean).join(' · ')}
+                  {[product.category?.name, product.model].filter(Boolean).join(' · ')}
                 </p>
+                {!unidadeId && product.stock?.length > 0 && (
+                  <p className="truncate text-xs text-slate-500 dark:text-slate-400">
+                    {product.stock.map((s) => `${s.unitName}: ${s.quantity}`).join(' · ')}
+                  </p>
+                )}
 
                 <div className="mt-2 flex items-center justify-between gap-2">
                   <span className="text-sm font-bold text-navy-900 dark:text-slate-100">
@@ -552,7 +584,7 @@ export default function StockPage() {
         open={Boolean(adjusting)}
         onClose={() => setAdjusting(null)}
         title="Ajustar estoque"
-        description={adjusting ? `${adjusting.name} — atual: ${adjusting.quantity} un.` : undefined}
+        description={adjusting?.name}
         size="sm"
         footer={
           <>
@@ -584,6 +616,18 @@ export default function StockPage() {
             ))}
           </div>
 
+          <Select
+            label="Unidade"
+            required
+            value={adjustForm.unitId}
+            onChange={(event) => setAdjustForm((f) => ({ ...f, unitId: event.target.value }))}
+            options={unidades.map((u) => ({
+              value: u.id,
+              label: `${u.name} — ${adjusting?.stock?.find((s) => s.unitId === u.id)?.quantity ?? 0} em estoque`,
+            }))}
+            placeholder="Selecione…"
+          />
+
           <Input
             label="Quantidade (use valor negativo para dar baixa)"
             type="number"
@@ -601,9 +645,14 @@ export default function StockPage() {
 
           {adjusting && (
             <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600 dark:bg-navy-800 dark:text-slate-400">
-              Estoque após o ajuste:{' '}
+              Saldo na unidade após o ajuste:{' '}
               <strong className="text-navy-900 dark:text-slate-200">
-                {Math.max(0, adjusting.quantity + (Number(adjustForm.quantity) || 0))} un.
+                {Math.max(
+                  0,
+                  (adjusting.stock?.find((s) => s.unitId === adjustForm.unitId)?.quantity ?? 0) +
+                    (Number(adjustForm.quantity) || 0),
+                )}{' '}
+                un.
               </strong>
             </p>
           )}

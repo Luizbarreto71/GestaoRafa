@@ -1,6 +1,6 @@
 import { cn } from '@/lib/cn';
 import { MOVEMENT_LABEL, PAYMENT_LABEL, STATUS_LABEL } from '@/lib/format';
-import type { MovementType, PaymentMethod, ProductStatus } from '@/types';
+import type { MovementType, PaymentMethod, ProductStatus, TransferStatus } from '@/types';
 import type { ReactNode } from 'react';
 
 type Tone = 'neutral' | 'success' | 'danger' | 'warning' | 'info' | 'purple';
@@ -49,9 +49,32 @@ export function StatusBadge({ status }: { status: ProductStatus }) {
 const MOVEMENT_TONE: Record<MovementType, Tone> = {
   ENTRADA: 'success',
   SAIDA: 'info',
+  TRANSFERENCIA: 'purple',
   AJUSTE: 'warning',
-  EXCLUSAO: 'danger',
 };
+
+const TRANSFER_TONE: Record<TransferStatus, Tone> = {
+  PENDENTE: 'warning',
+  EM_TRANSITO: 'info',
+  RECEBIDA: 'success',
+  CANCELADA: 'danger',
+};
+
+const TRANSFER_LABEL: Record<TransferStatus, string> = {
+  PENDENTE: 'Pendente',
+  EM_TRANSITO: 'Em trânsito',
+  RECEBIDA: 'Recebida',
+  CANCELADA: 'Cancelada',
+};
+
+export function TransferBadge({ status }: { status: TransferStatus }) {
+  return <Badge tone={TRANSFER_TONE[status]}>{TRANSFER_LABEL[status]}</Badge>;
+}
+
+/** Nome da unidade, com um ponto colorido para diferenciar de relance. */
+export function UnitBadge({ name, tone = 'neutral' }: { name: string; tone?: Tone }) {
+  return <Badge tone={tone}>{name}</Badge>;
+}
 
 export function MovementBadge({ type }: { type: MovementType }) {
   return <Badge tone={MOVEMENT_TONE[type]}>{MOVEMENT_LABEL[type]}</Badge>;

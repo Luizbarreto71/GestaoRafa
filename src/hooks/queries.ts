@@ -9,6 +9,7 @@ import {
   saleService,
   settingsService,
   supplierService,
+  unitService,
   userService,
   type MovementFilters,
   type ProductFilters,
@@ -42,17 +43,17 @@ function invalidateStock(queryClient: ReturnType<typeof useQueryClient>) {
 
 // ----------------------------------------------------------------- Dashboard
 
-export const useDashboard = (days = 14) =>
+export const useDashboard = (days = 14, unitId?: string | null) =>
   useQuery({
-    queryKey: queryKeys.dashboard(days),
-    queryFn: () => dashboardService.overview(days),
+    queryKey: [...queryKeys.dashboard(days), unitId ?? 'todas'],
+    queryFn: () => dashboardService.overview(days, unitId ?? undefined),
     staleTime: 30_000,
   });
 
-export const useAlerts = (enabled = true) =>
+export const useAlerts = (enabled = true, unitId?: string | null) =>
   useQuery({
-    queryKey: queryKeys.alerts(),
-    queryFn: dashboardService.alerts,
+    queryKey: [...queryKeys.alerts(), unitId ?? 'todas'],
+    queryFn: () => dashboardService.alerts(unitId ?? undefined),
     // Valor do estoque "em tempo real": recarrega a cada minuto.
     refetchInterval: 60_000,
     staleTime: 30_000,
@@ -152,8 +153,18 @@ export function useAdjustStock() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ id, quantity, reason }: { id: string; quantity: number; reason: string }) =>
-      productService.adjustStock(id, { quantity, reason }).catch((error) => {
+    mutationFn: ({
+      id,
+      quantity,
+      reason,
+      unitId,
+    }: {
+      id: string;
+      quantity: number;
+      reason: string;
+      unitId?: string;
+    }) =>
+      productService.adjustStock(id, { quantity, reason, unitId }).catch((error) => {
         throw new Error(getErrorMessage(error));
       }),
     onSuccess: () => invalidateStock(queryClient),
@@ -263,6 +274,50 @@ export const useSheetsStatus = () =>
     queryFn: settingsService.sheetsStatus,
     staleTime: 5 * 60_000,
   });
+
+// ------------------------------------------------- Movimentação de estoque
+
+export const useUnits = () =>
+  useQuery({ queryKey: ['units'], queryFn: unitService.list, staleTime: 5 * 60_000 });
+
+export const useTransfers = (params: { page?: number; status?: string; unitId?: string } = {}) =>
+  useQuery({
+    queryKey: ['transfers', params],
+    queryFn: () => movementService.transferencias(params),
+    placeholderData: (previous) => previous,
+    staleTime: 15_000,
+  });
+
+/** Entrada, saída, transferência e ajuste — todas mexem no estoque. */
+export function useMovimentarEstoque(acao: 'entrada' | 'saida' | 'transferir' | 'ajustar') {
+  const queryClient = useQueryClient();
+
+  return useMutation<{ message: string; antes?: number; depois?: number }, Error, Record<string, unknown>>({
+    mutationFn: (data) =>
+      movementService[acao](data).catch((erro) => {
+        throw new Error(getErrorMessage(erro));
+      }),
+    onSuccess: () => {
+      invalidateStock(queryClient);
+      void queryClient.invalidateQueries({ queryKey: ['transfers'] });
+    },
+  });
+}
+
+export function useCancelarTransferencia() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (id: string) =>
+      movementService.cancelarTransferencia(id).catch((erro) => {
+        throw new Error(getErrorMessage(erro));
+      }),
+    onSuccess: () => {
+      invalidateStock(queryClient);
+      void queryClient.invalidateQueries({ queryKey: ['transfers'] });
+    },
+  });
+}
 
 /**
  * Fábrica de mutações CRUD para os cadastros simples — evita repetir o mesmo

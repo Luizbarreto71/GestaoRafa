@@ -1,4 +1,4 @@
-import type { MovementType, PaymentMethod, ProductStatus } from '@/types';
+import type { MovementReason, MovementType, PaymentMethod, ProductStatus, UserRole } from '@/types';
 
 const currency = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 const compact = new Intl.NumberFormat('pt-BR', { notation: 'compact', maximumFractionDigits: 1 });
@@ -77,8 +77,45 @@ export const PAYMENT_LABEL: Record<PaymentMethod, string> = {
 export const MOVEMENT_LABEL: Record<MovementType, string> = {
   ENTRADA: 'Entrada',
   SAIDA: 'Saída',
+  TRANSFERENCIA: 'Transferência',
   AJUSTE: 'Ajuste',
+};
+
+export const REASON_LABEL: Record<MovementReason, string> = {
+  COMPRA: 'Compra',
+  CADASTRO: 'Cadastro de produto',
+  VENDA: 'Venda',
+  DEFEITO: 'Produto com defeito',
+  DEVOLUCAO_FORNECEDOR: 'Devolução ao fornecedor',
+  PERDA: 'Perda',
+  USO_INTERNO: 'Uso interno',
+  AJUSTE: 'Ajuste de estoque',
+  TRANSFERENCIA: 'Transferência',
+  CANCELAMENTO: 'Cancelamento',
   EXCLUSAO: 'Exclusão',
+  OUTRO: 'Outro',
+};
+
+/** Motivos que o usuário escolhe numa saída manual. */
+export const EXIT_REASONS: MovementReason[] = [
+  'VENDA',
+  'DEFEITO',
+  'DEVOLUCAO_FORNECEDOR',
+  'PERDA',
+  'USO_INTERNO',
+  'AJUSTE',
+  'OUTRO',
+];
+
+export const EXIT_REASON_OPTIONS = EXIT_REASONS.map((value) => ({
+  value,
+  label: REASON_LABEL[value],
+}));
+
+export const ROLE_LABEL: Record<UserRole, string> = {
+  ADMIN: 'Administrador',
+  GERENTE: 'Gerente',
+  VENDEDOR: 'Vendedor',
 };
 
 export const PAYMENT_OPTIONS = (Object.keys(PAYMENT_LABEL) as PaymentMethod[]).map((value) => ({
