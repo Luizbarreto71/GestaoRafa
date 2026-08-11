@@ -307,14 +307,14 @@ function FormularioEntrada() {
               placeholder="Sem fornecedor"
             />
             <Input
-              label="Preço de custo"
+              label="Valor unitário pago"
               type="number"
               min={0}
               step="0.01"
               placeholder="0,00"
               value={form.costPrice}
               onChange={(e) => setForm((f) => ({ ...f, costPrice: e.target.value }))}
-              hint="Atualiza o custo do produto"
+              hint="O que está na nota — entra no custo médio"
             />
           </div>
 

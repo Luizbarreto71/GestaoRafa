@@ -122,7 +122,11 @@ export interface Product {
   condicao?: string | null;
   quantity: number;
   minQuantity: number;
+  /** Custo médio ponderado — recalculado a cada entrada de mercadoria. */
   costPrice: number;
+  /** Quanto foi pago na compra mais recente. */
+  lastPurchaseCost?: number | null;
+  lastPurchaseAt?: string | null;
   salePrice: number;
   /** Preço de atacado; vazio quando o produto só é vendido no varejo. */
   wholesalePrice?: number | null;

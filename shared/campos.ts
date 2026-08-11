@@ -73,7 +73,12 @@ const CATALOGO = {
     coluna: 'minQuantity',
     ajuda: 'Abaixo disso o produto entra no alerta',
   },
-  custo: { rotulo: 'Preço de custo', tipo: 'dinheiro', coluna: 'costPrice' },
+  custo: {
+    rotulo: 'Custo médio',
+    tipo: 'dinheiro',
+    coluna: 'costPrice',
+    ajuda: 'No cadastro é o custo inicial; depois cada entrada recalcula',
+  },
   venda: {
     rotulo: 'Preço de venda (varejo)',
     tipo: 'dinheiro',

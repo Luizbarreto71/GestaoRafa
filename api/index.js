@@ -435,7 +435,12 @@ var CATALOGO = {
     coluna: "minQuantity",
     ajuda: "Abaixo disso o produto entra no alerta"
   },
-  custo: { rotulo: "Pre\xE7o de custo", tipo: "dinheiro", coluna: "costPrice" },
+  custo: {
+    rotulo: "Custo m\xE9dio",
+    tipo: "dinheiro",
+    coluna: "costPrice",
+    ajuda: "No cadastro \xE9 o custo inicial; depois cada entrada recalcula"
+  },
   venda: {
     rotulo: "Pre\xE7o de venda (varejo)",
     tipo: "dinheiro",
@@ -1181,6 +1186,13 @@ async function disponivel(produtoId, unidadeId, tx) {
   ]);
   return Math.max(0, total - reserva);
 }
+async function saldoTotal(produtoId, tx) {
+  const soma = await (tx ?? db).stock.aggregate({
+    where: { productId: produtoId },
+    _sum: { quantity: true }
+  });
+  return soma._sum.quantity ?? 0;
+}
 async function saldosDoProduto(produtoId) {
   const [unidades, linhas, retiradas] = await Promise.all([
     db.unit.findMany({ where: { active: true }, orderBy: [{ type: "asc" }, { name: "asc" }] }),
@@ -1250,6 +1262,7 @@ async function movimentar(m) {
       quantity: m.quantidade,
       previousQuantity: antes,
       newQuantity: depois,
+      unitCost: m.custoUnitario != null ? new Prisma2.Decimal(m.custoUnitario) : null,
       notes: m.observacao ?? null,
       productId: m.produtoId,
       productName: m.produtoNome,
@@ -1723,6 +1736,17 @@ rotasDashboard.get(
 // server/movimentacoes.ts
 import { Router as Router5 } from "express";
 import { z as z4 } from "zod";
+
+// shared/custo.ts
+function custoMedio(saldoAtual, custoMedioAtual, quantidadeNova, custoDaNota) {
+  if (saldoAtual <= 0) return arredondar(custoDaNota);
+  if (quantidadeNova <= 0) return arredondar(custoMedioAtual);
+  const total = saldoAtual * custoMedioAtual + quantidadeNova * custoDaNota;
+  return arredondar(total / (saldoAtual + quantidadeNova));
+}
+var arredondar = (v) => Math.round((v + Number.EPSILON) * 100) / 100;
+
+// server/movimentacoes.ts
 var rotasMovimentacoes = Router5();
 rotasMovimentacoes.use(autenticar, exigir("estoque.ver"));
 var MOTIVOS = [
@@ -1740,6 +1764,7 @@ var entradaSchema = z4.object({
   unitId: z4.string().uuid("Selecione a unidade"),
   quantity: z4.coerce.number().int().min(1, "A quantidade deve ser no m\xEDnimo 1"),
   supplierId: z4.string().uuid().optional().nullable(),
+  /** Valor unitário pago nesta nota. Alimenta o custo médio. */
   costPrice: z4.coerce.number().min(0).optional(),
   date: z4.coerce.date().optional(),
   notes: z4.string().trim().max(1e3).optional().nullable(),
@@ -1753,11 +1778,18 @@ rotasMovimentacoes.post(
     exigirAcessoNaUnidade(req.usuario, dados.unitId);
     const produto = await db.product.findUnique({ where: { id: dados.productId } });
     if (!produto) throw naoEncontrado("Produto");
+    const saldoAntes = await saldoTotal(produto.id);
+    const medioAntes = numero(produto.costPrice);
+    const medioDepois = dados.costPrice !== void 0 ? custoMedio(saldoAntes, medioAntes, dados.quantity, dados.costPrice) : medioAntes;
     if (dados.costPrice !== void 0 || dados.supplierId) {
       await db.product.update({
         where: { id: produto.id },
         data: {
-          ...dados.costPrice !== void 0 ? { costPrice: dados.costPrice } : {},
+          ...dados.costPrice !== void 0 ? {
+            costPrice: medioDepois,
+            lastPurchaseCost: dados.costPrice,
+            lastPurchaseAt: dados.date ?? /* @__PURE__ */ new Date()
+          } : {},
           ...dados.supplierId ? { supplierId: dados.supplierId } : {}
         }
       });
@@ -1769,12 +1801,31 @@ rotasMovimentacoes.post(
       tipo: "ENTRADA",
       motivo: dados.reason,
       quantidade: dados.quantity,
+      custoUnitario: dados.costPrice,
       observacao: dados.notes,
       usuarioId: req.usuario?.id,
       usuarioNome: req.usuario?.nome
     });
-    await registrarLog({ acao: "ENTRADA", entidade: "Stock", id: produto.id, req });
-    res.status(201).json({ ...resultado, message: `Entrada de ${dados.quantity} un. registrada.` });
+    if (dados.costPrice !== void 0) {
+      await db.stockMovement.update({
+        where: { id: resultado.id },
+        data: { averageCostAfter: medioDepois }
+      });
+    }
+    await registrarLog({
+      acao: "ENTRADA",
+      entidade: "Stock",
+      id: produto.id,
+      alteracoes: dados.costPrice !== void 0 ? { quantidade: dados.quantity, nota: dados.costPrice, medioAntes, medioDepois } : { quantidade: dados.quantity },
+      req
+    });
+    res.status(201).json({
+      ...resultado,
+      custoMedio: medioDepois,
+      custoMedioAnterior: medioAntes,
+      ultimaCompra: dados.costPrice ?? null,
+      message: `Entrada de ${dados.quantity} un. registrada.` + (dados.costPrice !== void 0 && medioDepois !== medioAntes ? ` Custo m\xE9dio: R$ ${medioAntes.toFixed(2)} \u2192 R$ ${medioDepois.toFixed(2)}.` : "")
+    });
   })
 );
 var saidaSchema = z4.object({

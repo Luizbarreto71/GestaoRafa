@@ -1,4 +1,5 @@
 import { ProductFormModal } from '@/components/products/ProductFormModal';
+import { EntradaDeMercadoria } from '@/components/products/EntradaDeMercadoria';
 import { ListaAtacadoModal } from '@/components/products/ListaAtacadoModal';
 import { TabelaDePrecosModal } from '@/components/products/TabelaDePrecosModal';
 import { SaleModal } from '@/components/sales/SaleModal';
@@ -31,10 +32,11 @@ import {
   Download,
   Filter,
   ImageIcon,
+  MessageCircle,
   Package,
+  PackagePlus,
   Pencil,
   Plus,
-  MessageCircle,
   Printer,
   Search,
   ShoppingCart,
@@ -69,6 +71,7 @@ export default function StockPage() {
   const [formOpen, setFormOpen] = useState(false);
   const [tabelaAberta, setTabelaAberta] = useState(false);
   const [listaAberta, setListaAberta] = useState(false);
+  const [entrando, setEntrando] = useState<Product | null>(null);
   const [editing, setEditing] = useState<Product | null>(null);
   const [saleProduct, setSaleProduct] = useState<Product | null>(null);
   const [deleting, setDeleting] = useState<Product | null>(null);
@@ -276,12 +279,23 @@ export default function StockPage() {
     },
     {
       key: 'costPrice',
-      header: 'Custo',
+      header: 'Custo médio',
       sortKey: 'costPrice',
       align: 'right',
       hideOnMobile: true,
       render: (product) => (
-        <span className="text-sm text-slate-600 dark:text-slate-400">{formatCurrency(product.costPrice)}</span>
+        <span className="block">
+          <span className="block text-sm font-medium text-navy-900 dark:text-slate-200">
+            {formatCurrency(product.costPrice)}
+          </span>
+          {/* A última nota é outra informação: serve para comparar, não
+              para calcular margem. */}
+          {product.lastPurchaseCost != null && product.lastPurchaseCost !== product.costPrice && (
+            <span className="block text-[11px] text-slate-400">
+              última {formatCurrency(product.lastPurchaseCost)}
+            </span>
+          )}
+        </span>
       ),
     },
     {
@@ -332,6 +346,17 @@ export default function StockPage() {
           >
             <ShoppingCart className="h-3.5 w-3.5" />
             <span className="hidden xl:inline">Vender</span>
+          </Button>
+
+          {/* Chegou nota deste item: quantidade + o que se pagou. */}
+          <Button
+            size="icon"
+            variant="ghost"
+            className="text-accent hover:bg-accent/10"
+            onClick={() => setEntrando(product)}
+            title="Entrada de mercadoria"
+          >
+            <PackagePlus className="h-4 w-4" />
           </Button>
 
           <Button
@@ -622,6 +647,8 @@ export default function StockPage() {
       <TabelaDePrecosModal aberto={tabelaAberta} aoFechar={() => setTabelaAberta(false)} />
 
       <ListaAtacadoModal aberto={listaAberta} aoFechar={() => setListaAberta(false)} />
+
+      <EntradaDeMercadoria produto={entrando} aoFechar={() => setEntrando(null)} />
 
       <ProductFormModal
         open={formOpen}

@@ -231,29 +231,36 @@ model Customer {
 }
 
 model Product {
-  id             String        @id @default(uuid())
-  name           String
-  brand          String?
-  model          String?
-  color          String?
-  capacity       String?
-  lote           String?
+  id               String        @id @default(uuid())
+  name             String
+  brand            String?
+  model            String?
+  color            String?
+  capacity         String?
+  lote             String?
   /// Estado do aparelho: Lacrado, Vitrine, Seminovo…
-  condicao       String?
+  condicao         String?
   /// Estoque mínimo por unidade — abaixo disso entra no alerta.
-  minQuantity    Int           @default(1)
-  costPrice      Decimal       @default(0) @db.Decimal(12, 2)
-  salePrice      Decimal       @default(0) @db.Decimal(12, 2)
+  minQuantity      Int           @default(1)
+  /// Custo médio ponderado. Recalculado a cada entrada de mercadoria — é
+  /// ele que vale para margem e valor do estoque, e não a última nota.
+  costPrice        Decimal       @default(0) @db.Decimal(12, 2)
+  /// Quanto foi pago na compra mais recente. Serve para comparar, não para
+  /// calcular: substituir o custo pela última nota distorce a margem.
+  lastPurchaseCost Decimal?      @db.Decimal(12, 2)
+  /// Quando a última compra entrou.
+  lastPurchaseAt   DateTime?
+  salePrice        Decimal       @default(0) @db.Decimal(12, 2)
   /// Preço para atacado. Vazio = o produto só é vendido no varejo.
-  wholesalePrice Decimal?      @db.Decimal(12, 2)
-  imei           String?
-  serialNumber   String?
-  barcode        String?
-  notes          String?
-  status         ProductStatus @default(EM_ESTOQUE)
-  entryDate      DateTime      @default(now())
-  createdAt      DateTime      @default(now())
-  updatedAt      DateTime      @updatedAt
+  wholesalePrice   Decimal?      @db.Decimal(12, 2)
+  imei             String?
+  serialNumber     String?
+  barcode          String?
+  notes            String?
+  status           ProductStatus @default(EM_ESTOQUE)
+  entryDate        DateTime      @default(now())
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
 
   categoryId String
   category   Category @relation(fields: [categoryId], references: [id])
@@ -647,6 +654,11 @@ model StockMovement {
   /// Saldo da unidade antes e depois — permite auditar sem recalcular tudo.
   previousQuantity Int?
   newQuantity      Int?
+
+  /// Numa entrada: quanto foi pago por unidade nesta nota.
+  unitCost         Decimal? @db.Decimal(12, 2)
+  /// Custo médio do produto depois desta entrada, para auditar o cálculo.
+  averageCostAfter Decimal? @db.Decimal(12, 2)
 
   notes     String?
   createdAt DateTime @default(now())

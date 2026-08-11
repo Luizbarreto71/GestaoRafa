@@ -9,6 +9,7 @@ import {
   intervalo,
   limpar,
   naoEncontrado,
+  numero,
   paginacao,
   paginado,
   rota,
@@ -16,7 +17,14 @@ import {
   validar,
 } from './core';
 import { db, registrarLog } from './db';
-import { cancelarTransferencia, disponivel, movimentar, transferir } from './estoque';
+import { custoMedio } from '../shared/custo';
+import {
+  cancelarTransferencia,
+  disponivel,
+  movimentar,
+  saldoTotal,
+  transferir,
+} from './estoque';
 import { exigirAcessoNaUnidade, unidadePermitida } from './unidades';
 
 /** Entrada, saída, transferência e o histórico de tudo isso. */
@@ -42,6 +50,7 @@ const entradaSchema = z.object({
   unitId: z.string().uuid('Selecione a unidade'),
   quantity: z.coerce.number().int().min(1, 'A quantidade deve ser no mínimo 1'),
   supplierId: z.string().uuid().optional().nullable(),
+  /** Valor unitário pago nesta nota. Alimenta o custo médio. */
   costPrice: z.coerce.number().min(0).optional(),
   date: z.coerce.date().optional(),
   notes: z.string().trim().max(1000).optional().nullable(),
@@ -58,13 +67,28 @@ rotasMovimentacoes.post(
     const produto = await db.product.findUnique({ where: { id: dados.productId } });
     if (!produto) throw naoEncontrado('Produto');
 
-    // Entrada pode atualizar o custo e o fornecedor do produto: é a compra
-    // mais recente que passa a valer.
+    // O custo médio pondera o que já havia com o que está chegando. É
+    // calculado sobre o saldo do produto inteiro, não o da unidade: o
+    // custo é do produto, e ele não muda de valor ao mudar de prateleira.
+    const saldoAntes = await saldoTotal(produto.id);
+    const medioAntes = numero(produto.costPrice);
+
+    const medioDepois =
+      dados.costPrice !== undefined
+        ? custoMedio(saldoAntes, medioAntes, dados.quantity, dados.costPrice)
+        : medioAntes;
+
     if (dados.costPrice !== undefined || dados.supplierId) {
       await db.product.update({
         where: { id: produto.id },
         data: {
-          ...(dados.costPrice !== undefined ? { costPrice: dados.costPrice } : {}),
+          ...(dados.costPrice !== undefined
+            ? {
+                costPrice: medioDepois,
+                lastPurchaseCost: dados.costPrice,
+                lastPurchaseAt: dados.date ?? new Date(),
+              }
+            : {}),
           ...(dados.supplierId ? { supplierId: dados.supplierId } : {}),
         },
       });
@@ -77,13 +101,43 @@ rotasMovimentacoes.post(
       tipo: 'ENTRADA',
       motivo: dados.reason,
       quantidade: dados.quantity,
+      custoUnitario: dados.costPrice,
       observacao: dados.notes,
       usuarioId: req.usuario?.id,
       usuarioNome: req.usuario?.nome,
     });
 
-    await registrarLog({ acao: 'ENTRADA', entidade: 'Stock', id: produto.id, req });
-    res.status(201).json({ ...resultado, message: `Entrada de ${dados.quantity} un. registrada.` });
+    // O médio depois fica no próprio movimento: dá para auditar a conta
+    // meses depois sem refazer o histórico inteiro.
+    if (dados.costPrice !== undefined) {
+      await db.stockMovement.update({
+        where: { id: resultado.id },
+        data: { averageCostAfter: medioDepois },
+      });
+    }
+
+    await registrarLog({
+      acao: 'ENTRADA',
+      entidade: 'Stock',
+      id: produto.id,
+      alteracoes:
+        dados.costPrice !== undefined
+          ? { quantidade: dados.quantity, nota: dados.costPrice, medioAntes, medioDepois }
+          : { quantidade: dados.quantity },
+      req,
+    });
+
+    res.status(201).json({
+      ...resultado,
+      custoMedio: medioDepois,
+      custoMedioAnterior: medioAntes,
+      ultimaCompra: dados.costPrice ?? null,
+      message:
+        `Entrada de ${dados.quantity} un. registrada.` +
+        (dados.costPrice !== undefined && medioDepois !== medioAntes
+          ? ` Custo médio: R$ ${medioAntes.toFixed(2)} → R$ ${medioDepois.toFixed(2)}.`
+          : ''),
+    });
   }),
 );
 

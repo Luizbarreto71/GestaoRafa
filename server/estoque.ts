@@ -93,6 +93,20 @@ export async function disponivel(produtoId: string, unidadeId: string, tx?: Clie
 }
 
 /** Saldo por unidade de um produto, incluindo unidades ainda sem linha. */
+/**
+ * Saldo do produto somando todas as unidades.
+ *
+ * O custo médio é do produto, não da prateleira: um aparelho não fica mais
+ * caro por estar na Sede em vez da Matriz.
+ */
+export async function saldoTotal(produtoId: string, tx?: Cliente): Promise<number> {
+  const soma = await (tx ?? db).stock.aggregate({
+    where: { productId: produtoId },
+    _sum: { quantity: true },
+  });
+  return soma._sum.quantity ?? 0;
+}
+
 export async function saldosDoProduto(produtoId: string) {
   const [unidades, linhas, retiradas] = await Promise.all([
     db.unit.findMany({ where: { active: true }, orderBy: [{ type: 'asc' }, { name: 'asc' }] }),
@@ -124,6 +138,8 @@ interface Movimento {
   produtoId: string;
   produtoNome: string;
   unidadeId: string;
+  /** Numa entrada: quanto foi pago por unidade nesta nota. */
+  custoUnitario?: number | null;
   tipo: MovementType;
   motivo: MovementReason;
   /** Sempre positiva. Quem decide o sinal é o `sentido`. */
@@ -225,6 +241,7 @@ export async function movimentar(m: Movimento): Promise<{ antes: number; depois:
       quantity: m.quantidade,
       previousQuantity: antes,
       newQuantity: depois,
+      unitCost: m.custoUnitario != null ? new Prisma.Decimal(m.custoUnitario) : null,
       notes: m.observacao ?? null,
       productId: m.produtoId,
       productName: m.produtoNome,
