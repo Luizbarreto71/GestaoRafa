@@ -2,7 +2,7 @@ import bcrypt from 'bcryptjs';
 import { Router } from 'express';
 import { z } from 'zod';
 import { autenticar, somenteAdmin } from './auth';
-import { AppError, contem, limpar, naoEncontrado, paginacao, paginado, rota, validar } from './core';
+import { AppError, contem, limpar, naoEncontrado, paginacao, paginado, rota, validar, semVazios } from './core';
 import { db, registrarLog } from './db';
 import { camposParaJson, normalizarCampos, PADRAO_GENERICO, PADROES } from '../shared/campos';
 
@@ -158,7 +158,7 @@ const fornecedorSchema = z.object({
 rotasFornecedores.get(
   '/',
   rota(async (req, res) => {
-    const q = validar(buscaSimples, req.query);
+    const q = validar(buscaSimples, semVazios(req.query));
     const where = q.search
       ? { OR: [{ name: contem(q.search) }, { phone: contem(q.search) }, { email: contem(q.search) }] }
       : {};
@@ -248,7 +248,7 @@ const clienteSchema = z.object({
 rotasClientes.get(
   '/',
   rota(async (req, res) => {
-    const q = validar(buscaSimples, req.query);
+    const q = validar(buscaSimples, semVazios(req.query));
     const p = paginacao(q as Record<string, unknown>);
 
     const where = q.search

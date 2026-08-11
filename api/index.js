@@ -73,6 +73,11 @@ function tratarErros(erro, _req, res, _next) {
     ...process.env.NODE_ENV === "production" ? {} : { details: erro instanceof Error ? erro.message : String(erro) }
   });
 }
+var semVazios = (query) => Object.fromEntries(
+  Object.entries(query ?? {}).filter(
+    ([, valor]) => valor !== "" && valor !== null && valor !== void 0
+  )
+);
 function validar(schema, dados) {
   return schema.parse(dados);
 }
@@ -672,7 +677,7 @@ var fornecedorSchema = z2.object({
 rotasFornecedores.get(
   "/",
   rota(async (req, res) => {
-    const q = validar(buscaSimples, req.query);
+    const q = validar(buscaSimples, semVazios(req.query));
     const where = q.search ? { OR: [{ name: contem(q.search) }, { phone: contem(q.search) }, { email: contem(q.search) }] } : {};
     if (q.all === "true") {
       const lista2 = await db.supplier.findMany({ where, orderBy: { name: "asc" } });
@@ -745,7 +750,7 @@ var clienteSchema = z2.object({
 rotasClientes.get(
   "/",
   rota(async (req, res) => {
-    const q = validar(buscaSimples, req.query);
+    const q = validar(buscaSimples, semVazios(req.query));
     const p = paginacao(q);
     const where = q.search ? { OR: [{ name: contem(q.search) }, { phone: contem(q.search) }, { email: contem(q.search) }] } : {};
     const [lista, total] = await Promise.all([
@@ -1763,7 +1768,7 @@ var filtroTransferencias = z4.object({
 rotasMovimentacoes.get(
   "/transferencias",
   rota(async (req, res) => {
-    const q = validar(filtroTransferencias, req.query);
+    const q = validar(filtroTransferencias, semVazios(req.query));
     const p = paginacao(q);
     const unidade = unidadePermitida(req.usuario, q.unitId);
     const where = {
@@ -1846,7 +1851,7 @@ var filtroRetiradas = z4.object({
 rotasMovimentacoes.get(
   "/retiradas",
   rota(async (req, res) => {
-    const q = validar(filtroRetiradas, req.query);
+    const q = validar(filtroRetiradas, semVazios(req.query));
     const p = paginacao(q);
     const unidade = unidadePermitida(req.usuario, q.unitId);
     const where = {
@@ -1986,7 +1991,7 @@ function filtrarMovimentacoes(q, unidade) {
 rotasMovimentacoes.get(
   "/",
   rota(async (req, res) => {
-    const q = validar(filtros, req.query);
+    const q = validar(filtros, semVazios(req.query));
     const p = paginacao(q);
     const unidade = unidadePermitida(req.usuario, q.unitId);
     const where = filtrarMovimentacoes(q, unidade);
@@ -2268,7 +2273,7 @@ rotasProdutos.get(
 rotasProdutos.get(
   "/",
   rota(async (req, res) => {
-    const q = validar(filtrosSchema, req.query);
+    const q = validar(filtrosSchema, semVazios(req.query));
     const p = paginacao(q);
     const unidade = unidadePermitida(req.usuario, q.unitId);
     const where = await filtrarProdutos(q, unidade);
@@ -2684,7 +2689,7 @@ var qtd = (header, key, width = 8) => ({
 rotasRelatorios.get(
   "/stock",
   rota(async (req, res) => {
-    const q = validar(base, req.query);
+    const q = validar(base, semVazios(req.query));
     const unidade = unidadePermitida(req.usuario, q.unitId);
     const entrada = intervalo(q.startDate, q.endDate);
     const linhasDeEstoque = await db.stock.findMany({
@@ -2763,7 +2768,7 @@ rotasRelatorios.get(
 rotasRelatorios.get(
   "/sales",
   rota(async (req, res) => {
-    const q = validar(base, req.query);
+    const q = validar(base, semVazios(req.query));
     const quando = intervalo(q.startDate, q.endDate);
     const vendas = await db.sale.findMany({
       where: {
@@ -2822,7 +2827,7 @@ rotasRelatorios.get(
 rotasRelatorios.get(
   "/by-category",
   rota(async (req, res) => {
-    const q = validar(base, req.query);
+    const q = validar(base, semVazios(req.query));
     const unidade = unidadePermitida(req.usuario, q.unitId);
     const quando = intervalo(q.startDate, q.endDate);
     const [categorias, linhasDeEstoque, vendas] = await Promise.all([
@@ -2885,7 +2890,7 @@ rotasRelatorios.get(
 rotasRelatorios.get(
   "/by-supplier",
   rota(async (req, res) => {
-    const q = validar(base, req.query);
+    const q = validar(base, semVazios(req.query));
     const unidade = unidadePermitida(req.usuario, q.unitId);
     const quando = intervalo(q.startDate, q.endDate);
     const [fornecedores, linhasDeEstoque, vendas] = await Promise.all([
@@ -3459,7 +3464,7 @@ function filtrarVendas(q) {
 rotasVendas.get(
   "/",
   rota(async (req, res) => {
-    const q = validar(filtrosSchema2, req.query);
+    const q = validar(filtrosSchema2, semVazios(req.query));
     const p = paginacao(q);
     const where = filtrarVendas({ ...q, unitId: unidadePermitida(req.usuario, q.unitId) });
     const [lista, total, somas] = await Promise.all([

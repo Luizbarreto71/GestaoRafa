@@ -2,7 +2,7 @@ import { Prisma } from '@prisma/client';
 import { Router } from 'express';
 import { z } from 'zod';
 import { autenticar, somenteAdmin } from './auth';
-import { AppError, contem, limpar, naoEncontrado, ordenar, paginacao, paginado, rota, validar } from './core';
+import { AppError, contem, limpar, naoEncontrado, ordenar, paginacao, paginado, rota, validar, semVazios } from './core';
 import { db, registrarLog } from './db';
 import { estoqueBaixo, movimentar, saldosDoProduto } from './estoque';
 import { unidadePermitida } from './unidades';
@@ -278,7 +278,7 @@ rotasProdutos.get(
 rotasProdutos.get(
   '/',
   rota(async (req, res) => {
-    const q = validar(filtrosSchema, req.query);
+    const q = validar(filtrosSchema, semVazios(req.query));
     const p = paginacao(q as Record<string, unknown>);
     const unidade = unidadePermitida(req.usuario, q.unitId);
     const where = await filtrarProdutos(q, unidade);

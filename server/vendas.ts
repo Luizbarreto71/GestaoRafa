@@ -12,6 +12,7 @@ import {
   paginacao,
   paginado,
   rota,
+  semVazios,
   validar,
 } from './core';
 import { db, registrarLog } from './db';
@@ -102,7 +103,7 @@ export function filtrarVendas(q: FiltrosVenda): Prisma.SaleWhereInput {
 rotasVendas.get(
   '/',
   rota(async (req, res) => {
-    const q = validar(filtrosSchema, req.query);
+    const q = validar(filtrosSchema, semVazios(req.query));
     const p = paginacao(q as Record<string, unknown>);
     // Quem não é administrador só vê as vendas da própria unidade.
     const where = filtrarVendas({ ...q, unitId: unidadePermitida(req.usuario, q.unitId) });

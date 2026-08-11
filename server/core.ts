@@ -85,6 +85,20 @@ export function tratarErros(erro: unknown, _req: Request, res: Response, _next: 
 
 // --------------------------------------------------------------- Validação
 
+/**
+ * Descarta chaves vazias antes de validar.
+ *
+ * Um formulário que envia `?status=&categoryId=` está dizendo "sem filtro",
+ * não "filtre por vazio" — sem isso a requisição é recusada por um campo
+ * que o usuário nem preencheu.
+ */
+export const semVazios = (query: unknown): Record<string, unknown> =>
+  Object.fromEntries(
+    Object.entries((query ?? {}) as Record<string, unknown>).filter(
+      ([, valor]) => valor !== '' && valor !== null && valor !== undefined,
+    ),
+  );
+
 /** Valida o corpo da requisição e devolve os dados já convertidos. */
 export function validar<T extends ZodTypeAny>(schema: T, dados: unknown): ReturnType<T['parse']> {
   return schema.parse(dados);

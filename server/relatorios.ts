@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { autenticar } from './auth';
-import { dataBR, dataHoraBR, intervalo, numero, rota, validar } from './core';
+import { dataBR, dataHoraBR, intervalo, numero, rota, validar, semVazios } from './core';
 import { db } from './db';
 import { decimal, exportar, reais, type Coluna } from './exportar';
 import { MOTIVO_LABEL, STATUS_PRODUTO_LABEL, TIPO_LABEL } from './estoque';
@@ -66,7 +66,7 @@ const qtd = (header: string, key: string, width = 8): Coluna => ({
 rotasRelatorios.get(
   '/stock',
   rota(async (req, res) => {
-    const q = validar(base, req.query);
+    const q = validar(base, semVazios(req.query));
     const unidade = unidadePermitida(req.usuario, q.unitId);
     const entrada = intervalo(q.startDate, q.endDate);
 
@@ -149,7 +149,7 @@ rotasRelatorios.get(
 rotasRelatorios.get(
   '/sales',
   rota(async (req, res) => {
-    const q = validar(base, req.query);
+    const q = validar(base, semVazios(req.query));
     const quando = intervalo(q.startDate, q.endDate);
 
     const vendas = await db.sale.findMany({
@@ -215,7 +215,7 @@ rotasRelatorios.get(
 rotasRelatorios.get(
   '/by-category',
   rota(async (req, res) => {
-    const q = validar(base, req.query);
+    const q = validar(base, semVazios(req.query));
     const unidade = unidadePermitida(req.usuario, q.unitId);
     const quando = intervalo(q.startDate, q.endDate);
 
@@ -285,7 +285,7 @@ rotasRelatorios.get(
 rotasRelatorios.get(
   '/by-supplier',
   rota(async (req, res) => {
-    const q = validar(base, req.query);
+    const q = validar(base, semVazios(req.query));
     const unidade = unidadePermitida(req.usuario, q.unitId);
     const quando = intervalo(q.startDate, q.endDate);
 

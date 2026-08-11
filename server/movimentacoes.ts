@@ -11,6 +11,7 @@ import {
   paginacao,
   paginado,
   rota,
+  semVazios,
   validar,
 } from './core';
 import { db, registrarLog } from './db';
@@ -180,7 +181,7 @@ const filtroTransferencias = z.object({
 rotasMovimentacoes.get(
   '/transferencias',
   rota(async (req, res) => {
-    const q = validar(filtroTransferencias, req.query);
+    const q = validar(filtroTransferencias, semVazios(req.query));
     const p = paginacao(q as Record<string, unknown>);
     const unidade = unidadePermitida(req.usuario, q.unitId);
 
@@ -290,7 +291,7 @@ const filtroRetiradas = z.object({
 rotasMovimentacoes.get(
   '/retiradas',
   rota(async (req, res) => {
-    const q = validar(filtroRetiradas, req.query);
+    const q = validar(filtroRetiradas, semVazios(req.query));
     const p = paginacao(q as Record<string, unknown>);
     const unidade = unidadePermitida(req.usuario, q.unitId);
 
@@ -479,7 +480,7 @@ export function filtrarMovimentacoes(
 rotasMovimentacoes.get(
   '/',
   rota(async (req, res) => {
-    const q = validar(filtros, req.query);
+    const q = validar(filtros, semVazios(req.query));
     const p = paginacao(q as Record<string, unknown>);
     const unidade = unidadePermitida(req.usuario, q.unitId);
     const where = filtrarMovimentacoes(q, unidade);

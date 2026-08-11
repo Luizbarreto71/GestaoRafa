@@ -136,7 +136,13 @@ export async function downloadFile(
   params: Record<string, unknown> = {},
   fallbackName = 'arquivo',
 ): Promise<void> {
-  const response = await api.get(url, { params, responseType: 'blob' });
+  // Filtro em branco não pode virar `?categoryId=` — a API espera um id ali
+  // e recusa string vazia.
+  const limpos = Object.fromEntries(
+    Object.entries(params).filter(([, v]) => v !== '' && v !== null && v !== undefined),
+  );
+
+  const response = await api.get(url, { params: limpos, responseType: 'blob' });
 
   const disposition = response.headers['content-disposition'] as string | undefined;
   const match = disposition?.match(/filename="?([^";]+)"?/);
