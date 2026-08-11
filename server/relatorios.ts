@@ -548,3 +548,93 @@ rotasRelatorios.get(
     });
   }),
 );
+
+// ------------------------------------------------ Tabela de preços do vendedor
+
+/**
+ * Lista de preços para entregar aos vendedores.
+ *
+ * O preço sai do custo mais um acréscimo fixo (R$ 100 por padrão). O preço
+ * de compra NÃO aparece: a lista circula entre os vendedores e mostrar o
+ * custo revelaria a margem da loja. Só sai se o administrador pedir.
+ */
+rotasRelatorios.get(
+  '/price-list',
+  exigir('financeiro'),
+  rota(async (req, res) => {
+    const q = validar(
+      base.extend({
+        /** Quanto somar ao preço de compra. */
+        markup: z.coerce.number().min(0).max(999_999).default(100),
+        condicao: z.string().trim().optional(),
+        /** Mostrar o custo — só para conferência interna. */
+        incluirCusto: z.enum(['true', 'false']).default('false'),
+        /** Deixar de fora o que está sem estoque. */
+        somenteComEstoque: z.enum(['true', 'false']).default('true'),
+      }),
+      semVazios(req.query),
+    );
+
+    const unidade = unidadePermitida(req.usuario, q.unitId);
+    const mostrarCusto = q.incluirCusto === 'true';
+
+    const produtos = await db.product.findMany({
+      where: {
+        ...(q.categoryId ? { categoryId: q.categoryId } : {}),
+        ...(q.supplierId ? { supplierId: q.supplierId } : {}),
+        ...(q.condicao ? { condicao: q.condicao } : {}),
+        ...(q.somenteComEstoque === 'true'
+          ? { stock: { some: { quantity: { gt: 0 }, ...(unidade ? { unitId: unidade } : {}) } } }
+          : {}),
+      },
+      include: {
+        category: true,
+        stock: unidade ? { where: { unitId: unidade } } : true,
+      },
+      orderBy: [{ category: { name: 'asc' } }, { name: 'asc' }],
+    });
+
+    const linhas = produtos.map((p) => {
+      const custo = numero(p.costPrice);
+      const emEstoque = p.stock.reduce((soma, l) => soma + l.quantity, 0);
+
+      return {
+        category: p.category.name,
+        name: p.name,
+        detalhe: [p.brand, p.model].filter(Boolean).join(' ') || '—',
+        condicao: p.condicao ?? '—',
+        capacidade: p.capacity ?? '—',
+        quantity: emEstoque,
+        custo,
+        // É este o número que o vendedor usa.
+        preco: custo + q.markup,
+      };
+    });
+
+    const colunas: Coluna[] = [
+      { header: 'Categoria', key: 'category', width: 14 },
+      { header: 'Produto', key: 'name', width: 26 },
+      { header: 'Marca / modelo', key: 'detalhe', width: 16 },
+      { header: 'Condição', key: 'condicao', width: 12 },
+      { header: 'Capacidade', key: 'capacidade', width: 12 },
+      qtd('Estoque', 'quantity', 8),
+      ...(mostrarCusto ? [money('Custo', 'custo', 11)] : []),
+      money('PREÇO DE VENDA', 'preco', 14),
+    ];
+
+    await exportar(res, q.format, {
+      title: 'Tabela de Preços',
+      subtitle:
+        `Preço = custo + ${reais(q.markup)}` +
+        (unidade ? ` · estoque da unidade selecionada` : '') +
+        (mostrarCusto ? ' · CONTÉM O CUSTO — uso interno' : ' · não mostra o preço de compra'),
+      columns: colunas,
+      rows: linhas,
+      summary: [
+        { label: 'Produtos na lista', value: String(linhas.length) },
+        { label: 'Peças em estoque', value: String(linhas.reduce((s, l) => s + l.quantity, 0)) },
+        { label: 'Acréscimo aplicado', value: reais(q.markup) },
+      ],
+    });
+  }),
+);

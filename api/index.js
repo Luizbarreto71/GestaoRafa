@@ -3194,6 +3194,75 @@ rotasRelatorios.get(
     });
   })
 );
+rotasRelatorios.get(
+  "/price-list",
+  exigir("financeiro"),
+  rota(async (req, res) => {
+    const q = validar(
+      base.extend({
+        /** Quanto somar ao preço de compra. */
+        markup: z6.coerce.number().min(0).max(999999).default(100),
+        condicao: z6.string().trim().optional(),
+        /** Mostrar o custo — só para conferência interna. */
+        incluirCusto: z6.enum(["true", "false"]).default("false"),
+        /** Deixar de fora o que está sem estoque. */
+        somenteComEstoque: z6.enum(["true", "false"]).default("true")
+      }),
+      semVazios(req.query)
+    );
+    const unidade = unidadePermitida(req.usuario, q.unitId);
+    const mostrarCusto = q.incluirCusto === "true";
+    const produtos = await db.product.findMany({
+      where: {
+        ...q.categoryId ? { categoryId: q.categoryId } : {},
+        ...q.supplierId ? { supplierId: q.supplierId } : {},
+        ...q.condicao ? { condicao: q.condicao } : {},
+        ...q.somenteComEstoque === "true" ? { stock: { some: { quantity: { gt: 0 }, ...unidade ? { unitId: unidade } : {} } } } : {}
+      },
+      include: {
+        category: true,
+        stock: unidade ? { where: { unitId: unidade } } : true
+      },
+      orderBy: [{ category: { name: "asc" } }, { name: "asc" }]
+    });
+    const linhas = produtos.map((p) => {
+      const custo = numero(p.costPrice);
+      const emEstoque = p.stock.reduce((soma, l) => soma + l.quantity, 0);
+      return {
+        category: p.category.name,
+        name: p.name,
+        detalhe: [p.brand, p.model].filter(Boolean).join(" ") || "\u2014",
+        condicao: p.condicao ?? "\u2014",
+        capacidade: p.capacity ?? "\u2014",
+        quantity: emEstoque,
+        custo,
+        // É este o número que o vendedor usa.
+        preco: custo + q.markup
+      };
+    });
+    const colunas = [
+      { header: "Categoria", key: "category", width: 14 },
+      { header: "Produto", key: "name", width: 26 },
+      { header: "Marca / modelo", key: "detalhe", width: 16 },
+      { header: "Condi\xE7\xE3o", key: "condicao", width: 12 },
+      { header: "Capacidade", key: "capacidade", width: 12 },
+      qtd("Estoque", "quantity", 8),
+      ...mostrarCusto ? [money("Custo", "custo", 11)] : [],
+      money("PRE\xC7O DE VENDA", "preco", 14)
+    ];
+    await exportar(res, q.format, {
+      title: "Tabela de Pre\xE7os",
+      subtitle: `Pre\xE7o = custo + ${reais(q.markup)}` + (unidade ? ` \xB7 estoque da unidade selecionada` : "") + (mostrarCusto ? " \xB7 CONT\xC9M O CUSTO \u2014 uso interno" : " \xB7 n\xE3o mostra o pre\xE7o de compra"),
+      columns: colunas,
+      rows: linhas,
+      summary: [
+        { label: "Produtos na lista", value: String(linhas.length) },
+        { label: "Pe\xE7as em estoque", value: String(linhas.reduce((s, l) => s + l.quantity, 0)) },
+        { label: "Acr\xE9scimo aplicado", value: reais(q.markup) }
+      ]
+    });
+  })
+);
 
 // server/sistema.ts
 import ExcelJS2 from "exceljs";

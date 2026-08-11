@@ -1,4 +1,5 @@
 import { ProductFormModal } from '@/components/products/ProductFormModal';
+import { TabelaDePrecosModal } from '@/components/products/TabelaDePrecosModal';
 import { SaleModal } from '@/components/sales/SaleModal';
 import { Badge, StatusBadge, StockBadge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
@@ -9,6 +10,7 @@ import { Input, Select } from '@/components/ui/Field';
 import { Modal } from '@/components/ui/Modal';
 import { Pagination } from '@/components/ui/Pagination';
 import { useAuth } from '@/contexts/AuthContext';
+import { pode } from '@/lib/permissoes';
 import { useToast } from '@/contexts/ToastContext';
 import {
   useAdjustStock,
@@ -31,6 +33,7 @@ import {
   Package,
   Pencil,
   Plus,
+  Printer,
   Search,
   ShoppingCart,
   SlidersHorizontal,
@@ -62,6 +65,7 @@ export default function StockPage() {
   });
 
   const [formOpen, setFormOpen] = useState(false);
+  const [tabelaAberta, setTabelaAberta] = useState(false);
   const [editing, setEditing] = useState<Product | null>(null);
   const [saleProduct, setSaleProduct] = useState<Product | null>(null);
   const [deleting, setDeleting] = useState<Product | null>(null);
@@ -69,7 +73,8 @@ export default function StockPage() {
   const [adjustForm, setAdjustForm] = useState({ quantity: '1', reason: '', unitId: '' });
 
   const toast = useToast();
-  const { isAdmin } = useAuth();
+  const { isAdmin, user } = useAuth();
+  const podeVerCusto = pode(user?.role, 'financeiro');
   const { unidadeId, unidades } = useUnit();
   const debouncedSearch = useDebounce(search, 350);
 
@@ -403,6 +408,16 @@ export default function StockPage() {
             </details>
           </div>
 
+          {podeVerCusto && (
+            <Button
+              variant="outline"
+              icon={<Printer className="h-4 w-4" />}
+              onClick={() => setTabelaAberta(true)}
+            >
+              Tabela de preços
+            </Button>
+          )}
+
           <Button
             icon={<Plus className="h-4 w-4" />}
             onClick={() => {
@@ -593,6 +608,8 @@ export default function StockPage() {
       </Card>
 
       {/* Modais */}
+      <TabelaDePrecosModal aberto={tabelaAberta} aoFechar={() => setTabelaAberta(false)} />
+
       <ProductFormModal
         open={formOpen}
         onClose={() => {
