@@ -71,18 +71,22 @@ const CATALOGO = {
     coluna: 'minQuantity',
     ajuda: 'Abaixo disso o produto entra no alerta',
   },
-  custo: { rotulo: 'Preço de custo', tipo: 'dinheiro', coluna: 'costPrice', essencial: true },
+  custo: { rotulo: 'Preço de custo', tipo: 'dinheiro', coluna: 'costPrice' },
   venda: {
     rotulo: 'Preço de venda (varejo)',
     tipo: 'dinheiro',
     coluna: 'salePrice',
-    essencial: true,
+    ajuda: 'Opcional — se ficar vazio, vale o preço de atacado',
   },
+  /**
+   * O preço de referência da loja. É o único obrigatório: sem ele não dá
+   * para saber quanto vale o estoque nem sugerir valor na venda.
+   */
   atacado: {
     rotulo: 'Preço de atacado',
     tipo: 'dinheiro',
     coluna: 'wholesalePrice',
-    ajuda: 'Deixe vazio se não vende no atacado',
+    essencial: true,
   },
   fornecedor: { rotulo: 'Fornecedor', tipo: 'fornecedor', coluna: 'supplierId' },
   status: { rotulo: 'Status', tipo: 'status', coluna: 'status' },

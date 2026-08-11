@@ -440,7 +440,8 @@ export async function valorDoEstoque(unidadeId?: string): Promise<{ custo: numbe
   const [linha] = await db.$queryRaw<{ custo: string | null; venda: string | null }[]>`
     SELECT
       SUM(s."quantity" * p."costPrice")::text AS custo,
-      SUM(s."quantity" * p."salePrice")::text AS venda
+      -- O varejo é opcional: sem ele, o valor de referência é o atacado.
+      SUM(s."quantity" * COALESCE(NULLIF(p."salePrice", 0), p."wholesalePrice", 0))::text AS venda
     FROM "stock" s
     JOIN "products" p ON p."id" = s."productId"
     WHERE s."quantity" > 0

@@ -47,6 +47,13 @@ const money = (header: string, key: string, width = 12): Coluna => ({
   format: decimal,
 });
 
+/**
+ * Preço de referência do produto: o varejo quando existe, senão o atacado.
+ * O varejo é opcional no cadastro, então não dá para somar direto por ele.
+ */
+const precoDeVenda = (p: { salePrice: unknown; wholesalePrice: unknown }): number =>
+  numero(p.salePrice as never) || numero(p.wholesalePrice as never);
+
 const qtd = (header: string, key: string, width = 8): Coluna => ({
   header,
   key,
@@ -95,7 +102,7 @@ rotasRelatorios.get(
       salePrice: numero(p.salePrice),
       wholesalePrice: p.wholesalePrice != null ? numero(p.wholesalePrice) : null,
       totalCost: numero(p.costPrice) * quantity,
-      totalSale: numero(p.salePrice) * quantity,
+      totalSale: precoDeVenda(p) * quantity,
       supplier: p.supplier?.name ?? '—',
       status: STATUS_PRODUTO_LABEL[p.status] ?? p.status,
       entryDate: dataBR(p.entryDate),
@@ -218,7 +225,7 @@ rotasRelatorios.get(
         where: unidade ? { unitId: unidade } : {},
         select: {
           quantity: true,
-          product: { select: { categoryId: true, costPrice: true, salePrice: true } },
+          product: { select: { categoryId: true, costPrice: true, salePrice: true, wholesalePrice: true } },
         },
       }),
       db.sale.findMany({
@@ -243,7 +250,7 @@ rotasRelatorios.get(
         products: doEstoque.length,
         stockQty: doEstoque.reduce((s, l) => s + l.quantity, 0),
         stockCost: doEstoque.reduce((s, l) => s + numero(l.product.costPrice) * l.quantity, 0),
-        stockSale: doEstoque.reduce((s, l) => s + numero(l.product.salePrice) * l.quantity, 0),
+        stockSale: doEstoque.reduce((s, l) => s + precoDeVenda(l.product) * l.quantity, 0),
         soldQty: daCategoria.reduce((s, v) => s + v.quantity, 0),
         revenue: faturamento,
         profit: faturamento - custo,

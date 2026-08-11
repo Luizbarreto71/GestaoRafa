@@ -138,13 +138,20 @@ export function ProductFormModal({ open, onClose, product }: ProductFormModalPro
     if (valores.quantidade === '' || Number(valores.quantidade) < 0) {
       novos.quantidade = 'Quantidade inválida';
     }
-    if (valores.custo !== '' && Number(valores.custo) < 0) novos.custo = 'Valor inválido';
-    if (valores.venda !== '' && Number(valores.venda) < 0) novos.venda = 'Valor inválido';
-
-    // Campos que a categoria marcou como obrigatórios.
+    // Obrigatórios: os essenciais do catálogo mais os que a categoria marcou.
     for (const c of camposVisiveis) {
-      if (!c.obrigatorio || CAMPOS[c.campo].tipo === 'fotos') continue;
-      if (!valores[c.campo]?.trim()) novos[c.campo] = `${rotuloDoCampo(c)} é obrigatório`;
+      const definicao = CAMPOS[c.campo];
+      if (definicao.tipo === 'fotos') continue;
+
+      const valor = valores[c.campo]?.trim() ?? '';
+
+      if (obrigatorio(c.campo) && valor === '' && c.campo !== 'nome' && c.campo !== 'quantidade') {
+        novos[c.campo] = `Informe ${rotuloDoCampo(c).toLowerCase()}`;
+        continue;
+      }
+      if (definicao.tipo === 'dinheiro' && valor !== '' && Number(valor) < 0) {
+        novos[c.campo] = 'Valor inválido';
+      }
     }
 
     setErros(novos);

@@ -415,18 +415,22 @@ var CATALOGO = {
     coluna: "minQuantity",
     ajuda: "Abaixo disso o produto entra no alerta"
   },
-  custo: { rotulo: "Pre\xE7o de custo", tipo: "dinheiro", coluna: "costPrice", essencial: true },
+  custo: { rotulo: "Pre\xE7o de custo", tipo: "dinheiro", coluna: "costPrice" },
   venda: {
     rotulo: "Pre\xE7o de venda (varejo)",
     tipo: "dinheiro",
     coluna: "salePrice",
-    essencial: true
+    ajuda: "Opcional \u2014 se ficar vazio, vale o pre\xE7o de atacado"
   },
+  /**
+   * O preço de referência da loja. É o único obrigatório: sem ele não dá
+   * para saber quanto vale o estoque nem sugerir valor na venda.
+   */
   atacado: {
     rotulo: "Pre\xE7o de atacado",
     tipo: "dinheiro",
     coluna: "wholesalePrice",
-    ajuda: "Deixe vazio se n\xE3o vende no atacado"
+    essencial: true
   },
   fornecedor: { rotulo: "Fornecedor", tipo: "fornecedor", coluna: "supplierId" },
   status: { rotulo: "Status", tipo: "status", coluna: "status" },
@@ -1319,7 +1323,8 @@ async function valorDoEstoque(unidadeId) {
   const [linha] = await db.$queryRaw`
     SELECT
       SUM(s."quantity" * p."costPrice")::text AS custo,
-      SUM(s."quantity" * p."salePrice")::text AS venda
+      -- O varejo é opcional: sem ele, o valor de referência é o atacado.
+      SUM(s."quantity" * COALESCE(NULLIF(p."salePrice", 0), p."wholesalePrice", 0))::text AS venda
     FROM "stock" s
     JOIN "products" p ON p."id" = s."productId"
     WHERE s."quantity" > 0
@@ -2667,6 +2672,7 @@ var money = (header, key, width = 12) => ({
   align: "right",
   format: decimal
 });
+var precoDeVenda = (p) => numero(p.salePrice) || numero(p.wholesalePrice);
 var qtd = (header, key, width = 8) => ({
   header,
   key,
@@ -2708,7 +2714,7 @@ rotasRelatorios.get(
       salePrice: numero(p.salePrice),
       wholesalePrice: p.wholesalePrice != null ? numero(p.wholesalePrice) : null,
       totalCost: numero(p.costPrice) * quantity,
-      totalSale: numero(p.salePrice) * quantity,
+      totalSale: precoDeVenda(p) * quantity,
       supplier: p.supplier?.name ?? "\u2014",
       status: STATUS_PRODUTO_LABEL[p.status] ?? p.status,
       entryDate: dataBR(p.entryDate)
@@ -2823,7 +2829,7 @@ rotasRelatorios.get(
         where: unidade ? { unitId: unidade } : {},
         select: {
           quantity: true,
-          product: { select: { categoryId: true, costPrice: true, salePrice: true } }
+          product: { select: { categoryId: true, costPrice: true, salePrice: true, wholesalePrice: true } }
         }
       }),
       db.sale.findMany({
@@ -2846,7 +2852,7 @@ rotasRelatorios.get(
         products: doEstoque.length,
         stockQty: doEstoque.reduce((s, l) => s + l.quantity, 0),
         stockCost: doEstoque.reduce((s, l) => s + numero(l.product.costPrice) * l.quantity, 0),
-        stockSale: doEstoque.reduce((s, l) => s + numero(l.product.salePrice) * l.quantity, 0),
+        stockSale: doEstoque.reduce((s, l) => s + precoDeVenda(l.product) * l.quantity, 0),
         soldQty: daCategoria.reduce((s, v) => s + v.quantity, 0),
         revenue: faturamento,
         profit: faturamento - custo

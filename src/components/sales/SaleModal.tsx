@@ -60,7 +60,7 @@ export function SaleModal({ open, onClose, product }: SaleModalProps) {
       customerName: '',
       customerPhone: '',
       quantity: '1',
-      unitPrice: String(product.salePrice ?? ''),
+      unitPrice: String(product.salePrice || product.wholesalePrice || ''),
       paymentMethod: 'PIX',
       saleDate: toInputDate(new Date()),
       notes: '',
@@ -261,7 +261,7 @@ export function SaleModal({ open, onClose, product }: SaleModalProps) {
             />
 
             {/* Atalhos: preenchem o valor sem impedir um preço combinado. */}
-            {product.wholesalePrice != null && (
+            {product.wholesalePrice != null && product.salePrice > 0 && (
               <div className="mt-1.5 flex gap-1.5">
                 <BotaoDePreco
                   rotulo="Varejo"
