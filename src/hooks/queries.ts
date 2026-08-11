@@ -1,10 +1,11 @@
 import { getErrorMessage } from '@/lib/api';
+import type { Troca } from '@/types';
 import { enqueue, isOfflineError } from '@/lib/offline';
 import {
+  caixaService,
   categoryService,
   customerService,
   dashboardService,
-  caixaService,
   movementService,
   notificacaoService,
   preVendaService,
@@ -12,11 +13,12 @@ import {
   saleService,
   settingsService,
   supplierService,
-  unitService,
-  userService,
+  trocaService,
   type MovementFilters,
   type ProductFilters,
   type SaleFilters,
+  unitService,
+  userService,
 } from '@/services';
 import { useMutation, useQuery, useQueryClient, type UseMutationOptions } from '@tanstack/react-query';
 
@@ -481,6 +483,37 @@ export function useCrudMutation<TVariables, TData>(
     onSuccess: (...args) => {
       void queryClient.invalidateQueries({ queryKey: [invalidateKey] });
       options?.onSuccess?.(...args);
+    },
+  });
+}
+
+
+// ------------------------------------------------------------------ Trocas
+
+export const useTrocas = (params: { status?: string; search?: string; livres?: string } = {}) =>
+  useQuery({ queryKey: ['trocas', params], queryFn: () => trocaService.listar(params) });
+
+/**
+ * Criar, consultar a Anatel, recusar e excluir.
+ *
+ * Tudo invalida as trocas e as pré-vendas: uma troca livre é opção de
+ * abatimento na hora de montar o pedido.
+ */
+export function useTroca(acao: 'criar' | 'anatel' | 'recusar' | 'excluir') {
+  const qc = useQueryClient();
+
+  return useMutation<{ message?: string } & Partial<Troca>, Error, { id?: string; dados?: Record<string, unknown> }>({
+    mutationFn: (v) =>
+      acao === 'criar'
+        ? trocaService.criar(v.dados ?? {})
+        : acao === 'anatel'
+          ? trocaService.anatel(v.id!, v.dados as never)
+          : acao === 'recusar'
+            ? trocaService.recusar(v.id!)
+            : trocaService.excluir(v.id!),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['trocas'] });
+      void qc.invalidateQueries({ queryKey: ['prevendas'] });
     },
   });
 }

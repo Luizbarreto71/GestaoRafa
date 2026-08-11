@@ -87,6 +87,30 @@ enum TransferStatus {
   CANCELADA
 }
 
+enum ImeiSituacao {
+  NAO_CONSULTADO
+  REGULAR
+  IRREGULAR
+  BLOQUEADO
+}
+
+enum TradeInStatus {
+  /// Avaliada pelo vendedor, ainda não passou pelo caixa.
+  AVALIADA
+  /// Virou venda: o aparelho é da loja.
+  ACEITA
+  RECUSADA
+}
+
+enum TradeInFotoTipo {
+  /// Print da consulta da Anatel.
+  ANATEL
+  /// Documento com foto do cliente.
+  DOCUMENTO
+  /// O aparelho, para registrar o estado em que chegou.
+  APARELHO
+}
+
 enum PaymentMethod {
   PIX
   DINHEIRO
@@ -113,6 +137,7 @@ model Unit {
   transfersOut StockTransfer[]   @relation("origem")
   transfersIn  StockTransfer[]   @relation("destino")
   withdrawals  StockWithdrawal[]
+  tradeIns     TradeIn[]
   PreSale      PreSale[]
   CashRegister CashRegister[]
 
@@ -142,6 +167,7 @@ model User {
   preVendasAtendidas PreSale[]      @relation("caixaPreVenda")
   turnosDeCaixa      CashRegister[] @relation("turnoDoCaixa")
   notificacoes       Notification[]
+  tradeIns           TradeIn[]      @relation("vendedorTroca")
 
   @@index([unitId])
   @@map("users")
@@ -192,8 +218,9 @@ model Customer {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  sales   Sale[]
-  PreSale PreSale[]
+  sales    Sale[]
+  tradeIns TradeIn[]
+  PreSale  PreSale[]
 
   @@index([name])
   @@index([phone])
@@ -236,6 +263,7 @@ model Product {
   /// separados.
   stock        Stock[]
   photos       ProductPhoto[]
+  tradeIns     TradeIn[]
   saleItems    SaleItem[]
   preSaleItems PreSaleItem[]
   movements    StockMovement[]
@@ -257,6 +285,85 @@ model Product {
 
 /// A imagem fica no próprio banco — evita configurar serviço de arquivos.
 /// O navegador reduz a foto antes de enviar, então cada linha é pequena.
+/// Aparelho usado recebido como parte do pagamento.
+model TradeIn {
+  id     String        @id @default(uuid())
+  /// Número visível: TR-000001.
+  code   String        @unique
+  status TradeInStatus @default(AVALIADA)
+
+  // ----- o aparelho que entra
+  modelo        String
+  marca         String?
+  armazenamento String?
+  cor           String?
+  imei          String
+  imeiSituacao  ImeiSituacao @default(NAO_CONSULTADO)
+  /// Quando a consulta da Anatel foi feita.
+  imeiCheckedAt DateTime?
+
+  estado      String?
+  /// Chaves de shared/trocas.ts — bateria, tela, traseira…
+  defeitos    String[]
+  observacoes String?
+
+  /// Quanto a loja aceitou pagar pelo aparelho usado.
+  valorAvaliado Decimal @db.Decimal(12, 2)
+
+  // ----- o aparelho que sai
+  productId  String?
+  product    Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  saidaNome  String?
+  valorSaida Decimal  @default(0) @db.Decimal(12, 2)
+
+  // ----- o cliente
+  customerId       String?
+  customer         Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  customerName     String
+  customerPhone    String?
+  customerDocument String?
+
+  sellerId String
+  seller   User   @relation("vendedorTroca", fields: [sellerId], references: [id])
+
+  unitId String?
+  unit   Unit?   @relation(fields: [unitId], references: [id], onDelete: SetNull)
+
+  preSaleId String?  @unique
+  preSale   PreSale? @relation(fields: [preSaleId], references: [id], onDelete: SetNull)
+
+  saleId String? @unique
+  sale   Sale?   @relation(fields: [saleId], references: [id], onDelete: SetNull)
+
+  /// Produto criado no estoque quando a troca foi aceita.
+  estoqueProductId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  photos TradeInPhoto[]
+
+  @@index([status])
+  @@index([sellerId])
+  @@index([imei])
+  @@index([createdAt])
+  @@map("trade_ins")
+}
+
+model TradeInPhoto {
+  id        String          @id @default(uuid())
+  tipo      TradeInFotoTipo @default(APARELHO)
+  data      Bytes
+  mimeType  String          @default("image/jpeg")
+  createdAt DateTime        @default(now())
+
+  tradeInId String
+  tradeIn   TradeIn @relation(fields: [tradeInId], references: [id], onDelete: Cascade)
+
+  @@index([tradeInId])
+  @@map("trade_in_photos")
+}
+
 model ProductPhoto {
   id        String   @id @default(uuid())
   data      Bytes
@@ -321,6 +428,7 @@ model Sale {
   commissionAmount Decimal? @db.Decimal(12, 2)
 
   items     SaleItem[]
+  tradeIn   TradeIn?
   movements StockMovement[]
 
   @@index([unitId])
@@ -396,8 +504,10 @@ model PreSale {
   /// Depois disso a pré-venda vira EXPIRADA.
   expiresAt DateTime?
 
-  items PreSaleItem[]
-  sale  Sale?
+  items   PreSaleItem[]
+  sale    Sale?
+  /// Aparelho usado dado como parte do pagamento.
+  tradeIn TradeIn?
 
   @@index([status])
   @@index([sellerId])

@@ -20,13 +20,25 @@ const SIZES = {
   xl: 'max-w-6xl',
 };
 
+/**
+ * Pilha dos modais abertos, do fundo para o topo.
+ *
+ * Sem isto, um modal aberto de dentro de outro faria o ESC fechar os dois —
+ * e quem estava preenchendo o de baixo perderia tudo o que digitou.
+ */
+const pilha: symbol[] = [];
+
 export function Modal({ open, onClose, title, description, size = 'md', footer, children }: ModalProps) {
   // Fecha com ESC e trava o scroll do fundo enquanto aberto.
   useEffect(() => {
     if (!open) return;
 
+    const meuLugar = Symbol('modal');
+    pilha.push(meuLugar);
+
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
+      // Só o modal de cima responde ao ESC.
+      if (event.key === 'Escape' && pilha[pilha.length - 1] === meuLugar) onClose();
     };
 
     const previousOverflow = document.body.style.overflow;
@@ -34,7 +46,11 @@ export function Modal({ open, onClose, title, description, size = 'md', footer, 
     window.addEventListener('keydown', onKeyDown);
 
     return () => {
-      document.body.style.overflow = previousOverflow;
+      const i = pilha.indexOf(meuLugar);
+      if (i !== -1) pilha.splice(i, 1);
+
+      // O de baixo continua aberto: o scroll do fundo segue travado.
+      if (!pilha.length) document.body.style.overflow = previousOverflow;
       window.removeEventListener('keydown', onKeyDown);
     };
   }, [open, onClose]);

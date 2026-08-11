@@ -192,6 +192,61 @@ export interface PreSale {
   cashier?: { id: string; name: string } | null;
   unit?: { id: string; name: string } | null;
   sale?: { id: string; code: string } | null;
+  /** Aparelho usado dado como parte do pagamento. */
+  tradeIn?: Pick<
+    Troca,
+    'id' | 'code' | 'modelo' | 'imei' | 'imeiSituacao' | 'valorAvaliado' | 'estado' | 'defeitos'
+  > | null;
+}
+
+export type SituacaoImei = 'NAO_CONSULTADO' | 'REGULAR' | 'IRREGULAR' | 'BLOQUEADO';
+export type TrocaStatus = 'AVALIADA' | 'ACEITA' | 'RECUSADA';
+
+export interface TrocaFoto {
+  id: string;
+  tipo: 'ANATEL' | 'DOCUMENTO' | 'APARELHO';
+  url: string;
+}
+
+/** Aparelho usado recebido como parte do pagamento. */
+export interface Troca {
+  id: string;
+  code: string;
+  status: TrocaStatus;
+
+  modelo: string;
+  marca?: string | null;
+  armazenamento?: string | null;
+  cor?: string | null;
+  imei: string;
+  imeiSituacao: SituacaoImei;
+  imeiCheckedAt?: string | null;
+
+  estado?: string | null;
+  defeitos: string[];
+  observacoes?: string | null;
+
+  valorAvaliado: number;
+  saidaNome?: string | null;
+  valorSaida: number;
+  /** Quanto o cliente ainda paga. Negativo = a loja é que deve. */
+  diferenca: number;
+
+  customerName: string;
+  customerPhone?: string | null;
+  customerDocument?: string | null;
+
+  createdAt: string;
+  photos: TrocaFoto[];
+  seller?: { id: string; name: string } | null;
+  unit?: { id: string; name: string } | null;
+  product?: { id: string; name: string } | null;
+  preSale?: { id: string; code: string; status: PreSaleStatus } | null;
+  sale?: { id: string; code: string } | null;
+  tradeIn?: Pick<
+    Troca,
+    'id' | 'code' | 'modelo' | 'imei' | 'imeiSituacao' | 'valorAvaliado' | 'estado' | 'defeitos'
+  > | null;
 }
 
 export interface Notificacao {

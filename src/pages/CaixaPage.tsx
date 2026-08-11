@@ -21,6 +21,7 @@ import {
 } from '@/hooks/queries';
 import { downloadFile } from '@/lib/api';
 import { cn } from '@/lib/cn';
+import { DEFEITO_ROTULO, SITUACAO_IMEI_ROTULO } from '@shared/trocas';
 import { caixaService } from '@/services';
 import { formatCurrency, formatDateTime, PAYMENT_OPTIONS, PRE_SALE_LABEL } from '@/lib/format';
 import type { ItemVenda, PreSale } from '@/types';
@@ -32,6 +33,7 @@ import {
   FileText,
   Inbox,
   Receipt,
+  Repeat2,
   ShoppingBag,
   TrendingUp,
 } from 'lucide-react';
@@ -212,10 +214,27 @@ function FilaDePreVendas() {
                 ))}
               </div>
 
+              {pv.tradeIn && (
+                <div className="flex items-center gap-2 rounded-lg bg-accent/5 px-2.5 py-1.5 text-xs">
+                  <Repeat2 className="h-3.5 w-3.5 shrink-0 text-accent" />
+                  <span className="min-w-0 flex-1 truncate text-slate-600 dark:text-slate-400">
+                    Troca {pv.tradeIn.code} · {pv.tradeIn.modelo}
+                  </span>
+                  <span className="shrink-0 font-semibold text-success">
+                    − {formatCurrency(pv.tradeIn.valorAvaliado)}
+                  </span>
+                </div>
+              )}
+
               <div className="flex items-center justify-between border-t border-slate-200 pt-2 dark:border-navy-700">
-                <span className="text-lg font-extrabold text-success">
-                  {formatCurrency(pv.totalAmount)}
-                </span>
+                <div>
+                  {pv.tradeIn && (
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400">já com a troca abatida</p>
+                  )}
+                  <span className="text-lg font-extrabold text-success">
+                    {formatCurrency(pv.totalAmount)}
+                  </span>
+                </div>
                 <Button size="sm" onClick={() => setAbrindo(pv)}>
                   {pv.status === 'EM_ATENDIMENTO' ? 'Continuar' : 'Abrir pré-venda'}
                 </Button>
@@ -357,6 +376,75 @@ function ConferenciaDaPreVenda({
           </div>
 
           <CarrinhoDeItens itens={itens} aoMudar={setItens} unidadeId={form.unitId} />
+
+          {/* A troca muda o que se cobra: precisa estar à vista do caixa. */}
+          {detalhe?.tradeIn && (
+            <div className="rounded-lg border border-accent bg-accent/5 p-3">
+              <p className="flex items-center gap-2 text-sm font-bold text-navy-900 dark:text-slate-100">
+                <Repeat2 className="h-4 w-4 text-accent" />
+                Troca {detalhe.tradeIn.code}
+              </p>
+
+              <div className="mt-1.5 space-y-1 text-sm">
+                <p className="flex justify-between gap-3">
+                  <span className="text-slate-500 dark:text-slate-400">Aparelho recebido</span>
+                  <span className="text-right font-medium text-navy-900 dark:text-slate-100">
+                    {detalhe.tradeIn.modelo}
+                    {detalhe.tradeIn.estado ? ` · ${detalhe.tradeIn.estado}` : ''}
+                  </span>
+                </p>
+                <p className="flex justify-between gap-3">
+                  <span className="text-slate-500 dark:text-slate-400">IMEI</span>
+                  <span className="font-mono text-xs text-navy-900 dark:text-slate-100">
+                    {detalhe.tradeIn.imei}
+                  </span>
+                </p>
+                <p className="flex justify-between gap-3">
+                  <span className="text-slate-500 dark:text-slate-400">Anatel</span>
+                  <span
+                    className={cn(
+                      'font-semibold',
+                      detalhe.tradeIn.imeiSituacao === 'REGULAR'
+                        ? 'text-success'
+                        : detalhe.tradeIn.imeiSituacao === 'BLOQUEADO'
+                          ? 'text-danger'
+                          : 'text-warning',
+                    )}
+                  >
+                    {SITUACAO_IMEI_ROTULO[detalhe.tradeIn.imeiSituacao] ?? detalhe.tradeIn.imeiSituacao}
+                  </span>
+                </p>
+              </div>
+
+              {detalhe.tradeIn.defeitos.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-1">
+                  {detalhe.tradeIn.defeitos.map((d) => (
+                    <span
+                      key={d}
+                      className="rounded bg-warning-bg px-1.5 py-0.5 text-[11px] font-medium text-warning dark:bg-warning/15"
+                    >
+                      {DEFEITO_ROTULO[d] ?? d}
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {detalhe.tradeIn.imeiSituacao === 'NAO_CONSULTADO' && (
+                <p className="mt-2 text-xs font-semibold text-warning">
+                  ⚠ Ninguém consultou este IMEI na Anatel. Confira antes de fechar.
+                </p>
+              )}
+
+              <p className="mt-2 flex items-center justify-between border-t border-accent/20 pt-2">
+                <span className="text-sm text-slate-600 dark:text-slate-400">
+                  Abatido do que o cliente paga
+                </span>
+                <strong className="text-success">
+                  − {formatCurrency(detalhe.tradeIn.valorAvaliado)}
+                </strong>
+              </p>
+            </div>
+          )}
 
           {semSaldo && (
             <p className="rounded-lg bg-danger-bg px-4 py-2.5 text-sm font-semibold text-danger dark:bg-danger/10">

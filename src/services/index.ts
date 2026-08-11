@@ -17,6 +17,7 @@ import type {
   SalesPage,
   Supplier,
   Transfer,
+  Troca,
   TurnoDeCaixa,
   Unit,
   User,
@@ -222,6 +223,24 @@ export const importService = {
 };
 
 // -------------------------------------------------------------- Pré-vendas
+
+export const trocaService = {
+  listar: (params: { status?: string; search?: string; livres?: string; page?: number } = {}) =>
+    api.get<Paginated<Troca>>('/trocas', { params: clean(params) }).then((r) => r.data),
+
+  buscar: (id: string) => api.get<Troca>(`/trocas/${id}`).then((r) => r.data),
+
+  criar: (data: Record<string, unknown>) =>
+    api.post<Troca & { message: string }>('/trocas', data).then((r) => r.data),
+
+  /** Guarda o resultado da consulta da Anatel feita à mão. */
+  anatel: (id: string, data: { imeiSituacao: string; foto?: string | null }) =>
+    api.post<Troca>(`/trocas/${id}/anatel`, data).then((r) => r.data),
+
+  recusar: (id: string) => api.post<{ message: string }>(`/trocas/${id}/recusar`).then((r) => r.data),
+
+  excluir: (id: string) => api.delete<{ message: string }>(`/trocas/${id}`).then((r) => r.data),
+};
 
 export const preVendaService = {
   listar: (params: { status?: string; sellerId?: string; search?: string; page?: number } = {}) =>

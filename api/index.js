@@ -917,6 +917,7 @@ var TODAS = [
   "estoque.transferir",
   "retirada.aprovar",
   "prevenda.criar",
+  "troca.criar",
   "prevenda.verTodas",
   "pdv",
   "venda.finalizar",
@@ -940,6 +941,7 @@ var PERMISSOES = {
     "estoque.transferir",
     "prevenda.criar",
     "prevenda.verTodas",
+    "troca.criar",
     "relatorios"
   ],
   // Recebe, confere e finaliza. Não cadastra nem altera preço.
@@ -947,13 +949,14 @@ var PERMISSOES = {
     "produtos.ver",
     "estoque.ver",
     "prevenda.verTodas",
+    "troca.criar",
     "pdv",
     "venda.finalizar",
     "venda.cancelar",
     "caixa.fechar"
   ],
   // Só monta a intenção de venda. Nunca baixa estoque.
-  VENDEDOR: ["produtos.ver", "estoque.ver", "prevenda.criar"]
+  VENDEDOR: ["produtos.ver", "estoque.ver", "prevenda.criar", "troca.criar"]
 };
 var podeFazer = (perfil, permissao) => Boolean(perfil && PERMISSOES[perfil]?.includes(permissao));
 function exigir(permissao) {
@@ -1686,7 +1689,7 @@ rotasDashboard.get(
             unitName: unidades.find((u) => u.id === b.unitId)?.name ?? null
           };
         }),
-        outOfStock: zerados.map((z11) => ({ ...z11.product, unitName: z11.unit.name })),
+        outOfStock: zerados.map((z12) => ({ ...z12.product, unitName: z12.unit.name })),
         soldToday: vendasHoje,
         soldTodayCount: vendasHoje.reduce((s, v) => s + v.items.reduce((n, i) => n + i.quantity, 0), 0),
         revenueToday: vendasHoje.reduce((s, v) => s + numero(v.totalAmount), 0),
@@ -4169,6 +4172,18 @@ var STATUS_PRE_VENDA = [
 var COM_TUDO = {
   items: { include: { product: { select: { id: true, name: true, model: true, imei: true } } } },
   seller: { select: { id: true, name: true } },
+  tradeIn: {
+    select: {
+      id: true,
+      code: true,
+      modelo: true,
+      imei: true,
+      imeiSituacao: true,
+      valorAvaliado: true,
+      estado: true,
+      defeitos: true
+    }
+  },
   cashier: { select: { id: true, name: true } },
   unit: { select: { id: true, name: true } },
   sale: { select: { id: true, code: true } }
@@ -4189,9 +4204,17 @@ var preVendaSchema = z9.object({
   paymentMethod: z9.enum(PAGAMENTOS).optional().nullable(),
   installments: z9.coerce.number().int().min(1).max(24).default(1),
   notes: z9.string().trim().max(1e3).optional().nullable(),
-  items: z9.array(itemSchema).min(1, "Inclua ao menos um produto")
+  items: z9.array(itemSchema).min(1, "Inclua ao menos um produto"),
+  /** Aparelho usado que o cliente está dando como parte do pagamento. */
+  tradeInId: z9.string().uuid().optional().nullable()
 });
 var podeVerTodas = (req) => podeFazer(req.usuario?.papel, "prevenda.verTodas");
+async function liberarTroca(preSaleId) {
+  await db.tradeIn.updateMany({
+    where: { preSaleId, status: "AVALIADA" },
+    data: { preSaleId: null }
+  });
+}
 rotasPreVendas.get(
   "/",
   rota(async (req, res) => {
@@ -4268,7 +4291,23 @@ rotasPreVendas.post(
     if (produtos.length !== new Set(dados.items.map((i) => i.productId)).size) {
       throw naoEncontrado("Produto");
     }
-    const total = dados.items.reduce((s, i) => s + i.unitPrice * i.quantity, 0);
+    const bruto = dados.items.reduce((s, i) => s + i.unitPrice * i.quantity, 0);
+    let abatimento = 0;
+    if (dados.tradeInId) {
+      const troca = await db.tradeIn.findUnique({ where: { id: dados.tradeInId } });
+      if (!troca) throw naoEncontrado("Troca");
+      if (troca.preSaleId || troca.saleId) {
+        throw new AppError(`A troca ${troca.code} j\xE1 est\xE1 em outra pr\xE9-venda.`);
+      }
+      if (troca.status !== "AVALIADA") {
+        throw new AppError(`A troca ${troca.code} n\xE3o est\xE1 mais dispon\xEDvel.`);
+      }
+      if (troca.imeiSituacao === "BLOQUEADO") {
+        throw new AppError(`A troca ${troca.code} tem IMEI bloqueado na Anatel.`);
+      }
+      abatimento = Number(troca.valorAvaliado);
+    }
+    const total = Math.max(0, bruto - abatimento);
     const preVenda = await db.preSale.create({
       data: {
         code: await proximoCodigo("prevenda", "PV"),
@@ -4282,6 +4321,7 @@ rotasPreVendas.post(
         installments: dados.installments,
         notes: dados.notes ?? null,
         totalAmount: new Prisma4.Decimal(total),
+        ...dados.tradeInId ? { tradeIn: { connect: { id: dados.tradeInId } } } : {},
         // Sem atendimento no mesmo dia, some da fila do caixa.
         expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1e3),
         items: {
@@ -4299,14 +4339,14 @@ rotasPreVendas.post(
     });
     await notificarPerfil("CAIXA", {
       title: `Nova pr\xE9-venda ${preVenda.code}`,
-      message: `${preVenda.customerName} \xB7 ${dados.items.length} item(ns) \xB7 R$ ${total.toFixed(2)} \xB7 por ${req.usuario.nome}`,
+      message: `${preVenda.customerName} \xB7 ${dados.items.length} item(ns) \xB7 R$ ${total.toFixed(2)}` + (abatimento ? ` (troca de R$ ${abatimento.toFixed(2)} j\xE1 abatida)` : "") + ` \xB7 por ${req.usuario.nome}`,
       link: "/caixa"
     });
     await registrarLog({
       acao: "CRIAR_PREVENDA",
       entidade: "PreSale",
       id: preVenda.id,
-      alteracoes: { codigo: preVenda.code, total, itens: dados.items.length },
+      alteracoes: { codigo: preVenda.code, total, itens: dados.items.length, troca: dados.tradeInId ?? null },
       req
     });
     res.status(201).json(limpar({ ...preVenda, message: `Pr\xE9-venda ${preVenda.code} enviada ao caixa.` }));
@@ -4347,11 +4387,16 @@ rotasPreVendas.post(
     const dados = validar(finalizarSchema, req.body);
     const preVenda = await db.preSale.findUnique({
       where: { id: req.params.id },
-      include: { items: true, seller: { select: { id: true, name: true } } }
+      include: { items: true, seller: { select: { id: true, name: true } }, tradeIn: true }
     });
     if (!preVenda) throw naoEncontrado("Pr\xE9-venda");
     if (preVenda.status === "FINALIZADA") throw new AppError("Esta pr\xE9-venda j\xE1 virou venda.");
     if (preVenda.status === "CANCELADA") throw new AppError("Esta pr\xE9-venda foi cancelada.");
+    if (preVenda.tradeIn?.imeiSituacao === "BLOQUEADO") {
+      throw new AppError(
+        `A troca ${preVenda.tradeIn.code} tem IMEI bloqueado na Anatel. N\xE3o \xE9 poss\xEDvel fechar a venda com esse aparelho.`
+      );
+    }
     const itens = (dados.items ?? preVenda.items).map((i) => ({
       productId: i.productId,
       quantity: i.quantity,
@@ -4378,6 +4423,12 @@ rotasPreVendas.post(
       where: { id: preVenda.id },
       data: { status: "FINALIZADA", cashierId: req.usuario.id }
     });
+    if (preVenda.tradeIn) {
+      await db.tradeIn.update({
+        where: { id: preVenda.tradeIn.id },
+        data: { status: "ACEITA", saleId: venda.id }
+      });
+    }
     await registrarLog({
       acao: "FINALIZAR_PREVENDA",
       entidade: "Sale",
@@ -4419,6 +4470,7 @@ rotasPreVendas.post(
 Cancelada: ${motivo}`.trim() : preVenda.notes
       }
     });
+    await liberarTroca(preVenda.id);
     await notificar({
       userId: preVenda.sellerId,
       title: `Pr\xE9-venda ${preVenda.code} cancelada`,
@@ -4440,18 +4492,309 @@ rotasPreVendas.delete(
       throw new AppError("O caixa j\xE1 come\xE7ou a atender \u2014 pe\xE7a para ele cancelar.");
     }
     await db.preSale.update({ where: { id: preVenda.id }, data: { status: "CANCELADA" } });
+    await liberarTroca(preVenda.id);
     await registrarLog({ acao: "CANCELAR_PREVENDA", entidade: "PreSale", id: preVenda.id, req });
     res.json({ message: `Pr\xE9-venda ${preVenda.code} cancelada.` });
   })
 );
 
-// server/vendas.ts
+// server/trocas.ts
+import { Prisma as Prisma5 } from "@prisma/client";
 import { Router as Router12 } from "express";
 import { z as z10 } from "zod";
-var rotasVendas = Router12();
+
+// shared/trocas.ts
+var DEFEITOS = [
+  { chave: "bateria", rotulo: "Bateria ruim" },
+  { chave: "tela", rotulo: "Tela com avaria" },
+  { chave: "traseira", rotulo: "Traseira trincada" },
+  { chave: "camera", rotulo: "C\xE2mera com problema" },
+  { chave: "botoes", rotulo: "Bot\xF5es falhando" },
+  { chave: "carga", rotulo: "N\xE3o carrega direito" },
+  { chave: "biometria", rotulo: "Biometria / Face ID n\xE3o funciona" },
+  { chave: "molhado", rotulo: "J\xE1 tomou \xE1gua" },
+  { chave: "reparo", rotulo: "J\xE1 foi aberto / tem pe\xE7a trocada" },
+  { chave: "conta", rotulo: "Conta do fabricante ainda logada" }
+];
+var DEFEITO_ROTULO = Object.fromEntries(
+  DEFEITOS.map((d) => [d.chave, d.rotulo])
+);
+var SITUACOES_IMEI = [
+  { chave: "NAO_CONSULTADO", rotulo: "Ainda n\xE3o consultei", tom: "neutral" },
+  { chave: "REGULAR", rotulo: "Regular", tom: "success" },
+  { chave: "IRREGULAR", rotulo: "Irregular / n\xE3o homologado", tom: "warning" },
+  { chave: "BLOQUEADO", rotulo: "Roubado, furtado ou bloqueado", tom: "danger" }
+];
+var SITUACAO_IMEI_ROTULO = Object.fromEntries(
+  SITUACOES_IMEI.map((s) => [s.chave, s.rotulo])
+);
+function imeiValido(imei) {
+  const numeros = imei.replace(/\D/g, "");
+  if (numeros.length !== 15) return false;
+  let soma = 0;
+  for (let i = 0; i < 15; i += 1) {
+    let d = Number(numeros[i]);
+    if (i % 2 === 1) {
+      d *= 2;
+      if (d > 9) d -= 9;
+    }
+    soma += d;
+  }
+  return soma % 10 === 0;
+}
+
+// server/trocas.ts
+var rotasTrocas = Router12();
+rotasTrocas.use(autenticar);
+var CHAVES_DEFEITO = DEFEITOS.map((d) => d.chave);
+var COM_TUDO2 = {
+  photos: { select: { id: true, tipo: true }, orderBy: { createdAt: "asc" } },
+  seller: { select: { id: true, name: true } },
+  unit: { select: { id: true, name: true } },
+  product: { select: { id: true, name: true } },
+  preSale: { select: { id: true, code: true, status: true } },
+  sale: { select: { id: true, code: true } }
+};
+var paraJson = (t) => ({
+  ...limpar(t),
+  photos: t.photos.map((f) => ({ id: f.id, tipo: f.tipo, url: `/api/trocas/fotos/${f.id}` })),
+  /** Quanto o cliente ainda precisa pagar. Negativo = a loja é que deve. */
+  diferenca: Number(t.valorSaida) - Number(t.valorAvaliado)
+});
+var fotoSchema = z10.object({
+  tipo: z10.enum(["ANATEL", "DOCUMENTO", "APARELHO"]),
+  /** data:image/jpeg;base64,… já reduzida pelo navegador. */
+  data: z10.string().max(4e6)
+});
+var trocaSchema = z10.object({
+  modelo: z10.string().trim().min(2, "Informe o modelo do aparelho").max(120),
+  marca: z10.string().trim().max(60).optional().nullable(),
+  armazenamento: z10.string().trim().max(20).optional().nullable(),
+  cor: z10.string().trim().max(40).optional().nullable(),
+  imei: z10.string().trim().transform((v) => v.replace(/\D/g, "")).refine((v) => v.length === 15, "O IMEI tem 15 n\xFAmeros").refine(imeiValido, "Esse IMEI n\xE3o passa na confer\xEAncia \u2014 confira os n\xFAmeros"),
+  imeiSituacao: z10.enum(["NAO_CONSULTADO", "REGULAR", "IRREGULAR", "BLOQUEADO"]).default("NAO_CONSULTADO"),
+  estado: z10.string().trim().max(40).optional().nullable(),
+  defeitos: z10.array(z10.enum(CHAVES_DEFEITO)).default([]),
+  observacoes: z10.string().trim().max(2e3).optional().nullable(),
+  valorAvaliado: z10.coerce.number().min(0, "Informe quanto vale o aparelho do cliente"),
+  productId: z10.string().uuid().optional().nullable(),
+  saidaNome: z10.string().trim().max(180).optional().nullable(),
+  valorSaida: z10.coerce.number().min(0).default(0),
+  customerId: z10.string().uuid().optional().nullable(),
+  customerName: z10.string().trim().min(2, "Informe o nome do cliente").max(180),
+  customerPhone: z10.string().trim().max(30).optional().nullable(),
+  customerDocument: z10.string().trim().max(30).optional().nullable(),
+  unitId: z10.string().uuid().optional().nullable(),
+  photos: z10.array(fotoSchema).max(10).optional()
+});
+var podeVerTodas2 = (req) => podeFazer(req.usuario?.papel, "prevenda.verTodas");
+function separarFotos2(fotos) {
+  return (fotos ?? []).flatMap((f) => {
+    const base64 = f.data.match(/^data:(image\/[a-z+]+);base64,(.+)$/i);
+    if (!base64) return [];
+    return [{ tipo: f.tipo, mimeType: base64[1], data: Buffer.from(base64[2], "base64") }];
+  });
+}
+rotasTrocas.get(
+  "/",
+  exigir("troca.criar"),
+  rota(async (req, res) => {
+    const q = validar(
+      z10.object({
+        page: z10.coerce.number().int().min(1).optional(),
+        pageSize: z10.coerce.number().int().min(1).max(100).optional(),
+        status: z10.string().optional().transform((v) => v ? v.split(",").map((s) => s.trim()).filter(Boolean) : void 0).pipe(z10.array(z10.enum(["AVALIADA", "ACEITA", "RECUSADA"])).min(1).optional()),
+        search: z10.string().trim().optional(),
+        /** Só as que ainda não foram amarradas a uma pré-venda. */
+        livres: z10.enum(["true", "false"]).optional()
+      }),
+      semVazios(req.query)
+    );
+    const p = paginacao(q);
+    const where = {
+      ...podeVerTodas2(req) ? {} : { sellerId: req.usuario.id },
+      ...q.status ? { status: { in: q.status } } : {},
+      ...q.livres === "true" ? { preSaleId: null, saleId: null, status: "AVALIADA" } : {},
+      ...q.search ? {
+        OR: [
+          { code: { contains: q.search, mode: "insensitive" } },
+          { imei: { contains: q.search } },
+          { modelo: { contains: q.search, mode: "insensitive" } },
+          { customerName: { contains: q.search, mode: "insensitive" } }
+        ]
+      } : {}
+    };
+    const [lista, total] = await Promise.all([
+      db.tradeIn.findMany({ where, include: COM_TUDO2, skip: p.skip, take: p.take, orderBy: { createdAt: "desc" } }),
+      db.tradeIn.count({ where })
+    ]);
+    res.json(paginado(lista.map(paraJson), total, p));
+  })
+);
+rotasTrocas.get(
+  "/:id",
+  exigir("troca.criar"),
+  rota(async (req, res) => {
+    const troca = await db.tradeIn.findUnique({ where: { id: req.params.id }, include: COM_TUDO2 });
+    if (!troca) throw naoEncontrado("Troca");
+    if (!podeVerTodas2(req) && troca.sellerId !== req.usuario.id) {
+      throw new AppError("Esta troca \xE9 de outro vendedor", 403);
+    }
+    res.json(paraJson(troca));
+  })
+);
+rotasTrocas.get(
+  "/fotos/:id",
+  rota(async (req, res) => {
+    const foto2 = await db.tradeInPhoto.findUnique({ where: { id: req.params.id } });
+    if (!foto2) throw naoEncontrado("Foto");
+    res.setHeader("Content-Type", foto2.mimeType);
+    res.setHeader("Cache-Control", "private, max-age=31536000, immutable");
+    res.send(Buffer.from(foto2.data));
+  })
+);
+rotasTrocas.post(
+  "/",
+  exigir("troca.criar"),
+  rota(async (req, res) => {
+    const dados = validar(trocaSchema, req.body);
+    const repetido = await db.tradeIn.findFirst({
+      where: { imei: dados.imei, status: { not: "RECUSADA" } },
+      select: { code: true, createdAt: true }
+    });
+    if (repetido) {
+      throw new AppError(
+        `Esse IMEI j\xE1 foi recebido na troca ${repetido.code}. Se for outro aparelho, confira os n\xFAmeros.`
+      );
+    }
+    if (dados.imeiSituacao === "BLOQUEADO") {
+      throw new AppError(
+        "A Anatel aponta este aparelho como roubado, furtado ou bloqueado. N\xE3o \xE9 poss\xEDvel receb\xEA-lo."
+      );
+    }
+    let saidaNome = dados.saidaNome ?? null;
+    if (dados.productId) {
+      const produto = await db.product.findUnique({ where: { id: dados.productId }, select: { name: true } });
+      if (!produto) throw naoEncontrado("Produto");
+      saidaNome = produto.name;
+    }
+    const troca = await db.tradeIn.create({
+      data: {
+        code: await proximoCodigo("troca", "TR"),
+        sellerId: req.usuario.id,
+        unitId: dados.unitId ?? req.usuario.unidadeId ?? null,
+        modelo: dados.modelo,
+        marca: dados.marca ?? null,
+        armazenamento: dados.armazenamento ?? null,
+        cor: dados.cor ?? null,
+        imei: dados.imei,
+        imeiSituacao: dados.imeiSituacao,
+        imeiCheckedAt: dados.imeiSituacao === "NAO_CONSULTADO" ? null : /* @__PURE__ */ new Date(),
+        estado: dados.estado ?? null,
+        defeitos: dados.defeitos,
+        observacoes: dados.observacoes ?? null,
+        valorAvaliado: new Prisma5.Decimal(dados.valorAvaliado),
+        productId: dados.productId ?? null,
+        saidaNome,
+        valorSaida: new Prisma5.Decimal(dados.valorSaida),
+        customerId: dados.customerId ?? null,
+        customerName: dados.customerName,
+        customerPhone: dados.customerPhone ?? null,
+        customerDocument: dados.customerDocument ?? null,
+        photos: { create: separarFotos2(dados.photos) }
+      },
+      include: COM_TUDO2
+    });
+    await registrarLog({
+      acao: "CRIAR_TROCA",
+      entidade: "TradeIn",
+      id: troca.id,
+      alteracoes: { codigo: troca.code, imei: troca.imei, valor: dados.valorAvaliado },
+      req
+    });
+    res.status(201).json({
+      ...paraJson(troca),
+      message: `Troca ${troca.code} registrada \u2014 ${dados.modelo} avaliado em R$ ${dados.valorAvaliado.toFixed(2)}.`
+    });
+  })
+);
+var situacaoSchema = z10.object({
+  imeiSituacao: z10.enum(["NAO_CONSULTADO", "REGULAR", "IRREGULAR", "BLOQUEADO"]),
+  /** Print da consulta, se veio junto. */
+  foto: z10.string().max(4e6).optional().nullable()
+});
+rotasTrocas.post(
+  "/:id/anatel",
+  exigir("troca.criar"),
+  rota(async (req, res) => {
+    const { imeiSituacao, foto: foto2 } = validar(situacaoSchema, req.body);
+    const troca = await db.tradeIn.findUnique({ where: { id: req.params.id } });
+    if (!troca) throw naoEncontrado("Troca");
+    if (!podeVerTodas2(req) && troca.sellerId !== req.usuario.id) {
+      throw new AppError("Esta troca \xE9 de outro vendedor", 403);
+    }
+    const novas = separarFotos2(foto2 ? [{ tipo: "ANATEL", data: foto2 }] : []);
+    const atualizada = await db.tradeIn.update({
+      where: { id: troca.id },
+      data: {
+        imeiSituacao,
+        imeiCheckedAt: imeiSituacao === "NAO_CONSULTADO" ? null : /* @__PURE__ */ new Date(),
+        photos: novas.length ? { create: novas } : void 0
+      },
+      include: COM_TUDO2
+    });
+    if (imeiSituacao === "BLOQUEADO") {
+      await notificarPerfil("ADMIN", {
+        title: `IMEI bloqueado na troca ${troca.code}`,
+        message: `${troca.modelo} \xB7 IMEI ${troca.imei} \xB7 cliente ${troca.customerName}`,
+        link: "/trocas"
+      });
+    }
+    await registrarLog({ acao: "ANATEL_TROCA", entidade: "TradeIn", id: troca.id, req });
+    res.json(paraJson(atualizada));
+  })
+);
+rotasTrocas.post(
+  "/:id/recusar",
+  exigir("troca.criar"),
+  rota(async (req, res) => {
+    const troca = await db.tradeIn.findUnique({ where: { id: req.params.id } });
+    if (!troca) throw naoEncontrado("Troca");
+    if (troca.status === "ACEITA") throw new AppError("Esta troca j\xE1 virou venda.");
+    if (!podeVerTodas2(req) && troca.sellerId !== req.usuario.id) {
+      throw new AppError("Esta troca \xE9 de outro vendedor", 403);
+    }
+    await db.tradeIn.update({
+      where: { id: troca.id },
+      data: { status: "RECUSADA", preSaleId: null }
+    });
+    await registrarLog({ acao: "RECUSAR_TROCA", entidade: "TradeIn", id: troca.id, req });
+    res.json({ message: `Troca ${troca.code} recusada \u2014 o aparelho volta para o cliente.` });
+  })
+);
+rotasTrocas.delete(
+  "/:id",
+  exigir("troca.criar"),
+  rota(async (req, res) => {
+    const troca = await db.tradeIn.findUnique({ where: { id: req.params.id } });
+    if (!troca) throw naoEncontrado("Troca");
+    if (troca.status === "ACEITA") throw new AppError("Esta troca j\xE1 virou venda e faz parte do hist\xF3rico.");
+    if (!podeVerTodas2(req) && troca.sellerId !== req.usuario.id) {
+      throw new AppError("Esta troca \xE9 de outro vendedor", 403);
+    }
+    await db.tradeIn.delete({ where: { id: troca.id } });
+    await registrarLog({ acao: "EXCLUIR_TROCA", entidade: "TradeIn", id: troca.id, req });
+    res.json({ message: `Troca ${troca.code} exclu\xEDda.` });
+  })
+);
+
+// server/vendas.ts
+import { Router as Router13 } from "express";
+import { z as z11 } from "zod";
+var rotasVendas = Router13();
 rotasVendas.use(autenticar);
 var PAGAMENTOS2 = ["PIX", "DINHEIRO", "DEBITO", "CREDITO", "TRANSFERENCIA", "OUTRO"];
-var COM_TUDO2 = {
+var COM_TUDO3 = {
   items: { include: { product: { select: { id: true, name: true, model: true, category: true } } } },
   customer: true,
   unit: { select: { id: true, name: true } },
@@ -4459,20 +4802,20 @@ var COM_TUDO2 = {
   cashier: { select: { id: true, name: true } },
   preSale: { select: { id: true, code: true } }
 };
-var filtrosSchema2 = z10.object({
-  page: z10.coerce.number().int().min(1).optional(),
-  pageSize: z10.coerce.number().int().min(1).max(200).optional(),
-  search: z10.string().trim().optional(),
-  productId: z10.string().uuid().optional(),
-  categoryId: z10.string().uuid().optional(),
-  paymentMethod: z10.enum(PAGAMENTOS2).optional(),
-  sellerId: z10.string().uuid().optional(),
-  cashierId: z10.string().uuid().optional(),
-  unitId: z10.string().uuid().optional(),
-  startDate: z10.coerce.date().optional(),
-  endDate: z10.coerce.date().optional(),
-  sortBy: z10.string().optional(),
-  sortOrder: z10.enum(["asc", "desc"]).optional()
+var filtrosSchema2 = z11.object({
+  page: z11.coerce.number().int().min(1).optional(),
+  pageSize: z11.coerce.number().int().min(1).max(200).optional(),
+  search: z11.string().trim().optional(),
+  productId: z11.string().uuid().optional(),
+  categoryId: z11.string().uuid().optional(),
+  paymentMethod: z11.enum(PAGAMENTOS2).optional(),
+  sellerId: z11.string().uuid().optional(),
+  cashierId: z11.string().uuid().optional(),
+  unitId: z11.string().uuid().optional(),
+  startDate: z11.coerce.date().optional(),
+  endDate: z11.coerce.date().optional(),
+  sortBy: z11.string().optional(),
+  sortOrder: z11.enum(["asc", "desc"]).optional()
 });
 function filtrarVendas(q, unidadeId) {
   const cond = [{ status: "FINALIZADA" }];
@@ -4510,7 +4853,7 @@ rotasVendas.get(
     const [lista, total, somas, itens] = await Promise.all([
       db.sale.findMany({
         where,
-        include: COM_TUDO2,
+        include: COM_TUDO3,
         skip: p.skip,
         take: p.take,
         orderBy: ordenar(q.sortBy, q.sortOrder, ["saleDate", "totalAmount", "code", "createdAt"], {
@@ -4536,32 +4879,32 @@ rotasVendas.get(
 rotasVendas.get(
   "/:id",
   rota(async (req, res) => {
-    const venda = await db.sale.findUnique({ where: { id: req.params.id }, include: COM_TUDO2 });
+    const venda = await db.sale.findUnique({ where: { id: req.params.id }, include: COM_TUDO3 });
     if (!venda) throw naoEncontrado("Venda");
     res.json(limpar(venda));
   })
 );
-var vendaSchema = z10.object({
-  items: z10.array(
-    z10.object({
-      productId: z10.string().uuid("Selecione o produto"),
-      quantity: z10.coerce.number().int().min(1, "Quantidade m\xEDnima: 1"),
-      unitPrice: z10.coerce.number().min(0, "Informe o valor"),
-      imei: z10.string().trim().max(40).optional().nullable(),
-      serialNumber: z10.string().trim().max(60).optional().nullable()
+var vendaSchema = z11.object({
+  items: z11.array(
+    z11.object({
+      productId: z11.string().uuid("Selecione o produto"),
+      quantity: z11.coerce.number().int().min(1, "Quantidade m\xEDnima: 1"),
+      unitPrice: z11.coerce.number().min(0, "Informe o valor"),
+      imei: z11.string().trim().max(40).optional().nullable(),
+      serialNumber: z11.string().trim().max(60).optional().nullable()
     })
   ).min(1, "Inclua ao menos um produto"),
-  unitId: z10.string().uuid("Informe de qual unidade o produto saiu"),
-  paymentMethod: z10.enum(PAGAMENTOS2),
-  installments: z10.coerce.number().int().min(1).max(24).default(1),
-  customerName: z10.string().trim().min(2, "Informe o nome do cliente").max(180),
-  customerPhone: z10.string().trim().max(30).optional().nullable(),
-  customerDocument: z10.string().trim().max(30).optional().nullable(),
-  customerId: z10.string().uuid().optional().nullable(),
+  unitId: z11.string().uuid("Informe de qual unidade o produto saiu"),
+  paymentMethod: z11.enum(PAGAMENTOS2),
+  installments: z11.coerce.number().int().min(1).max(24).default(1),
+  customerName: z11.string().trim().min(2, "Informe o nome do cliente").max(180),
+  customerPhone: z11.string().trim().max(30).optional().nullable(),
+  customerDocument: z11.string().trim().max(30).optional().nullable(),
+  customerId: z11.string().uuid().optional().nullable(),
   /** Vendedor que atendeu, para a comissão. Vazio = o próprio caixa. */
-  sellerId: z10.string().uuid().optional().nullable(),
-  notes: z10.string().trim().max(1e3).optional().nullable(),
-  saleDate: z10.coerce.date().optional()
+  sellerId: z11.string().uuid().optional().nullable(),
+  notes: z11.string().trim().max(1e3).optional().nullable(),
+  saleDate: z11.coerce.date().optional()
 });
 rotasVendas.post(
   "/",
@@ -4704,6 +5047,7 @@ function createApp() {
   app2.use("/api/fotos", rotasFotos);
   app2.use("/api/sales", rotasVendas);
   app2.use("/api/pre-sales", rotasPreVendas);
+  app2.use("/api/trocas", rotasTrocas);
   app2.use("/api/cash", rotasCaixa);
   app2.use("/api/notifications", rotasNotificacoes);
   app2.use("/api/movements", rotasMovimentacoes);

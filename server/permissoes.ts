@@ -23,6 +23,7 @@ export type Permissao =
   | 'estoque.transferir'
   | 'retirada.aprovar'
   | 'prevenda.criar'
+  | 'troca.criar'
   | 'prevenda.verTodas'
   | 'pdv'
   | 'venda.finalizar'
@@ -43,6 +44,7 @@ const TODAS: Permissao[] = [
   'estoque.transferir',
   'retirada.aprovar',
   'prevenda.criar',
+  'troca.criar',
   'prevenda.verTodas',
   'pdv',
   'venda.finalizar',
@@ -68,6 +70,7 @@ export const PERMISSOES: Record<Perfil, Permissao[]> = {
     'estoque.transferir',
     'prevenda.criar',
     'prevenda.verTodas',
+    'troca.criar',
     'relatorios',
   ],
 
@@ -76,6 +79,7 @@ export const PERMISSOES: Record<Perfil, Permissao[]> = {
     'produtos.ver',
     'estoque.ver',
     'prevenda.verTodas',
+    'troca.criar',
     'pdv',
     'venda.finalizar',
     'venda.cancelar',
@@ -83,7 +87,7 @@ export const PERMISSOES: Record<Perfil, Permissao[]> = {
   ],
 
   // Só monta a intenção de venda. Nunca baixa estoque.
-  VENDEDOR: ['produtos.ver', 'estoque.ver', 'prevenda.criar'],
+  VENDEDOR: ['produtos.ver', 'estoque.ver', 'prevenda.criar', 'troca.criar'],
 };
 
 export const podeFazer = (perfil: string | undefined, permissao: Permissao): boolean =>

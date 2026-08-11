@@ -16,6 +16,7 @@ const ReportsPage = lazy(() => import('./pages/ReportsPage'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
 const CaixaPage = lazy(() => import('./pages/CaixaPage'));
 const PreSalePage = lazy(() => import('./pages/PreSalePage'));
+const TrocasPage = lazy(() => import('./pages/TrocasPage'));
 
 function FullScreenLoader() {
   return (
@@ -94,6 +95,14 @@ export function App() {
           element={
             <Tela permissao="prevenda.criar">
               <PreSalePage />
+            </Tela>
+          }
+        />
+        <Route
+          path="/trocas"
+          element={
+            <Tela permissao="troca.criar">
+              <TrocasPage />
             </Tela>
           }
         />

@@ -1,3 +1,5 @@
+import { FormularioDeTroca } from '@/components/trocas/FormularioDeTroca';
+import { EscudoImei } from '@/pages/TrocasPage';
 import { CarrinhoDeItens, totalDosItens } from '@/components/vendas/CarrinhoDeItens';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
@@ -8,11 +10,11 @@ import { Modal } from '@/components/ui/Modal';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/contexts/ToastContext';
 import { useUnit } from '@/contexts/UnitContext';
-import { useCriarPreVenda, useDesistirPreVenda, usePreVendas } from '@/hooks/queries';
+import { useCriarPreVenda, useDesistirPreVenda, usePreVendas, useTrocas } from '@/hooks/queries';
 import { cn } from '@/lib/cn';
 import { formatCurrency, formatDateTime, PAYMENT_OPTIONS, PRE_SALE_LABEL } from '@/lib/format';
-import type { ItemVenda, PreSale, PreSaleStatus } from '@/types';
-import { Clock, Plus, Send, ShoppingCart, X } from 'lucide-react';
+import type { ItemVenda, PreSale, PreSaleStatus, Troca } from '@/types';
+import { Clock, Plus, Repeat2, Send, ShoppingCart, X } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 
 const TOM: Record<PreSaleStatus, 'warning' | 'info' | 'success' | 'danger' | 'neutral'> = {
@@ -205,6 +207,8 @@ function FormularioDePreVenda({ aberto, aoFechar }: { aberto: boolean; aoFechar:
   const criar = useCriarPreVenda();
 
   const [itens, setItens] = useState<ItemVenda[]>([]);
+  const [troca, setTroca] = useState<Troca | null>(null);
+  const [trocaAberta, setTrocaAberta] = useState(false);
   const [form, setForm] = useState({
     customerName: '',
     customerPhone: '',
@@ -216,6 +220,14 @@ function FormularioDePreVenda({ aberto, aoFechar }: { aberto: boolean; aoFechar:
   });
 
   const unidadeEscolhida = form.unitId || unidades[0]?.id || '';
+
+  // Só trocas que ainda não estão em outro pedido.
+  const { data: trocasLivres } = useTrocas({ livres: 'true' });
+  const disponiveis = trocasLivres?.data ?? [];
+
+  const bruto = totalDosItens(itens);
+  const abatimento = troca?.valorAvaliado ?? 0;
+  const aPagar = Math.max(0, bruto - abatimento);
 
   async function enviar(evento: FormEvent) {
     evento.preventDefault();
@@ -232,6 +244,7 @@ function FormularioDePreVenda({ aberto, aoFechar }: { aberto: boolean; aoFechar:
         paymentMethod: form.paymentMethod,
         installments: Number(form.installments) || 1,
         notes: form.notes.trim() || null,
+        tradeInId: troca?.id ?? null,
         items: itens.map((i) => ({
           productId: i.productId,
           quantity: i.quantity,
@@ -243,6 +256,7 @@ function FormularioDePreVenda({ aberto, aoFechar }: { aberto: boolean; aoFechar:
 
       toast.success('Enviada ao caixa', r.message);
       setItens([]);
+      setTroca(null);
       setForm((f) => ({ ...f, customerName: '', customerPhone: '', customerDocument: '', notes: '' }));
       aoFechar();
     } catch (erro) {
@@ -305,6 +319,81 @@ function FormularioDePreVenda({ aberto, aoFechar }: { aberto: boolean; aoFechar:
         </div>
 
         <div>
+          <p className="label-base">Troca de aparelho</p>
+
+          {troca ? (
+            <div className="rounded-lg border border-accent bg-accent/5 p-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="font-mono text-xs text-slate-500 dark:text-slate-400">{troca.code}</p>
+                  <p className="truncate text-sm font-bold text-navy-900 dark:text-slate-100">
+                    {troca.modelo}
+                    {troca.armazenamento ? ` ${troca.armazenamento}` : ''}
+                  </p>
+                  <p className="truncate font-mono text-xs text-slate-500 dark:text-slate-400">
+                    IMEI {troca.imei}
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <EscudoImei situacao={troca.imeiSituacao} compacto />
+                  <button
+                    type="button"
+                    onClick={() => setTroca(null)}
+                    className="rounded p-1 text-danger transition hover:bg-danger-bg dark:hover:bg-danger/15"
+                    aria-label="Tirar a troca do pedido"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+
+              <p className="mt-2 flex items-center justify-between border-t border-accent/20 pt-2 text-sm">
+                <span className="text-slate-600 dark:text-slate-400">Abate do pedido</span>
+                <strong className="text-success">− {formatCurrency(troca.valorAvaliado)}</strong>
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full"
+                onClick={() => setTrocaAberta(true)}
+                icon={<Repeat2 className="h-4 w-4" />}
+              >
+                O cliente vai dar um aparelho na troca
+              </Button>
+
+              {disponiveis.length > 0 && (
+                <div>
+                  <p className="mb-1 text-xs text-slate-500 dark:text-slate-400">
+                    Ou use uma troca já avaliada:
+                  </p>
+                  <div className="max-h-32 overflow-y-auto rounded-lg border border-slate-200 dark:border-navy-700">
+                    {disponiveis.map((t) => (
+                      <button
+                        key={t.id}
+                        type="button"
+                        onClick={() => setTroca(t)}
+                        className="flex w-full items-center gap-2 border-b border-slate-100 px-3 py-2 text-left transition last:border-0 hover:bg-slate-50 dark:border-navy-700 dark:hover:bg-navy-800"
+                      >
+                        <span className="min-w-0 flex-1 truncate text-sm text-navy-900 dark:text-slate-100">
+                          {t.code} · {t.modelo} · {t.customerName}
+                        </span>
+                        <span className="shrink-0 text-sm font-semibold text-success">
+                          {formatCurrency(t.valorAvaliado)}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div>
           <p className="label-base">Pagamento</p>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <Select
@@ -345,9 +434,34 @@ function FormularioDePreVenda({ aberto, aoFechar }: { aberto: boolean; aoFechar:
           )}
         >
           O estoque <strong>não</strong> é reservado agora. Se outra pessoa vender antes, o caixa vai
-          avisar na hora de finalizar. Total do pedido: <strong>{formatCurrency(totalDosItens(itens))}</strong>
+          avisar na hora de finalizar.
         </p>
+
+        <div className="rounded-lg bg-navy-900 px-4 py-3 text-white dark:bg-navy-800">
+          <p className="flex items-center justify-between text-sm">
+            <span className="text-slate-300">Aparelhos</span>
+            <span>{formatCurrency(bruto)}</span>
+          </p>
+          {troca && (
+            <p className="mt-1 flex items-center justify-between text-sm">
+              <span className="text-slate-300">Troca {troca.code}</span>
+              <span className="text-success-soft">− {formatCurrency(abatimento)}</span>
+            </p>
+          )}
+          <p className="mt-2 flex items-center justify-between border-t border-white/15 pt-2">
+            <span className="font-semibold">
+              {troca ? 'O cliente ainda paga' : 'Total do pedido'}
+            </span>
+            <strong className="text-2xl font-extrabold">{formatCurrency(aPagar)}</strong>
+          </p>
+        </div>
       </form>
+
+      <FormularioDeTroca
+        aberto={trocaAberta}
+        aoFechar={() => setTrocaAberta(false)}
+        aoCriar={setTroca}
+      />
     </Modal>
   );
 }

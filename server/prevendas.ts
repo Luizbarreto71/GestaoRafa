@@ -44,6 +44,18 @@ const STATUS_PRE_VENDA = [
 const COM_TUDO = {
   items: { include: { product: { select: { id: true, name: true, model: true, imei: true } } } },
   seller: { select: { id: true, name: true } },
+  tradeIn: {
+    select: {
+      id: true,
+      code: true,
+      modelo: true,
+      imei: true,
+      imeiSituacao: true,
+      valorAvaliado: true,
+      estado: true,
+      defeitos: true,
+    },
+  },
   cashier: { select: { id: true, name: true } },
   unit: { select: { id: true, name: true } },
   sale: { select: { id: true, code: true } },
@@ -67,11 +79,26 @@ const preVendaSchema = z.object({
   installments: z.coerce.number().int().min(1).max(24).default(1),
   notes: z.string().trim().max(1000).optional().nullable(),
   items: z.array(itemSchema).min(1, 'Inclua ao menos um produto'),
+  /** Aparelho usado que o cliente está dando como parte do pagamento. */
+  tradeInId: z.string().uuid().optional().nullable(),
 });
 
 /** Vendedor enxerga só as próprias; caixa e admin enxergam todas. */
 const podeVerTodas = (req: { usuario?: { papel: string; id: string } }) =>
   podeFazer(req.usuario?.papel, 'prevenda.verTodas');
+
+/**
+ * Devolve a troca para a fila quando a pré-venda não vinga.
+ *
+ * Sem isso o aparelho ficaria preso numa pré-venda morta e o vendedor não
+ * conseguiria refazer o pedido com o mesmo aparelho.
+ */
+async function liberarTroca(preSaleId: string) {
+  await db.tradeIn.updateMany({
+    where: { preSaleId, status: 'AVALIADA' },
+    data: { preSaleId: null },
+  });
+}
 
 // --------------------------------------------------------------- Listagem
 
@@ -175,7 +202,27 @@ rotasPreVendas.post(
       throw naoEncontrado('Produto');
     }
 
-    const total = dados.items.reduce((s, i) => s + i.unitPrice * i.quantity, 0);
+    const bruto = dados.items.reduce((s, i) => s + i.unitPrice * i.quantity, 0);
+
+    // A troca abate do total: o caixa cobra a diferença, não o preço cheio.
+    let abatimento = 0;
+    if (dados.tradeInId) {
+      const troca = await db.tradeIn.findUnique({ where: { id: dados.tradeInId } });
+      if (!troca) throw naoEncontrado('Troca');
+      if (troca.preSaleId || troca.saleId) {
+        throw new AppError(`A troca ${troca.code} já está em outra pré-venda.`);
+      }
+      if (troca.status !== 'AVALIADA') {
+        throw new AppError(`A troca ${troca.code} não está mais disponível.`);
+      }
+      if (troca.imeiSituacao === 'BLOQUEADO') {
+        throw new AppError(`A troca ${troca.code} tem IMEI bloqueado na Anatel.`);
+      }
+      abatimento = Number(troca.valorAvaliado);
+    }
+
+    // O cliente nunca sai devendo menos que zero para o caixa.
+    const total = Math.max(0, bruto - abatimento);
 
     const preVenda = await db.preSale.create({
       data: {
@@ -190,6 +237,7 @@ rotasPreVendas.post(
         installments: dados.installments,
         notes: dados.notes ?? null,
         totalAmount: new Prisma.Decimal(total),
+        ...(dados.tradeInId ? { tradeIn: { connect: { id: dados.tradeInId } } } : {}),
         // Sem atendimento no mesmo dia, some da fila do caixa.
         expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
         items: {
@@ -208,7 +256,10 @@ rotasPreVendas.post(
 
     await notificarPerfil('CAIXA', {
       title: `Nova pré-venda ${preVenda.code}`,
-      message: `${preVenda.customerName} · ${dados.items.length} item(ns) · R$ ${total.toFixed(2)} · por ${req.usuario!.nome}`,
+      message:
+        `${preVenda.customerName} · ${dados.items.length} item(ns) · R$ ${total.toFixed(2)}` +
+        (abatimento ? ` (troca de R$ ${abatimento.toFixed(2)} já abatida)` : '') +
+        ` · por ${req.usuario!.nome}`,
       link: '/caixa',
     });
 
@@ -216,7 +267,7 @@ rotasPreVendas.post(
       acao: 'CRIAR_PREVENDA',
       entidade: 'PreSale',
       id: preVenda.id,
-      alteracoes: { codigo: preVenda.code, total, itens: dados.items.length },
+      alteracoes: { codigo: preVenda.code, total, itens: dados.items.length, troca: dados.tradeInId ?? null },
       req,
     });
 
@@ -273,12 +324,19 @@ rotasPreVendas.post(
 
     const preVenda = await db.preSale.findUnique({
       where: { id: req.params.id },
-      include: { items: true, seller: { select: { id: true, name: true } } },
+      include: { items: true, seller: { select: { id: true, name: true } }, tradeIn: true },
     });
     if (!preVenda) throw naoEncontrado('Pré-venda');
 
     if (preVenda.status === 'FINALIZADA') throw new AppError('Esta pré-venda já virou venda.');
     if (preVenda.status === 'CANCELADA') throw new AppError('Esta pré-venda foi cancelada.');
+
+    // Trava tardia: a consulta pode ter sido feita depois da pré-venda.
+    if (preVenda.tradeIn?.imeiSituacao === 'BLOQUEADO') {
+      throw new AppError(
+        `A troca ${preVenda.tradeIn.code} tem IMEI bloqueado na Anatel. Não é possível fechar a venda com esse aparelho.`,
+      );
+    }
 
     const itens = (dados.items ?? preVenda.items).map((i) => ({
       productId: i.productId,
@@ -308,6 +366,14 @@ rotasPreVendas.post(
       where: { id: preVenda.id },
       data: { status: 'FINALIZADA', cashierId: req.usuario!.id },
     });
+
+    // A partir daqui o aparelho usado é da loja.
+    if (preVenda.tradeIn) {
+      await db.tradeIn.update({
+        where: { id: preVenda.tradeIn.id },
+        data: { status: 'ACEITA', saleId: venda.id },
+      });
+    }
 
     await registrarLog({
       acao: 'FINALIZAR_PREVENDA',
@@ -355,6 +421,9 @@ rotasPreVendas.post(
     });
 
     // Nada de estoque para desfazer: a pré-venda nunca baixou nada.
+    // A troca, porém, volta a ficar livre para outro pedido.
+    await liberarTroca(preVenda.id);
+
     await notificar({
       userId: preVenda.sellerId,
       title: `Pré-venda ${preVenda.code} cancelada`,
@@ -382,6 +451,7 @@ rotasPreVendas.delete(
     }
 
     await db.preSale.update({ where: { id: preVenda.id }, data: { status: 'CANCELADA' } });
+    await liberarTroca(preVenda.id);
     await registrarLog({ acao: 'CANCELAR_PREVENDA', entidade: 'PreSale', id: preVenda.id, req });
 
     res.json({ message: `Pré-venda ${preVenda.code} cancelada.` });
