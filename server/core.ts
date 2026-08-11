@@ -205,6 +205,22 @@ export const dataBR = (d: Date | string) =>
 export const dataHoraBR = (d: Date | string) =>
   new Date(d).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
 
+/**
+ * Data e hora curtas, para caber numa coluna de relatório.
+ *
+ * Segundo em relatório de venda é ruído: ocupa espaço e ninguém confere
+ * venda por segundo.
+ */
+export const dataHoraCurta = (d: Date | string) =>
+  new Date(d).toLocaleString('pt-BR', {
+    timeZone: 'America/Sao_Paulo',
+    day: '2-digit',
+    month: '2-digit',
+    year: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+
 // ------------------------------------------------------------ Serialização
 
 /** Converte Decimal do Prisma em número, para o JSON não virar string. */

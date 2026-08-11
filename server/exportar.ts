@@ -124,8 +124,24 @@ async function enviarExcel(res: Response, r: Relatorio): Promise<void> {
 
 // --------------------------------------------------------------------- PDF
 
+const PADDING = 5;
+const ALTURA_MINIMA = 17;
+
+/**
+ * Desenha o relatório em PDF.
+ *
+ * A altura de cada linha é medida antes de desenhar. Antes era fixa, e um
+ * nome de produto que ocupava duas linhas invadia a linha seguinte — texto
+ * por cima de texto, exatamente onde se precisa conferir número.
+ */
 function enviarPdf(res: Response, r: Relatorio): void {
-  const doc = new PDFDocument({ margin: 32, size: 'A4', layout: 'landscape' });
+  const doc = new PDFDocument({
+    margin: 30,
+    size: 'A4',
+    layout: 'landscape',
+    // Necessário para numerar "página X de Y": o total só se sabe no fim.
+    bufferPages: true,
+  });
 
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `attachment; filename="${nomeDoArquivo(r.title, 'pdf')}"`);
@@ -133,84 +149,221 @@ function enviarPdf(res: Response, r: Relatorio): void {
 
   const largura = doc.page.width - doc.page.margins.left - doc.page.margins.right;
   const x0 = doc.page.margins.left;
+  const rodapeY = doc.page.height - doc.page.margins.bottom - 14;
 
-  doc.rect(0, 0, doc.page.width, 62).fill(AZUL);
-  doc.fillColor('#FFFFFF').fontSize(17).font('Helvetica-Bold').text('Rafa Multimarcas', x0, 16);
-  doc.fontSize(10).font('Helvetica').text(r.title, x0, 38);
-  doc.fontSize(8).text(`Gerado em ${new Date().toLocaleString('pt-BR')}`, x0, 38, {
-    width: largura,
-    align: 'right',
-  });
+  /**
+   * Larguras ajustadas ao conteúdo.
+   *
+   * Peso fixo partia palavra no meio — "VD-0000 / 43", "CATEGO / RIA" —,
+   * e código quebrado em duas linhas não é código. Aqui cada coluna pede o
+   * que precisa, nenhuma fica menor que a sua maior palavra, e a sobra é
+   * dividida entre as que mais aproveitam espaço.
+   */
+  const larguras = (() => {
+    const cabecalhos = r.columns.map((c) => c.header.toUpperCase());
 
-  doc.fillColor(AZUL).y = 78;
+    // Cada texto precisa ser medido na fonte em que vai ser desenhado: o
+    // cabeçalho é negrito 7,5 e a linha é regular 8. Medir tudo com uma só
+    // subestima a outra, e a coluna sai curta demais.
+    const largoNoCabecalho = (t: string) => {
+      doc.font('Helvetica-Bold').fontSize(7.5);
+      return doc.widthOfString(t);
+    };
+    const largoNaLinha = (t: string) => {
+      doc.font('Helvetica').fontSize(8);
+      return doc.widthOfString(t);
+    };
 
-  if (r.subtitle) {
-    doc.fontSize(9).fillColor('#475569').text(r.subtitle, x0, doc.y);
-    doc.moveDown(0.5);
-  }
+    const celulas = r.columns.map((c) => r.rows.map((linha) => String(valorDaCelula(c, linha) ?? '')));
 
-  const peso = r.columns.reduce((s, c) => s + (c.width ?? 16), 0);
-  const larguras = r.columns.map((c) => ((c.width ?? 16) / peso) * largura);
+    // A maior palavra é o piso: abaixo disso o texto racha no meio.
+    // +1 de folga porque a medida e o desenho arredondam diferente.
+    const piso = r.columns.map((_, i) => {
+      const doTitulo = cabecalhos[i].split(/\s+/).reduce((m, w) => Math.max(m, largoNoCabecalho(w)), 0);
+      const daLinha = celulas[i]
+        .flatMap((t) => t.split(/\s+/))
+        .reduce((m, w) => Math.max(m, largoNaLinha(w)), 0);
+      return Math.max(doTitulo, daLinha) + PADDING * 2 + 1;
+    });
 
-  const cabecalho = () => {
+    // O quanto a coluna ocuparia sem quebrar nenhuma linha.
+    const ideal = r.columns.map((_, i) => {
+      const maior = Math.max(
+        largoNoCabecalho(cabecalhos[i]),
+        ...celulas[i].map(largoNaLinha),
+        0,
+      );
+      // Teto: uma observação longa não pode engolir a tabela inteira.
+      return Math.min(Math.max(maior + PADDING * 2 + 1, piso[i]), largura * 0.22);
+    });
+
+    const somaPiso = piso.reduce((a, b) => a + b, 0);
+    const somaIdeal = ideal.reduce((a, b) => a + b, 0);
+
+    // Cabe tudo: distribui a sobra proporcionalmente ao apetite de cada uma.
+    if (somaIdeal <= largura) {
+      return ideal.map((v) => (v / somaIdeal) * largura);
+    }
+
+    // Não cabe, mas os pisos cabem: cada coluna leva o piso e reparte o
+    // resto conforme o que ainda queria.
+    if (somaPiso <= largura) {
+      const folga = largura - somaPiso;
+      const fome = ideal.map((v, i) => Math.max(0, v - piso[i]));
+      const somaFome = fome.reduce((a, b) => a + b, 0) || 1;
+      return piso.map((v, i) => v + (fome[i] / somaFome) * folga);
+    }
+
+    // Nem os pisos cabem: aí não há como evitar quebra, só distribuir a dor.
+    return piso.map((v) => (v / somaPiso) * largura);
+  })();
+
+  // ------------------------------------------------------------- cabeçalho
+  const marca = () => {
+    doc.rect(0, 0, doc.page.width, 66).fill(AZUL);
+    doc.fillColor('#FFFFFF').fontSize(17).font('Helvetica-Bold').text('Rafa Multimarcas', x0, 16);
+    doc.fontSize(10).font('Helvetica').text(r.title, x0, 39);
+    doc.fontSize(8).fillColor('#CBD5E1').text(`Gerado em ${dataHora()}`, x0, 40, {
+      width: largura,
+      align: 'right',
+    });
+    doc.fillColor(AZUL);
+  };
+
+  /** Altura que o texto ocupa dentro da coluna, já com a folga de cima e baixo. */
+  const alturaDoTexto = (texto: string, i: number) =>
+    doc.heightOfString(texto, { width: larguras[i] - PADDING * 2, align: r.columns[i].align ?? 'left' });
+
+  const faixaDeTitulos = () => {
+    doc.font('Helvetica-Bold').fontSize(7.5);
+
+    const titulos = r.columns.map((c) => c.header.toUpperCase());
+    const altura = Math.max(
+      18,
+      ...titulos.map((t, i) => alturaDoTexto(t, i) + PADDING * 2),
+    );
+
     const y = doc.y;
-    doc.rect(x0, y, largura, 20).fill('#E2E8F0');
-    doc.fillColor(AZUL).fontSize(8).font('Helvetica-Bold');
+    doc.rect(x0, y, largura, altura).fill('#E2E8F0');
+    doc.fillColor(AZUL);
+
     let x = x0;
-    r.columns.forEach((c, i) => {
-      doc.text(c.header.toUpperCase(), x + 4, y + 6, {
-        width: larguras[i] - 8,
-        align: c.align ?? 'left',
-        lineBreak: false,
+    titulos.forEach((t, i) => {
+      doc.text(t, x + PADDING, y + PADDING, {
+        width: larguras[i] - PADDING * 2,
+        align: r.columns[i].align ?? 'left',
       });
       x += larguras[i];
     });
-    doc.y = y + 20;
+
+    doc.y = y + altura;
   };
 
-  cabecalho();
-  doc.font('Helvetica').fontSize(8);
+  const abrirPagina = (primeira: boolean) => {
+    if (!primeira) doc.addPage();
+    marca();
+    doc.y = 80;
 
+    if (r.subtitle) {
+      doc.fontSize(9).font('Helvetica').fillColor('#475569').text(r.subtitle, x0, doc.y, { width: largura });
+      doc.y += 6;
+    }
+
+    faixaDeTitulos();
+  };
+
+  abrirPagina(true);
+
+  // ------------------------------------------------------------------ linhas
   r.rows.forEach((linha, indice) => {
-    if (doc.y > doc.page.height - doc.page.margins.bottom - 40) {
-      doc.addPage();
-      doc.y = doc.page.margins.top;
-      cabecalho();
+    doc.font('Helvetica').fontSize(8);
+
+    const textos = r.columns.map((c) => String(valorDaCelula(c, linha) ?? ''));
+    const altura = Math.max(
+      ALTURA_MINIMA,
+      ...textos.map((t, i) => alturaDoTexto(t, i) + PADDING * 2),
+    );
+
+    // A linha inteira muda de página junto: metade em cada folha é pior
+    // que uma folha com uma linha a menos.
+    if (doc.y + altura > rodapeY - 10) {
+      abrirPagina(false);
       doc.font('Helvetica').fontSize(8);
     }
 
     const y = doc.y;
-    if (indice % 2 === 1) doc.rect(x0, y, largura, 16).fill('#F8FAFC');
+    if (indice % 2 === 1) doc.rect(x0, y, largura, altura).fill('#F8FAFC');
 
     doc.fillColor('#1E293B');
     let x = x0;
-    r.columns.forEach((c, i) => {
-      doc.text(String(valorDaCelula(c, linha) ?? ''), x + 4, y + 4, {
-        width: larguras[i] - 8,
-        align: c.align ?? 'left',
-        lineBreak: false,
-        ellipsis: true,
+    textos.forEach((t, i) => {
+      doc.text(t, x + PADDING, y + PADDING, {
+        width: larguras[i] - PADDING * 2,
+        align: r.columns[i].align ?? 'left',
       });
       x += larguras[i];
     });
 
-    doc.y = y + 16;
+    // Fio claro entre as linhas: o olho não perde a linha em tabela larga.
+    doc
+      .moveTo(x0, y + altura)
+      .lineTo(x0 + largura, y + altura)
+      .lineWidth(0.5)
+      .strokeColor('#E2E8F0')
+      .stroke();
+
+    doc.y = y + altura;
   });
 
+  // ------------------------------------------------------------------ resumo
   if (r.summary?.length) {
-    doc.moveDown(1);
-    if (doc.y > doc.page.height - doc.page.margins.bottom - 60) doc.addPage();
-    doc.font('Helvetica-Bold').fontSize(9).fillColor(AZUL).text('Resumo', x0, doc.y);
-    doc.moveDown(0.3);
-    doc.font('Helvetica').fontSize(9).fillColor('#334155');
-    r.summary.forEach((s) => {
-      doc.text(`${s.label}: ${s.value}`, x0, doc.y);
-      doc.moveDown(0.2);
+    const alturaResumo = 26 + Math.ceil(r.summary.length / 3) * 16;
+    if (doc.y + alturaResumo > rodapeY - 10) abrirPagina(false);
+
+    doc.y += 12;
+    const y = doc.y;
+
+    doc.rect(x0, y, largura, alturaResumo).fill('#F1F5F9');
+    doc.fillColor(AZUL).font('Helvetica-Bold').fontSize(9).text('Resumo', x0 + PADDING, y + 7);
+
+    // Em três colunas: um relatório com seis totais viraria uma lista longa.
+    const colunas = 3;
+    const larguraItem = (largura - PADDING * 2) / colunas;
+
+    r.summary.forEach((item, i) => {
+      const cx = x0 + PADDING + (i % colunas) * larguraItem;
+      const cy = y + 24 + Math.floor(i / colunas) * 16;
+
+      doc.font('Helvetica').fontSize(8).fillColor('#64748B').text(`${item.label}: `, cx, cy, {
+        width: larguraItem - 6,
+        continued: true,
+      });
+      doc.font('Helvetica-Bold').fillColor(AZUL).text(item.value);
     });
+
+    doc.y = y + alturaResumo;
   }
 
+  // ------------------------------------------------------------------ rodapé
+  const paginas = doc.bufferedPageRange();
+  for (let i = 0; i < paginas.count; i += 1) {
+    doc.switchToPage(paginas.start + i);
+    doc
+      .font('Helvetica')
+      .fontSize(7.5)
+      .fillColor('#94A3B8')
+      .text(`${r.title} · página ${i + 1} de ${paginas.count}`, x0, rodapeY, {
+        width: largura,
+        align: 'center',
+        lineBreak: false,
+      });
+  }
+
+  doc.flushPages();
   doc.end();
 }
+
+const dataHora = () => new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
 
 export async function exportar(res: Response, formato: string, r: Relatorio): Promise<void> {
   if (formato === 'pdf') return enviarPdf(res, r);

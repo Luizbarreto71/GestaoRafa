@@ -136,6 +136,14 @@ function intervalo(inicio, fim) {
 }
 var dataBR = (d) => new Date(d).toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" });
 var dataHoraBR = (d) => new Date(d).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" });
+var dataHoraCurta = (d) => new Date(d).toLocaleString("pt-BR", {
+  timeZone: "America/Sao_Paulo",
+  day: "2-digit",
+  month: "2-digit",
+  year: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit"
+});
 function limpar(valor) {
   if (valor === null || valor === void 0) return valor;
   if (valor instanceof Prisma.Decimal) return valor.toNumber();
@@ -2737,79 +2745,159 @@ async function enviarExcel(res, r) {
   await planilha.xlsx.write(res);
   res.end();
 }
+var PADDING = 5;
+var ALTURA_MINIMA = 17;
 function enviarPdf(res, r) {
-  const doc = new PDFDocument({ margin: 32, size: "A4", layout: "landscape" });
+  const doc = new PDFDocument({
+    margin: 30,
+    size: "A4",
+    layout: "landscape",
+    // Necessário para numerar "página X de Y": o total só se sabe no fim.
+    bufferPages: true
+  });
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("Content-Disposition", `attachment; filename="${nomeDoArquivo(r.title, "pdf")}"`);
   doc.pipe(res);
   const largura = doc.page.width - doc.page.margins.left - doc.page.margins.right;
   const x0 = doc.page.margins.left;
-  doc.rect(0, 0, doc.page.width, 62).fill(AZUL);
-  doc.fillColor("#FFFFFF").fontSize(17).font("Helvetica-Bold").text("Rafa Multimarcas", x0, 16);
-  doc.fontSize(10).font("Helvetica").text(r.title, x0, 38);
-  doc.fontSize(8).text(`Gerado em ${(/* @__PURE__ */ new Date()).toLocaleString("pt-BR")}`, x0, 38, {
-    width: largura,
-    align: "right"
-  });
-  doc.fillColor(AZUL).y = 78;
-  if (r.subtitle) {
-    doc.fontSize(9).fillColor("#475569").text(r.subtitle, x0, doc.y);
-    doc.moveDown(0.5);
-  }
-  const peso = r.columns.reduce((s, c) => s + (c.width ?? 16), 0);
-  const larguras = r.columns.map((c) => (c.width ?? 16) / peso * largura);
-  const cabecalho = () => {
+  const rodapeY = doc.page.height - doc.page.margins.bottom - 14;
+  const larguras = (() => {
+    const cabecalhos = r.columns.map((c) => c.header.toUpperCase());
+    const largoNoCabecalho = (t) => {
+      doc.font("Helvetica-Bold").fontSize(7.5);
+      return doc.widthOfString(t);
+    };
+    const largoNaLinha = (t) => {
+      doc.font("Helvetica").fontSize(8);
+      return doc.widthOfString(t);
+    };
+    const celulas = r.columns.map((c) => r.rows.map((linha) => String(valorDaCelula(c, linha) ?? "")));
+    const piso = r.columns.map((_, i) => {
+      const doTitulo = cabecalhos[i].split(/\s+/).reduce((m, w) => Math.max(m, largoNoCabecalho(w)), 0);
+      const daLinha = celulas[i].flatMap((t) => t.split(/\s+/)).reduce((m, w) => Math.max(m, largoNaLinha(w)), 0);
+      return Math.max(doTitulo, daLinha) + PADDING * 2 + 1;
+    });
+    const ideal = r.columns.map((_, i) => {
+      const maior = Math.max(
+        largoNoCabecalho(cabecalhos[i]),
+        ...celulas[i].map(largoNaLinha),
+        0
+      );
+      return Math.min(Math.max(maior + PADDING * 2 + 1, piso[i]), largura * 0.22);
+    });
+    const somaPiso = piso.reduce((a, b) => a + b, 0);
+    const somaIdeal = ideal.reduce((a, b) => a + b, 0);
+    if (somaIdeal <= largura) {
+      return ideal.map((v) => v / somaIdeal * largura);
+    }
+    if (somaPiso <= largura) {
+      const folga = largura - somaPiso;
+      const fome = ideal.map((v, i) => Math.max(0, v - piso[i]));
+      const somaFome = fome.reduce((a, b) => a + b, 0) || 1;
+      return piso.map((v, i) => v + fome[i] / somaFome * folga);
+    }
+    return piso.map((v) => v / somaPiso * largura);
+  })();
+  const marca = () => {
+    doc.rect(0, 0, doc.page.width, 66).fill(AZUL);
+    doc.fillColor("#FFFFFF").fontSize(17).font("Helvetica-Bold").text("Rafa Multimarcas", x0, 16);
+    doc.fontSize(10).font("Helvetica").text(r.title, x0, 39);
+    doc.fontSize(8).fillColor("#CBD5E1").text(`Gerado em ${dataHora()}`, x0, 40, {
+      width: largura,
+      align: "right"
+    });
+    doc.fillColor(AZUL);
+  };
+  const alturaDoTexto = (texto3, i) => doc.heightOfString(texto3, { width: larguras[i] - PADDING * 2, align: r.columns[i].align ?? "left" });
+  const faixaDeTitulos = () => {
+    doc.font("Helvetica-Bold").fontSize(7.5);
+    const titulos = r.columns.map((c) => c.header.toUpperCase());
+    const altura = Math.max(
+      18,
+      ...titulos.map((t, i) => alturaDoTexto(t, i) + PADDING * 2)
+    );
     const y = doc.y;
-    doc.rect(x0, y, largura, 20).fill("#E2E8F0");
-    doc.fillColor(AZUL).fontSize(8).font("Helvetica-Bold");
+    doc.rect(x0, y, largura, altura).fill("#E2E8F0");
+    doc.fillColor(AZUL);
     let x = x0;
-    r.columns.forEach((c, i) => {
-      doc.text(c.header.toUpperCase(), x + 4, y + 6, {
-        width: larguras[i] - 8,
-        align: c.align ?? "left",
-        lineBreak: false
+    titulos.forEach((t, i) => {
+      doc.text(t, x + PADDING, y + PADDING, {
+        width: larguras[i] - PADDING * 2,
+        align: r.columns[i].align ?? "left"
       });
       x += larguras[i];
     });
-    doc.y = y + 20;
+    doc.y = y + altura;
   };
-  cabecalho();
-  doc.font("Helvetica").fontSize(8);
+  const abrirPagina = (primeira) => {
+    if (!primeira) doc.addPage();
+    marca();
+    doc.y = 80;
+    if (r.subtitle) {
+      doc.fontSize(9).font("Helvetica").fillColor("#475569").text(r.subtitle, x0, doc.y, { width: largura });
+      doc.y += 6;
+    }
+    faixaDeTitulos();
+  };
+  abrirPagina(true);
   r.rows.forEach((linha, indice) => {
-    if (doc.y > doc.page.height - doc.page.margins.bottom - 40) {
-      doc.addPage();
-      doc.y = doc.page.margins.top;
-      cabecalho();
+    doc.font("Helvetica").fontSize(8);
+    const textos = r.columns.map((c) => String(valorDaCelula(c, linha) ?? ""));
+    const altura = Math.max(
+      ALTURA_MINIMA,
+      ...textos.map((t, i) => alturaDoTexto(t, i) + PADDING * 2)
+    );
+    if (doc.y + altura > rodapeY - 10) {
+      abrirPagina(false);
       doc.font("Helvetica").fontSize(8);
     }
     const y = doc.y;
-    if (indice % 2 === 1) doc.rect(x0, y, largura, 16).fill("#F8FAFC");
+    if (indice % 2 === 1) doc.rect(x0, y, largura, altura).fill("#F8FAFC");
     doc.fillColor("#1E293B");
     let x = x0;
-    r.columns.forEach((c, i) => {
-      doc.text(String(valorDaCelula(c, linha) ?? ""), x + 4, y + 4, {
-        width: larguras[i] - 8,
-        align: c.align ?? "left",
-        lineBreak: false,
-        ellipsis: true
+    textos.forEach((t, i) => {
+      doc.text(t, x + PADDING, y + PADDING, {
+        width: larguras[i] - PADDING * 2,
+        align: r.columns[i].align ?? "left"
       });
       x += larguras[i];
     });
-    doc.y = y + 16;
+    doc.moveTo(x0, y + altura).lineTo(x0 + largura, y + altura).lineWidth(0.5).strokeColor("#E2E8F0").stroke();
+    doc.y = y + altura;
   });
   if (r.summary?.length) {
-    doc.moveDown(1);
-    if (doc.y > doc.page.height - doc.page.margins.bottom - 60) doc.addPage();
-    doc.font("Helvetica-Bold").fontSize(9).fillColor(AZUL).text("Resumo", x0, doc.y);
-    doc.moveDown(0.3);
-    doc.font("Helvetica").fontSize(9).fillColor("#334155");
-    r.summary.forEach((s) => {
-      doc.text(`${s.label}: ${s.value}`, x0, doc.y);
-      doc.moveDown(0.2);
+    const alturaResumo = 26 + Math.ceil(r.summary.length / 3) * 16;
+    if (doc.y + alturaResumo > rodapeY - 10) abrirPagina(false);
+    doc.y += 12;
+    const y = doc.y;
+    doc.rect(x0, y, largura, alturaResumo).fill("#F1F5F9");
+    doc.fillColor(AZUL).font("Helvetica-Bold").fontSize(9).text("Resumo", x0 + PADDING, y + 7);
+    const colunas = 3;
+    const larguraItem = (largura - PADDING * 2) / colunas;
+    r.summary.forEach((item, i) => {
+      const cx = x0 + PADDING + i % colunas * larguraItem;
+      const cy = y + 24 + Math.floor(i / colunas) * 16;
+      doc.font("Helvetica").fontSize(8).fillColor("#64748B").text(`${item.label}: `, cx, cy, {
+        width: larguraItem - 6,
+        continued: true
+      });
+      doc.font("Helvetica-Bold").fillColor(AZUL).text(item.value);
+    });
+    doc.y = y + alturaResumo;
+  }
+  const paginas = doc.bufferedPageRange();
+  for (let i = 0; i < paginas.count; i += 1) {
+    doc.switchToPage(paginas.start + i);
+    doc.font("Helvetica").fontSize(7.5).fillColor("#94A3B8").text(`${r.title} \xB7 p\xE1gina ${i + 1} de ${paginas.count}`, x0, rodapeY, {
+      width: largura,
+      align: "center",
+      lineBreak: false
     });
   }
+  doc.flushPages();
   doc.end();
 }
+var dataHora = () => (/* @__PURE__ */ new Date()).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" });
 async function exportar(res, formato, r) {
   if (formato === "pdf") return enviarPdf(res, r);
   if (formato === "csv") return enviarCsv(res, r);
@@ -2963,7 +3051,7 @@ rotasRelatorios.get(
       const total = numero(i.unitPrice) * i.quantity;
       return {
         code: i.sale.code,
-        date: dataHoraBR(i.sale.saleDate),
+        date: dataHoraCurta(i.sale.saleDate),
         unit: i.sale.unit.name,
         customer: i.sale.customerName ?? "\u2014",
         phone: i.sale.customerPhone ?? "\u2014",
@@ -2988,20 +3076,22 @@ rotasRelatorios.get(
       title: "Relat\xF3rio de Vendas",
       subtitle: periodo(q),
       columns: [
-        { header: "Venda", key: "code", width: 10 },
-        { header: "Data", key: "date", width: 14 },
-        { header: "Unidade", key: "unit", width: 11 },
-        { header: "Cliente", key: "customer", width: 18 },
-        { header: "Produto", key: "product", width: 22 },
-        { header: "Categoria", key: "category", width: 12 },
-        { header: "IMEI / s\xE9rie", key: "imei", width: 15 },
+        // Larguras conferidas com dados reais: nome de aparelho e pagamento
+        // dividido são os que estouram, e é neles que sobra espaço aqui.
+        { header: "Venda", key: "code", width: 11 },
+        { header: "Data", key: "date", width: 13 },
+        { header: "Unidade", key: "unit", width: 10 },
+        { header: "Cliente", key: "customer", width: 15 },
+        { header: "Produto", key: "product", width: 26 },
+        { header: "Categoria", key: "category", width: 11 },
+        { header: "IMEI / s\xE9rie", key: "imei", width: 14 },
         qtd("Qtd", "quantity", 5),
-        money("Valor unit.", "unitPrice", 11),
+        money("Unit.", "unitPrice", 11),
         money("Total", "total", 11),
-        money("Lucro", "profit", 11),
-        { header: "Pagamento", key: "payment", width: 22 },
+        money("Lucro", "profit", 10),
+        { header: "Pagamento", key: "payment", width: 26 },
         { header: "Vendedor", key: "seller", width: 13 },
-        { header: "Caixa", key: "cashier", width: 13 }
+        { header: "Caixa", key: "cashier", width: 11 }
       ],
       rows: linhas,
       summary: [
@@ -3240,7 +3330,7 @@ rotasRelatorios.get(
     const unidades = await db.unit.findMany({ select: { id: true, name: true } });
     const nome = (id) => unidades.find((u) => u.id === id)?.name ?? "\u2014";
     const linhas = movimentos.map((m) => ({
-      date: dataHoraBR(m.createdAt),
+      date: dataHoraCurta(m.createdAt),
       unit: m.unit?.name ?? "\u2014",
       type: TIPO_LABEL[m.type] ?? m.type,
       reason: MOTIVO_LABEL[m.reason] ?? m.reason,
@@ -3947,7 +4037,11 @@ async function registrarVenda(dados) {
     const aReceber = total.minus(daTroca);
     const emDinheiro = dados.pagamentos?.length ? dados.pagamentos.map((p) => ({
       method: p.method,
-      amount: new Prisma3.Decimal(p.amount),
+      // Duas casas antes de virar Decimal. Um valor como 318.59999999999997
+      // — que aparece sozinho ao dividir por porcentagem — some na soma
+      // do JavaScript, mas sobrevive na soma exata do banco e travaria a
+      // venda dizendo que dois valores iguais são diferentes.
+      amount: new Prisma3.Decimal(p.amount.toFixed(2)),
       installments: p.installments ?? 1,
       notes: null
     })) : aReceber.greaterThan(0) ? [
@@ -3959,7 +4053,7 @@ async function registrarVenda(dados) {
       }
     ] : [];
     const somaEmDinheiro = emDinheiro.reduce((s, p) => s.add(p.amount), new Prisma3.Decimal(0));
-    if (!somaEmDinheiro.equals(aReceber)) {
+    if (somaEmDinheiro.minus(aReceber).abs().greaterThan("0.005")) {
       throw new AppError(
         `As formas de pagamento somam R$ ${somaEmDinheiro.toFixed(2)}, mas o cliente tem a pagar R$ ${aReceber.toFixed(2)}.`
       );

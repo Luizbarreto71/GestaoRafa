@@ -224,7 +224,11 @@ export async function registrarVenda(dados: DadosDaVenda) {
     const emDinheiro = dados.pagamentos?.length
       ? dados.pagamentos.map((p) => ({
           method: p.method,
-          amount: new Prisma.Decimal(p.amount),
+          // Duas casas antes de virar Decimal. Um valor como 318.59999999999997
+          // — que aparece sozinho ao dividir por porcentagem — some na soma
+          // do JavaScript, mas sobrevive na soma exata do banco e travaria a
+          // venda dizendo que dois valores iguais são diferentes.
+          amount: new Prisma.Decimal(p.amount.toFixed(2)),
           installments: p.installments ?? 1,
           notes: null as string | null,
         }))
@@ -240,7 +244,9 @@ export async function registrarVenda(dados: DadosDaVenda) {
         : [];
 
     const somaEmDinheiro = emDinheiro.reduce((s, p) => s.add(p.amount), new Prisma.Decimal(0));
-    if (!somaEmDinheiro.equals(aReceber)) {
+    // Meio centavo de folga: o dinheiro só existe até o centavo, e recusar
+    // por menos que isso seria recusar por um arredondamento invisível.
+    if (somaEmDinheiro.minus(aReceber).abs().greaterThan('0.005')) {
       throw new AppError(
         `As formas de pagamento somam R$ ${somaEmDinheiro.toFixed(2)}, mas o cliente tem a pagar R$ ${aReceber.toFixed(2)}.`,
       );

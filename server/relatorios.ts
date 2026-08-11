@@ -4,7 +4,7 @@ import { autenticar } from './auth';
 import {
   AppError,
   dataBR,
-  dataHoraBR,
+  dataHoraCurta,
   intervalo,
   numero,
   PAGAMENTO_LABEL,
@@ -187,7 +187,7 @@ rotasRelatorios.get(
       const total = numero(i.unitPrice) * i.quantity;
       return {
         code: i.sale.code,
-        date: dataHoraBR(i.sale.saleDate),
+        date: dataHoraCurta(i.sale.saleDate),
         unit: i.sale.unit.name,
         customer: i.sale.customerName ?? '—',
         phone: i.sale.customerPhone ?? '—',
@@ -219,20 +219,22 @@ rotasRelatorios.get(
       title: 'Relatório de Vendas',
       subtitle: periodo(q),
       columns: [
-        { header: 'Venda', key: 'code', width: 10 },
-        { header: 'Data', key: 'date', width: 14 },
-        { header: 'Unidade', key: 'unit', width: 11 },
-        { header: 'Cliente', key: 'customer', width: 18 },
-        { header: 'Produto', key: 'product', width: 22 },
-        { header: 'Categoria', key: 'category', width: 12 },
-        { header: 'IMEI / série', key: 'imei', width: 15 },
+        // Larguras conferidas com dados reais: nome de aparelho e pagamento
+        // dividido são os que estouram, e é neles que sobra espaço aqui.
+        { header: 'Venda', key: 'code', width: 11 },
+        { header: 'Data', key: 'date', width: 13 },
+        { header: 'Unidade', key: 'unit', width: 10 },
+        { header: 'Cliente', key: 'customer', width: 15 },
+        { header: 'Produto', key: 'product', width: 26 },
+        { header: 'Categoria', key: 'category', width: 11 },
+        { header: 'IMEI / série', key: 'imei', width: 14 },
         qtd('Qtd', 'quantity', 5),
-        money('Valor unit.', 'unitPrice', 11),
+        money('Unit.', 'unitPrice', 11),
         money('Total', 'total', 11),
-        money('Lucro', 'profit', 11),
-        { header: 'Pagamento', key: 'payment', width: 22 },
+        money('Lucro', 'profit', 10),
+        { header: 'Pagamento', key: 'payment', width: 26 },
         { header: 'Vendedor', key: 'seller', width: 13 },
-        { header: 'Caixa', key: 'cashier', width: 13 },
+        { header: 'Caixa', key: 'cashier', width: 11 },
       ],
       rows: linhas,
       summary: [
@@ -513,7 +515,7 @@ rotasRelatorios.get(
     const nome = (id?: string | null) => unidades.find((u) => u.id === id)?.name ?? '—';
 
     const linhas = movimentos.map((m) => ({
-      date: dataHoraBR(m.createdAt),
+      date: dataHoraCurta(m.createdAt),
       unit: m.unit?.name ?? '—',
       type: TIPO_LABEL[m.type] ?? m.type,
       reason: MOTIVO_LABEL[m.reason] ?? m.reason,
