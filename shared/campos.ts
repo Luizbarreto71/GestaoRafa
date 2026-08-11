@@ -15,6 +15,7 @@ export type TipoCampo =
   | 'dinheiro'
   | 'data'
   | 'codigo-barras'
+  | 'selecao'
   | 'fornecedor'
   | 'status'
   | 'fotos';
@@ -30,6 +31,8 @@ export interface DefinicaoCampo {
   /** Texto de apoio mostrado abaixo do campo. */
   ajuda?: string;
   exemplo?: string;
+  /** Alternativas do campo, quando o tipo é 'selecao'. */
+  opcoes?: string[];
 }
 
 const CATALOGO = {
@@ -46,6 +49,13 @@ const CATALOGO = {
   cor: { rotulo: 'Cor', tipo: 'texto', coluna: 'color', exemplo: 'Titânio' },
   capacidade: { rotulo: 'Capacidade', tipo: 'texto', coluna: 'capacity', exemplo: '256GB' },
   lote: { rotulo: 'Lote', tipo: 'texto', coluna: 'lote', exemplo: 'AB1234' },
+  condicao: {
+    rotulo: 'Condição',
+    tipo: 'selecao',
+    coluna: 'condicao',
+    opcoes: ['Lacrado', 'Vitrine', 'Seminovo'],
+    ajuda: 'Estado do aparelho — muda bastante o preço',
+  },
   imei: { rotulo: 'IMEI', tipo: 'texto', coluna: 'imei', exemplo: '356938035643809' },
   serie: { rotulo: 'Número de série', tipo: 'texto', coluna: 'serialNumber', exemplo: 'SN-000123' },
   codigo: { rotulo: 'Código de barras', tipo: 'codigo-barras', coluna: 'barcode' },
@@ -105,6 +115,7 @@ export const PADROES: Record<string, CampoDaCategoria[]> = {
     { campo: 'modelo' },
     { campo: 'cor' },
     { campo: 'capacidade' },
+    { campo: 'condicao' },
     { campo: 'imei' },
     { campo: 'quantidade' },
     { campo: 'custo' },

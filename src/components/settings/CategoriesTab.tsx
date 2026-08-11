@@ -185,6 +185,11 @@ function EditorDeCategoria({ categoria, aberta, onAlternar, onSalvo, onErro }: E
 
                   <span className="w-32 shrink-0 text-xs font-semibold text-slate-500 dark:text-slate-400">
                     {CAMPOS[c.campo].rotulo}
+                    {CAMPOS[c.campo].opcoes && (
+                      <span className="block truncate font-normal text-slate-400">
+                        {CAMPOS[c.campo].opcoes!.join(' / ')}
+                      </span>
+                    )}
                   </span>
 
                   <Input

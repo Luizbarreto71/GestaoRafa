@@ -203,6 +203,20 @@ export default function StockPage() {
           <p className="text-xs text-slate-500 dark:text-slate-400">
             {[product.brand, product.color, product.capacity].filter(Boolean).join(' · ') || '—'}
           </p>
+          {product.condicao && (
+            <Badge
+              tone={
+                product.condicao === 'Lacrado'
+                  ? 'success'
+                  : product.condicao === 'Vitrine'
+                    ? 'warning'
+                    : 'neutral'
+              }
+              className="mt-1"
+            >
+              {product.condicao}
+            </Badge>
+          )}
           {product.imei && <p className="text-[11px] text-slate-400">IMEI {product.imei}</p>}
         </div>
       ),

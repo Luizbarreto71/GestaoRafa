@@ -134,6 +134,7 @@ const CABECALHOS = [
   'IMEI',
   'Número de Série',
   'Lote',
+  'Condição',
   'Observações',
 ];
 
@@ -160,6 +161,9 @@ const DE_PARA: Record<string, string> = {
   'número de série': 'serialNumber',
   serie: 'serialNumber',
   lote: 'lote',
+  'condicao': 'condicao',
+  'condição': 'condicao',
+  estado: 'condicao',
   'lote da caixa': 'lote',
   'codigo de barras': 'barcode',
   'código de barras': 'barcode',
@@ -331,6 +335,7 @@ rotasSistema.post(
             imei: dados.imei || null,
             serialNumber: dados.serialNumber || null,
             lote: dados.lote || null,
+            condicao: dados.condicao || null,
             barcode: dados.barcode || null,
             notes: dados.notes || null,
             categoryId: categoria.id,

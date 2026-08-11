@@ -1,0 +1,738 @@
+{
+  "geradoEm": "2026-08-11T02:35:08.594Z",
+  "produtos": [
+    {
+      "id": "3a7271cf-e396-4a17-af2b-7f7ca62e17df",
+      "name": "GOPRO",
+      "brand": null,
+      "model": null,
+      "color": null,
+      "capacity": null,
+      "lote": null,
+      "minQuantity": 1,
+      "costPrice": "540",
+      "salePrice": "600",
+      "imei": null,
+      "serialNumber": null,
+      "barcode": null,
+      "notes": null,
+      "status": "EM_ESTOQUE",
+      "entryDate": "2026-08-10T03:05:34.642Z",
+      "createdAt": "2026-08-10T03:05:34.642Z",
+      "updatedAt": "2026-08-10T23:23:23.033Z",
+      "categoryId": "778676e6-4960-46d3-9f11-00cd3177db70",
+      "supplierId": "e6f95f94-bae2-4da7-882e-475f7f146fab"
+    },
+    {
+      "id": "87c78f1b-c9a7-4883-a7f1-3ca2dfd96377",
+      "name": "GO PRO",
+      "brand": null,
+      "model": null,
+      "color": null,
+      "capacity": null,
+      "lote": null,
+      "minQuantity": 1,
+      "costPrice": "450",
+      "salePrice": "600",
+      "imei": null,
+      "serialNumber": null,
+      "barcode": null,
+      "notes": null,
+      "status": "EM_ESTOQUE",
+      "entryDate": "2026-08-10T03:28:48.804Z",
+      "createdAt": "2026-08-10T03:28:48.804Z",
+      "updatedAt": "2026-08-10T23:23:36.797Z",
+      "categoryId": "778676e6-4960-46d3-9f11-00cd3177db70",
+      "supplierId": "677ff923-8f9e-4610-8420-167a13144e4d"
+    },
+    {
+      "id": "b03da810-b294-425f-ba6f-7b8e56fbf237",
+      "name": "Asxasdad",
+      "brand": null,
+      "model": null,
+      "color": null,
+      "capacity": null,
+      "lote": null,
+      "minQuantity": 1,
+      "costPrice": "1",
+      "salePrice": "2",
+      "imei": null,
+      "serialNumber": null,
+      "barcode": null,
+      "notes": null,
+      "status": "EM_ESTOQUE",
+      "entryDate": "2026-08-11T00:44:34.491Z",
+      "createdAt": "2026-08-11T00:44:34.491Z",
+      "updatedAt": "2026-08-11T00:44:34.491Z",
+      "categoryId": "889e2146-9c72-4d6b-9ed6-8c460bb35e92",
+      "supplierId": null
+    }
+  ],
+  "estoque": [
+    {
+      "id": "7193f180-ea9f-41cc-9194-5ca0f7468d21",
+      "quantity": 26,
+      "updatedAt": "2026-08-11T00:39:18.012Z",
+      "productId": "3a7271cf-e396-4a17-af2b-7f7ca62e17df",
+      "unitId": "11111111-1111-4111-8111-111111111111"
+    },
+    {
+      "id": "6280bea3-d834-45ac-8b55-59cd3d717dfb",
+      "quantity": 1,
+      "updatedAt": "2026-08-11T00:44:34.704Z",
+      "productId": "b03da810-b294-425f-ba6f-7b8e56fbf237",
+      "unitId": "22222222-2222-4222-8222-222222222222"
+    },
+    {
+      "id": "8b32dc38-b2d5-4b87-bf16-10e19321cc9b",
+      "quantity": 5,
+      "updatedAt": "2026-08-11T00:45:24.613Z",
+      "productId": "87c78f1b-c9a7-4883-a7f1-3ca2dfd96377",
+      "unitId": "11111111-1111-4111-8111-111111111111"
+    },
+    {
+      "id": "b8d15c41-e002-41e2-9be1-5f4ec00b17c8",
+      "quantity": 1,
+      "updatedAt": "2026-08-11T00:45:24.689Z",
+      "productId": "87c78f1b-c9a7-4883-a7f1-3ca2dfd96377",
+      "unitId": "22222222-2222-4222-8222-222222222222"
+    }
+  ],
+  "movimentacoes": [
+    {
+      "id": "646c92c9-1db0-45da-9911-c5d876ee6c33",
+      "type": "ENTRADA",
+      "reason": "OUTRO",
+      "quantity": 17,
+      "previousQuantity": null,
+      "newQuantity": 17,
+      "notes": "Cadastro de produto",
+      "createdAt": "2026-08-07T07:49:11.701Z",
+      "productId": null,
+      "productName": "TG",
+      "unitId": "11111111-1111-4111-8111-111111111111",
+      "originUnitId": null,
+      "destinationUnitId": null,
+      "referenceId": null,
+      "saleId": null,
+      "transferId": null,
+      "withdrawalId": null,
+      "userId": "996644a7-25bd-477b-aebb-757d09b11416"
+    },
+    {
+      "id": "2bee1a2b-46c6-4d9b-b20a-32ce4eb57de7",
+      "type": "AJUSTE",
+      "reason": "EXCLUSAO",
+      "quantity": 17,
+      "previousQuantity": null,
+      "newQuantity": 0,
+      "notes": "Produto excluído do sistema",
+      "createdAt": "2026-08-07T07:49:24.943Z",
+      "productId": null,
+      "productName": "TG",
+      "unitId": "11111111-1111-4111-8111-111111111111",
+      "originUnitId": null,
+      "destinationUnitId": null,
+      "referenceId": null,
+      "saleId": null,
+      "transferId": null,
+      "withdrawalId": null,
+      "userId": "996644a7-25bd-477b-aebb-757d09b11416"
+    },
+    {
+      "id": "63bc160e-6767-49b9-a552-64382a884106",
+      "type": "ENTRADA",
+      "reason": "OUTRO",
+      "quantity": 80,
+      "previousQuantity": null,
+      "newQuantity": 80,
+      "notes": "Cadastro de produto",
+      "createdAt": "2026-08-07T13:07:38.950Z",
+      "productId": null,
+      "productName": "tg",
+      "unitId": "11111111-1111-4111-8111-111111111111",
+      "originUnitId": null,
+      "destinationUnitId": null,
+      "referenceId": null,
+      "saleId": null,
+      "transferId": null,
+      "withdrawalId": null,
+      "userId": "996644a7-25bd-477b-aebb-757d09b11416"
+    },
+    {
+      "id": "97efad7e-7ed9-4eb0-ba3c-762ab48a810f",
+      "type": "AJUSTE",
+      "reason": "EXCLUSAO",
+      "quantity": 80,
+      "previousQuantity": null,
+      "newQuantity": 0,
+      "notes": "Produto excluído do sistema",
+      "createdAt": "2026-08-07T20:50:33.731Z",
+      "productId": null,
+      "productName": "tg",
+      "unitId": "11111111-1111-4111-8111-111111111111",
+      "originUnitId": null,
+      "destinationUnitId": null,
+      "referenceId": null,
+      "saleId": null,
+      "transferId": null,
+      "withdrawalId": null,
+      "userId": "996644a7-25bd-477b-aebb-757d09b11416"
+    },
+    {
+      "id": "8bd62138-3dd9-4f89-9996-7715cdbf3c02",
+      "type": "ENTRADA",
+      "reason": "OUTRO",
+      "quantity": 37,
+      "previousQuantity": null,
+      "newQuantity": 37,
+      "notes": "Cadastro de produto",
+      "createdAt": "2026-08-10T03:05:34.850Z",
+      "productId": "3a7271cf-e396-4a17-af2b-7f7ca62e17df",
+      "productName": "GOPRO",
+      "unitId": "11111111-1111-4111-8111-111111111111",
+      "originUnitId": null,
+      "destinationUnitId": null,
+      "referenceId": null,
+      "saleId": null,
+      "transferId": null,
+      "withdrawalId": null,
+      "userId": "996644a7-25bd-477b-aebb-757d09b11416"
+    },
+    {
+      "id": "17e9d1e1-5f34-4427-8908-18a96ef852b9",
+      "type": "ENTRADA",
+      "reason": "OUTRO",
+      "quantity": 50,
+      "previousQuantity": null,
+      "newQuantity": 50,
+      "notes": "Cadastro de produto",
+      "createdAt": "2026-08-10T03:28:48.944Z",
+      "productId": "87c78f1b-c9a7-4883-a7f1-3ca2dfd96377",
+      "productName": "GO PRO",
+      "unitId": "11111111-1111-4111-8111-111111111111",
+      "originUnitId": null,
+      "destinationUnitId": null,
+      "referenceId": null,
+      "saleId": null,
+      "transferId": null,
+      "withdrawalId": null,
+      "userId": "996644a7-25bd-477b-aebb-757d09b11416"
+    },
+    {
+      "id": "3b13f319-6d07-4c80-9cad-b2bb0792a0a1",
+      "type": "SAIDA",
+      "reason": "VENDA",
+      "quantity": 10,
+      "previousQuantity": null,
+      "newQuantity": 27,
+      "notes": "Venda para AA",
+      "createdAt": "2026-08-10T03:32:38.397Z",
+      "productId": "3a7271cf-e396-4a17-af2b-7f7ca62e17df",
+      "productName": "GOPRO",
+      "unitId": "11111111-1111-4111-8111-111111111111",
+      "originUnitId": null,
+      "destinationUnitId": null,
+      "referenceId": null,
+      "saleId": "f693e8b5-3fe6-4516-9b08-544bb166cb6e",
+      "transferId": null,
+      "withdrawalId": null,
+      "userId": "996644a7-25bd-477b-aebb-757d09b11416"
+    },
+    {
+      "id": "f52c650e-eec5-4c4e-b8cb-4d363b938d1d",
+      "type": "SAIDA",
+      "reason": "VENDA",
+      "quantity": 40,
+      "previousQuantity": null,
+      "newQuantity": 10,
+      "notes": "Venda para Aa",
+      "createdAt": "2026-08-10T23:23:12.173Z",
+      "productId": "87c78f1b-c9a7-4883-a7f1-3ca2dfd96377",
+      "productName": "GO PRO",
+      "unitId": "11111111-1111-4111-8111-111111111111",
+      "originUnitId": null,
+      "destinationUnitId": null,
+      "referenceId": null,
+      "saleId": "db5389f0-07c1-4387-a2a9-5f79ddf8a9d4",
+      "transferId": null,
+      "withdrawalId": null,
+      "userId": "996644a7-25bd-477b-aebb-757d09b11416"
+    },
+    {
+      "id": "3be1a99d-9097-4e3a-91b9-7b3f19eb6fad",
+      "type": "SAIDA",
+      "reason": "VENDA",
+      "quantity": 1,
+      "previousQuantity": null,
+      "newQuantity": 26,
+      "notes": "Venda para aa",
+      "createdAt": "2026-08-10T23:23:23.146Z",
+      "productId": "3a7271cf-e396-4a17-af2b-7f7ca62e17df",
+      "productName": "GOPRO",
+      "unitId": "11111111-1111-4111-8111-111111111111",
+      "originUnitId": null,
+      "destinationUnitId": null,
+      "referenceId": null,
+      "saleId": "b95880f7-24a3-4eca-904a-210c9b2e449a",
+      "transferId": null,
+      "withdrawalId": null,
+      "userId": "996644a7-25bd-477b-aebb-757d09b11416"
+    },
+    {
+      "id": "85cbc617-b69b-4f0f-8aa0-5bbba2106c82",
+      "type": "SAIDA",
+      "reason": "VENDA",
+      "quantity": 4,
+      "previousQuantity": null,
+      "newQuantity": 6,
+      "notes": "Venda para Aa",
+      "createdAt": "2026-08-10T23:23:36.910Z",
+      "productId": "87c78f1b-c9a7-4883-a7f1-3ca2dfd96377",
+      "productName": "GO PRO",
+      "unitId": "11111111-1111-4111-8111-111111111111",
+      "originUnitId": null,
+      "destinationUnitId": null,
+      "referenceId": null,
+      "saleId": "1490a912-c73f-414c-be85-39b4c5eb6fb3",
+      "transferId": null,
+      "withdrawalId": null,
+      "userId": "996644a7-25bd-477b-aebb-757d09b11416"
+    },
+    {
+      "id": "1eb0da67-5017-4f2c-918d-36c2cba31b4a",
+      "type": "ENTRADA",
+      "reason": "CADASTRO",
+      "quantity": 1,
+      "previousQuantity": 0,
+      "newQuantity": 1,
+      "notes": "Estoque inicial do cadastro",
+      "createdAt": "2026-08-11T00:44:34.737Z",
+      "productId": "b03da810-b294-425f-ba6f-7b8e56fbf237",
+      "productName": "Asxasdad",
+      "unitId": "22222222-2222-4222-8222-222222222222",
+      "originUnitId": null,
+      "destinationUnitId": null,
+      "referenceId": null,
+      "saleId": null,
+      "transferId": null,
+      "withdrawalId": null,
+      "userId": "996644a7-25bd-477b-aebb-757d09b11416"
+    },
+    {
+      "id": "cdbdd7ba-a34e-4162-8ac2-756aaffedfeb",
+      "type": "TRANSFERENCIA",
+      "reason": "TRANSFERENCIA",
+      "quantity": 1,
+      "previousQuantity": 6,
+      "newQuantity": 5,
+      "notes": "Transferência para Sede",
+      "createdAt": "2026-08-11T00:45:24.643Z",
+      "productId": "87c78f1b-c9a7-4883-a7f1-3ca2dfd96377",
+      "productName": "GO PRO",
+      "unitId": "11111111-1111-4111-8111-111111111111",
+      "originUnitId": "11111111-1111-4111-8111-111111111111",
+      "destinationUnitId": "22222222-2222-4222-8222-222222222222",
+      "referenceId": "85add170-568a-4527-95b0-a71e9845fd11",
+      "saleId": null,
+      "transferId": "85add170-568a-4527-95b0-a71e9845fd11",
+      "withdrawalId": null,
+      "userId": "996644a7-25bd-477b-aebb-757d09b11416"
+    },
+    {
+      "id": "7e6fa5f2-6e8e-4efc-bc5d-378b71ddb092",
+      "type": "TRANSFERENCIA",
+      "reason": "TRANSFERENCIA",
+      "quantity": 1,
+      "previousQuantity": 0,
+      "newQuantity": 1,
+      "notes": "Transferência da Matriz",
+      "createdAt": "2026-08-11T00:45:24.719Z",
+      "productId": "87c78f1b-c9a7-4883-a7f1-3ca2dfd96377",
+      "productName": "GO PRO",
+      "unitId": "22222222-2222-4222-8222-222222222222",
+      "originUnitId": "11111111-1111-4111-8111-111111111111",
+      "destinationUnitId": "22222222-2222-4222-8222-222222222222",
+      "referenceId": "85add170-568a-4527-95b0-a71e9845fd11",
+      "saleId": null,
+      "transferId": "85add170-568a-4527-95b0-a71e9845fd11",
+      "withdrawalId": null,
+      "userId": "996644a7-25bd-477b-aebb-757d09b11416"
+    }
+  ],
+  "vendas": [
+    {
+      "id": "f693e8b5-3fe6-4516-9b08-544bb166cb6e",
+      "quantity": 10,
+      "unitPrice": "550",
+      "totalPrice": "5500",
+      "costAtSale": "540",
+      "paymentMethod": "PIX",
+      "saleDate": "2026-08-10T15:00:00.000Z",
+      "notes": null,
+      "createdAt": "2026-08-10T03:32:38.252Z",
+      "updatedAt": "2026-08-10T03:32:38.252Z",
+      "productId": "3a7271cf-e396-4a17-af2b-7f7ca62e17df",
+      "customerId": "e6b9ce26-19cc-4957-aea6-bea74ab5c0b9",
+      "customerName": "AA",
+      "customerPhone": null,
+      "userId": "996644a7-25bd-477b-aebb-757d09b11416",
+      "unitId": "11111111-1111-4111-8111-111111111111"
+    },
+    {
+      "id": "db5389f0-07c1-4387-a2a9-5f79ddf8a9d4",
+      "quantity": 40,
+      "unitPrice": "600",
+      "totalPrice": "24000",
+      "costAtSale": "450",
+      "paymentMethod": "PIX",
+      "saleDate": "2026-08-10T15:00:00.000Z",
+      "notes": null,
+      "createdAt": "2026-08-10T23:23:12.055Z",
+      "updatedAt": "2026-08-10T23:23:12.055Z",
+      "productId": "87c78f1b-c9a7-4883-a7f1-3ca2dfd96377",
+      "customerId": "e6b9ce26-19cc-4957-aea6-bea74ab5c0b9",
+      "customerName": "Aa",
+      "customerPhone": null,
+      "userId": "996644a7-25bd-477b-aebb-757d09b11416",
+      "unitId": "11111111-1111-4111-8111-111111111111"
+    },
+    {
+      "id": "b95880f7-24a3-4eca-904a-210c9b2e449a",
+      "quantity": 1,
+      "unitPrice": "600",
+      "totalPrice": "600",
+      "costAtSale": "540",
+      "paymentMethod": "PIX",
+      "saleDate": "2026-08-10T15:00:00.000Z",
+      "notes": null,
+      "createdAt": "2026-08-10T23:23:23.060Z",
+      "updatedAt": "2026-08-10T23:23:23.060Z",
+      "productId": "3a7271cf-e396-4a17-af2b-7f7ca62e17df",
+      "customerId": "e6b9ce26-19cc-4957-aea6-bea74ab5c0b9",
+      "customerName": "aa",
+      "customerPhone": null,
+      "userId": "996644a7-25bd-477b-aebb-757d09b11416",
+      "unitId": "11111111-1111-4111-8111-111111111111"
+    },
+    {
+      "id": "1490a912-c73f-414c-be85-39b4c5eb6fb3",
+      "quantity": 4,
+      "unitPrice": "600",
+      "totalPrice": "2400",
+      "costAtSale": "450",
+      "paymentMethod": "PIX",
+      "saleDate": "2026-08-10T15:00:00.000Z",
+      "notes": null,
+      "createdAt": "2026-08-10T23:23:36.823Z",
+      "updatedAt": "2026-08-10T23:23:36.823Z",
+      "productId": "87c78f1b-c9a7-4883-a7f1-3ca2dfd96377",
+      "customerId": "e6b9ce26-19cc-4957-aea6-bea74ab5c0b9",
+      "customerName": "Aa",
+      "customerPhone": null,
+      "userId": "996644a7-25bd-477b-aebb-757d09b11416",
+      "unitId": "11111111-1111-4111-8111-111111111111"
+    }
+  ],
+  "clientes": [
+    {
+      "id": "e6b9ce26-19cc-4957-aea6-bea74ab5c0b9",
+      "name": "AA",
+      "phone": null,
+      "email": null,
+      "document": null,
+      "notes": null,
+      "createdAt": "2026-08-10T03:32:38.227Z",
+      "updatedAt": "2026-08-10T03:32:38.227Z"
+    }
+  ],
+  "fornecedores": [
+    {
+      "id": "e6f95f94-bae2-4da7-882e-475f7f146fab",
+      "name": "CAIO",
+      "phone": null,
+      "email": null,
+      "document": null,
+      "address": null,
+      "notes": null,
+      "active": true,
+      "createdAt": "2026-08-10T03:02:34.256Z",
+      "updatedAt": "2026-08-10T03:02:41.938Z"
+    },
+    {
+      "id": "677ff923-8f9e-4610-8420-167a13144e4d",
+      "name": "F1000",
+      "phone": null,
+      "email": null,
+      "document": null,
+      "address": null,
+      "notes": null,
+      "active": true,
+      "createdAt": "2026-08-10T03:02:50.109Z",
+      "updatedAt": "2026-08-10T03:02:50.109Z"
+    }
+  ],
+  "categorias": [
+    {
+      "id": "889e2146-9c72-4d6b-9ed6-8c460bb35e92",
+      "name": "Celulares",
+      "slug": "celulares",
+      "color": "#3B82F6",
+      "campos": [
+        {
+          "campo": "nome"
+        },
+        {
+          "campo": "marca"
+        },
+        {
+          "campo": "modelo"
+        },
+        {
+          "campo": "cor"
+        },
+        {
+          "campo": "capacidade"
+        },
+        {
+          "campo": "imei"
+        },
+        {
+          "campo": "quantidade"
+        },
+        {
+          "campo": "custo"
+        },
+        {
+          "campo": "venda"
+        },
+        {
+          "campo": "fornecedor"
+        },
+        {
+          "campo": "fotos"
+        },
+        {
+          "campo": "observacoes"
+        }
+      ],
+      "createdAt": "2026-08-07T07:37:36.870Z",
+      "updatedAt": "2026-08-11T00:39:22.257Z"
+    },
+    {
+      "id": "778676e6-4960-46d3-9f11-00cd3177db70",
+      "name": "TG (Tirzepatida)",
+      "slug": "tg",
+      "color": "#8B5CF6",
+      "campos": [
+        {
+          "campo": "nome",
+          "rotulo": "Nome / dosagem"
+        },
+        {
+          "campo": "lote",
+          "rotulo": "Lote da caixa"
+        },
+        {
+          "campo": "quantidade",
+          "rotulo": "Quantidade de caixas"
+        },
+        {
+          "campo": "custo",
+          "rotulo": "Preço de compra"
+        },
+        {
+          "campo": "venda",
+          "rotulo": "Preço de venda"
+        },
+        {
+          "campo": "fornecedor"
+        },
+        {
+          "campo": "fotos"
+        },
+        {
+          "campo": "observacoes"
+        }
+      ],
+      "createdAt": "2026-08-07T07:37:37.159Z",
+      "updatedAt": "2026-08-11T00:39:22.928Z"
+    },
+    {
+      "id": "e829da54-7f19-4cc8-99c2-7d3aa0381a96",
+      "name": "JBL",
+      "slug": "jbl",
+      "color": "#F97316",
+      "campos": [
+        {
+          "campo": "nome"
+        },
+        {
+          "campo": "modelo"
+        },
+        {
+          "campo": "cor"
+        },
+        {
+          "campo": "serie"
+        },
+        {
+          "campo": "quantidade"
+        },
+        {
+          "campo": "custo"
+        },
+        {
+          "campo": "venda"
+        },
+        {
+          "campo": "fornecedor"
+        },
+        {
+          "campo": "fotos"
+        },
+        {
+          "campo": "observacoes"
+        }
+      ],
+      "createdAt": "2026-08-07T07:37:37.282Z",
+      "updatedAt": "2026-08-11T00:39:23.267Z"
+    },
+    {
+      "id": "750f68df-1e31-4350-9966-2946804fcf58",
+      "name": "Notebooks",
+      "slug": "notebooks",
+      "color": "#14B8A6",
+      "campos": [
+        {
+          "campo": "nome"
+        },
+        {
+          "campo": "marca"
+        },
+        {
+          "campo": "modelo"
+        },
+        {
+          "campo": "cor"
+        },
+        {
+          "campo": "capacidade",
+          "rotulo": "Configuração (RAM / SSD)"
+        },
+        {
+          "campo": "serie"
+        },
+        {
+          "campo": "quantidade"
+        },
+        {
+          "campo": "custo"
+        },
+        {
+          "campo": "venda"
+        },
+        {
+          "campo": "fornecedor"
+        },
+        {
+          "campo": "fotos"
+        },
+        {
+          "campo": "observacoes"
+        }
+      ],
+      "createdAt": "2026-08-07T07:37:37.470Z",
+      "updatedAt": "2026-08-11T00:39:23.768Z"
+    },
+    {
+      "id": "5bbfd165-942f-46a7-a1dd-d4787aa1db39",
+      "name": "Video Games",
+      "slug": "video-games",
+      "color": "#EC4899",
+      "campos": [
+        {
+          "campo": "nome"
+        },
+        {
+          "campo": "marca"
+        },
+        {
+          "campo": "modelo"
+        },
+        {
+          "campo": "cor"
+        },
+        {
+          "campo": "capacidade"
+        },
+        {
+          "campo": "serie"
+        },
+        {
+          "campo": "quantidade"
+        },
+        {
+          "campo": "custo"
+        },
+        {
+          "campo": "venda"
+        },
+        {
+          "campo": "fornecedor"
+        },
+        {
+          "campo": "fotos"
+        },
+        {
+          "campo": "observacoes"
+        }
+      ],
+      "createdAt": "2026-08-07T07:37:37.592Z",
+      "updatedAt": "2026-08-11T00:39:24.197Z"
+    }
+  ],
+  "unidades": [
+    {
+      "id": "11111111-1111-4111-8111-111111111111",
+      "name": "Matriz",
+      "type": "MATRIZ",
+      "active": true,
+      "createdAt": "2026-08-11T00:39:18.012Z",
+      "updatedAt": "2026-08-11T00:39:21.296Z"
+    },
+    {
+      "id": "22222222-2222-4222-8222-222222222222",
+      "name": "Sede",
+      "type": "FILIAL",
+      "active": true,
+      "createdAt": "2026-08-11T00:39:18.012Z",
+      "updatedAt": "2026-08-11T00:39:21.680Z"
+    }
+  ],
+  "usuarios": [
+    {
+      "id": "996644a7-25bd-477b-aebb-757d09b11416",
+      "name": "Guilherme Lemos",
+      "email": "guilherme@rafamultimarcas.com",
+      "role": "ADMIN",
+      "unitId": null
+    }
+  ],
+  "retiradas": [],
+  "transferencias": [
+    {
+      "id": "85add170-568a-4527-95b0-a71e9845fd11",
+      "quantity": 1,
+      "status": "RECEBIDA",
+      "notes": null,
+      "createdAt": "2026-08-11T00:45:24.554Z",
+      "receivedAt": "2026-08-11T00:45:24.553Z",
+      "productId": "87c78f1b-c9a7-4883-a7f1-3ca2dfd96377",
+      "originUnitId": "11111111-1111-4111-8111-111111111111",
+      "destinationUnitId": "22222222-2222-4222-8222-222222222222",
+      "requestedById": "996644a7-25bd-477b-aebb-757d09b11416",
+      "receivedById": "996644a7-25bd-477b-aebb-757d09b11416"
+    }
+  ]
+}

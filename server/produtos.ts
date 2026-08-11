@@ -96,6 +96,7 @@ const produtoSchema = z.object({
   color: texto,
   capacity: texto,
   lote: texto,
+  condicao: texto,
   quantity: z.coerce.number().int().min(0, 'A quantidade não pode ser negativa').default(0),
   /** Onde o estoque inicial entra. */
   unitId: z.string().uuid().optional().nullable(),
@@ -122,6 +123,7 @@ const filtrosSchema = z.object({
   status: z.enum(['EM_ESTOQUE', 'RESERVADO', 'VENDIDO']).optional(),
   brand: z.string().trim().optional(),
   model: z.string().trim().optional(),
+  condicao: z.string().trim().optional(),
   lowStock: z.enum(['true', 'false']).optional(),
   unitId: z.string().uuid().optional(),
   sortBy: z.string().optional(),
@@ -145,6 +147,7 @@ export async function filtrarProdutos(
         { imei: contem(q.search) },
         { serialNumber: contem(q.search) },
         { lote: contem(q.search) },
+        { condicao: contem(q.search) },
         { barcode: contem(q.search) },
         { color: contem(q.search) },
         { supplier: { name: contem(q.search) } },
@@ -158,6 +161,7 @@ export async function filtrarProdutos(
   if (q.status) cond.push({ status: q.status });
   if (q.brand) cond.push({ brand: contem(q.brand) });
   if (q.model) cond.push({ model: contem(q.model) });
+  if (q.condicao) cond.push({ condicao: q.condicao });
   if (q.lowStock === 'true') {
     const baixos = await estoqueBaixo(unidadeId, 500);
     cond.push({ id: { in: baixos.map((b) => b.productId) } });

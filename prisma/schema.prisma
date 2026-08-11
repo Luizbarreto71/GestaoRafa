@@ -176,6 +176,8 @@ model Product {
   color        String?
   capacity     String?
   lote         String?
+  /// Estado do aparelho: Lacrado, Vitrine, Seminovo…
+  condicao     String?
   /// Estoque mínimo por unidade — abaixo disso entra no alerta.
   minQuantity  Int           @default(1)
   costPrice    Decimal       @default(0) @db.Decimal(12, 2)
@@ -211,6 +213,7 @@ model Product {
   @@index([imei])
   @@index([serialNumber])
   @@index([lote])
+  @@index([condicao])
   @@index([status])
   @@index([categoryId])
   @@index([supplierId])

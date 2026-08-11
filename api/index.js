@@ -393,6 +393,13 @@ var CATALOGO = {
   cor: { rotulo: "Cor", tipo: "texto", coluna: "color", exemplo: "Tit\xE2nio" },
   capacidade: { rotulo: "Capacidade", tipo: "texto", coluna: "capacity", exemplo: "256GB" },
   lote: { rotulo: "Lote", tipo: "texto", coluna: "lote", exemplo: "AB1234" },
+  condicao: {
+    rotulo: "Condi\xE7\xE3o",
+    tipo: "selecao",
+    coluna: "condicao",
+    opcoes: ["Lacrado", "Vitrine", "Seminovo"],
+    ajuda: "Estado do aparelho \u2014 muda bastante o pre\xE7o"
+  },
   imei: { rotulo: "IMEI", tipo: "texto", coluna: "imei", exemplo: "356938035643809" },
   serie: { rotulo: "N\xFAmero de s\xE9rie", tipo: "texto", coluna: "serialNumber", exemplo: "SN-000123" },
   codigo: { rotulo: "C\xF3digo de barras", tipo: "codigo-barras", coluna: "barcode" },
@@ -426,6 +433,7 @@ var PADROES = {
     { campo: "modelo" },
     { campo: "cor" },
     { campo: "capacidade" },
+    { campo: "condicao" },
     { campo: "imei" },
     { campo: "quantidade" },
     { campo: "custo" },
@@ -2072,6 +2080,7 @@ var produtoSchema = z5.object({
   color: texto2,
   capacity: texto2,
   lote: texto2,
+  condicao: texto2,
   quantity: z5.coerce.number().int().min(0, "A quantidade n\xE3o pode ser negativa").default(0),
   /** Onde o estoque inicial entra. */
   unitId: z5.string().uuid().optional().nullable(),
@@ -2096,6 +2105,7 @@ var filtrosSchema = z5.object({
   status: z5.enum(["EM_ESTOQUE", "RESERVADO", "VENDIDO"]).optional(),
   brand: z5.string().trim().optional(),
   model: z5.string().trim().optional(),
+  condicao: z5.string().trim().optional(),
   lowStock: z5.enum(["true", "false"]).optional(),
   unitId: z5.string().uuid().optional(),
   sortBy: z5.string().optional(),
@@ -2112,6 +2122,7 @@ async function filtrarProdutos(q, unidadeId) {
         { imei: contem(q.search) },
         { serialNumber: contem(q.search) },
         { lote: contem(q.search) },
+        { condicao: contem(q.search) },
         { barcode: contem(q.search) },
         { color: contem(q.search) },
         { supplier: { name: contem(q.search) } },
@@ -2124,6 +2135,7 @@ async function filtrarProdutos(q, unidadeId) {
   if (q.status) cond.push({ status: q.status });
   if (q.brand) cond.push({ brand: contem(q.brand) });
   if (q.model) cond.push({ model: contem(q.model) });
+  if (q.condicao) cond.push({ condicao: q.condicao });
   if (q.lowStock === "true") {
     const baixos = await estoqueBaixo(unidadeId, 500);
     cond.push({ id: { in: baixos.map((b) => b.productId) } });
@@ -2658,6 +2670,7 @@ rotasRelatorios.get(
       brand: p.brand ?? "\u2014",
       model: p.model ?? "\u2014",
       lote: p.lote ?? "\u2014",
+      condicao: p.condicao ?? "\u2014",
       quantity,
       costPrice: numero(p.costPrice),
       salePrice: numero(p.salePrice),
@@ -2679,6 +2692,7 @@ rotasRelatorios.get(
         { header: "Marca", key: "brand", width: 11 },
         { header: "Modelo", key: "model", width: 13 },
         { header: "Lote", key: "lote", width: 11 },
+        { header: "Condi\xE7\xE3o", key: "condicao", width: 11 },
         qtd("Qtd", "quantity", 6),
         money("Custo", "costPrice", 10),
         money("Venda", "salePrice", 10),
@@ -3121,6 +3135,7 @@ var CABECALHOS = [
   "IMEI",
   "N\xFAmero de S\xE9rie",
   "Lote",
+  "Condi\xE7\xE3o",
   "Observa\xE7\xF5es"
 ];
 var DE_PARA = {
@@ -3145,6 +3160,9 @@ var DE_PARA = {
   "n\xFAmero de s\xE9rie": "serialNumber",
   serie: "serialNumber",
   lote: "lote",
+  "condicao": "condicao",
+  "condi\xE7\xE3o": "condicao",
+  estado: "condicao",
   "lote da caixa": "lote",
   "codigo de barras": "barcode",
   "c\xF3digo de barras": "barcode",
@@ -3279,6 +3297,7 @@ rotasSistema.post(
             imei: dados.imei || null,
             serialNumber: dados.serialNumber || null,
             lote: dados.lote || null,
+            condicao: dados.condicao || null,
             barcode: dados.barcode || null,
             notes: dados.notes || null,
             categoryId: categoria.id,

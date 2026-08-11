@@ -111,6 +111,8 @@ export interface Product {
   color?: string | null;
   capacity?: string | null;
   lote?: string | null;
+  /** Lacrado, Vitrine, Seminovo… */
+  condicao?: string | null;
   quantity: number;
   minQuantity: number;
   costPrice: number;

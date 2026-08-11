@@ -20,6 +20,7 @@ interface ProductFormModalProps {
 /** O estado guarda tudo; a categoria decide o que aparece na tela. */
 const VAZIO: Record<ChaveCampo, string> = {
   nome: '',
+  condicao: '',
   marca: '',
   modelo: '',
   cor: '',
@@ -67,6 +68,7 @@ export function ProductFormModal({ open, onClose, product }: ProductFormModalPro
         cor: product.color ?? '',
         capacidade: product.capacity ?? '',
         lote: product.lote ?? '',
+        condicao: product.condicao ?? '',
         imei: product.imei ?? '',
         serie: product.serialNumber ?? '',
         codigo: product.barcode ?? '',
@@ -157,6 +159,7 @@ export function ProductFormModal({ open, onClose, product }: ProductFormModalPro
       color: seVisivel('cor', valores.cor),
       capacity: seVisivel('capacidade', valores.capacidade),
       lote: seVisivel('lote', valores.lote),
+      condicao: seVisivel('condicao', valores.condicao),
       imei: seVisivel('imei', valores.imei),
       serialNumber: seVisivel('serie', valores.serie),
       barcode: seVisivel('codigo', valores.codigo),
@@ -276,6 +279,18 @@ export function ProductFormModal({ open, onClose, product }: ProductFormModalPro
             value={valores[chave]}
             onChange={(e) => definir(chave)(e.target.value)}
             options={STATUS_OPTIONS}
+          />
+        );
+
+      case 'selecao':
+        return (
+          <Select
+            key={chave}
+            {...props}
+            value={valores[chave]}
+            onChange={(e) => definir(chave)(e.target.value)}
+            options={(definicao.opcoes ?? []).map((o) => ({ value: o, label: o }))}
+            placeholder="Selecione…"
           />
         );
 
