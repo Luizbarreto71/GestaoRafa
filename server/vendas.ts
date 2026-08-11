@@ -17,6 +17,7 @@ import {
   validar,
 } from './core';
 import { db, registrarLog } from './db';
+import { enviarRecibo } from './recibo';
 import { movimentar } from './estoque';
 import { exigir } from './permissoes';
 import { unidadePermitida } from './unidades';
@@ -296,6 +297,62 @@ rotasVendas.delete(
 
     res.json({
       message: `Venda ${venda.code} cancelada. ${venda.items.length} item(ns) devolvidos ao estoque da ${venda.unit.name}.`,
+    });
+  }),
+);
+
+/**
+ * Comprovante da venda, pronto para imprimir.
+ *
+ * Vem "inline" e não como download: a tela precisa exibir o PDF para
+ * conseguir mandar para a impressora sem o caixa procurar o arquivo.
+ */
+rotasVendas.get(
+  '/:id/recibo',
+  rota(async (req, res) => {
+    const venda = await db.sale.findUnique({
+      where: { id: req.params.id },
+      include: {
+        items: true,
+        payments: { orderBy: { amount: 'desc' } },
+        unit: { select: { name: true } },
+        seller: { select: { name: true } },
+        cashier: { select: { name: true } },
+        tradeIn: { select: { modelo: true, imei: true, valorAvaliado: true } },
+      },
+    });
+    if (!venda) throw naoEncontrado('Venda');
+
+    enviarRecibo(res, {
+      code: venda.code,
+      saleDate: venda.saleDate,
+      unitName: venda.unit?.name,
+      customerName: venda.customerName,
+      customerPhone: venda.customerPhone,
+      customerDocument: venda.customerDocument,
+      sellerName: venda.seller?.name ?? venda.sellerName,
+      cashierName: venda.cashier?.name,
+      notes: venda.notes,
+      items: venda.items.map((i) => ({
+        productName: i.productName ?? 'Produto',
+        quantity: i.quantity,
+        unitPrice: numero(i.unitPrice),
+        imei: i.imei,
+        serialNumber: i.serialNumber,
+      })),
+      payments: venda.payments.map((p) => ({
+        method: p.method,
+        amount: numero(p.amount),
+        installments: p.installments,
+      })),
+      troca: venda.tradeIn
+        ? {
+            modelo: venda.tradeIn.modelo,
+            imei: venda.tradeIn.imei,
+            valor: numero(venda.tradeIn.valorAvaliado),
+          }
+        : null,
+      total: numero(venda.totalAmount),
     });
   }),
 );

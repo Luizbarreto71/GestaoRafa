@@ -33,6 +33,15 @@ export interface DadosDaVenda {
    * a lista para o caso comum.
    */
   pagamentos?: { method: PaymentMethod; amount: number; installments?: number; notes?: string | null }[];
+  /**
+   * Aparelho recebido na troca, em reais.
+   *
+   * Entra como forma de pagamento própria: a venda vale o preço cheio, e
+   * o cliente pagou parte em dinheiro e parte em aparelho. Somar tudo como
+   * dinheiro faria a gaveta não bater; tirar do total faria a venda parecer
+   * prejuízo diante do custo do produto.
+   */
+  trocaValor?: number | null;
   customerName?: string | null;
   customerPhone?: string | null;
   customerDocument?: string | null;
@@ -195,34 +204,46 @@ export async function registrarVenda(dados: DadosDaVenda) {
 
     // Toda venda guarda o rateio, mesmo com forma única: o fechamento soma
     // sempre da mesma tabela, sem caso especial.
-    const rateio = dados.pagamentos?.length
+    const daTroca = new Prisma.Decimal(dados.trocaValor ?? 0);
+    // O que o cliente entrega em dinheiro: o resto vem no aparelho.
+    const aReceber = total.minus(daTroca);
+
+    const emDinheiro = dados.pagamentos?.length
       ? dados.pagamentos.map((p) => ({
           method: p.method,
           amount: new Prisma.Decimal(p.amount),
           installments: p.installments ?? 1,
-          notes: p.notes?.trim() || null,
+          notes: null as string | null,
         }))
-      : [
-          {
-            method: dados.paymentMethod,
-            amount: total,
-            installments: dados.installments ?? 1,
-            notes: null,
-          },
-        ];
+      : aReceber.greaterThan(0)
+        ? [
+            {
+              method: dados.paymentMethod,
+              amount: aReceber,
+              installments: dados.installments ?? 1,
+              notes: null as string | null,
+            },
+          ]
+        : [];
 
-    const somaDoRateio = rateio.reduce((s, p) => s.add(p.amount), new Prisma.Decimal(0));
-    if (!somaDoRateio.equals(total)) {
+    const somaEmDinheiro = emDinheiro.reduce((s, p) => s.add(p.amount), new Prisma.Decimal(0));
+    if (!somaEmDinheiro.equals(aReceber)) {
       throw new AppError(
-        `As formas de pagamento somam R$ ${somaDoRateio.toFixed(2)}, mas a venda é de R$ ${total.toFixed(2)}.`,
+        `As formas de pagamento somam R$ ${somaEmDinheiro.toFixed(2)}, mas o cliente tem a pagar R$ ${aReceber.toFixed(2)}.`,
       );
     }
 
-    // A forma "principal" é a de maior valor: é ela que aparece nas telas
-    // que mostram uma só.
-    const formaPrincipal = rateio.reduce((maior, p) =>
-      p.amount.greaterThan(maior.amount) ? p : maior,
-    ).method;
+    const rateio = daTroca.greaterThan(0)
+      ? [...emDinheiro, { method: 'TROCA' as PaymentMethod, amount: daTroca, installments: 1, notes: null }]
+      : emDinheiro;
+
+    // A forma "principal" é a de maior valor entre as que são dinheiro: é
+    // ela que aparece nas telas que mostram uma só.
+    const formaPrincipal =
+      emDinheiro.reduce<(typeof emDinheiro)[number] | null>(
+        (maior, p) => (!maior || p.amount.greaterThan(maior.amount) ? p : maior),
+        null,
+      )?.method ?? ('TROCA' as PaymentMethod);
 
     // Vincula ao turno de caixa aberto, se houver.
     const turno = dados.cashierId

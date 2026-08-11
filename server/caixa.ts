@@ -10,6 +10,7 @@ import {
   limpar,
   naoEncontrado,
   numero,
+  PAGAMENTO_LABEL,
   rota,
   semVazios,
   validar,
@@ -26,15 +27,6 @@ import { proximoCodigo } from './vendas-service';
 
 export const rotasCaixa = Router();
 rotasCaixa.use(autenticar);
-
-const PAGAMENTO_LABEL: Record<PaymentMethod, string> = {
-  PIX: 'Pix',
-  DINHEIRO: 'Dinheiro',
-  DEBITO: 'Débito',
-  CREDITO: 'Crédito',
-  TRANSFERENCIA: 'Transferência',
-  OUTRO: 'Outro',
-};
 
 /** Soma as vendas de um turno, separando por forma de pagamento. */
 async function resumoDoTurno(where: Prisma.SaleWhereInput) {

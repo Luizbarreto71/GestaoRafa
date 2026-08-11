@@ -1,5 +1,5 @@
 import { getErrorMessage } from '@/lib/api';
-import type { Troca } from '@/types';
+import type { Sale, Troca } from '@/types';
 import { enqueue, isOfflineError } from '@/lib/offline';
 import {
   caixaService,
@@ -303,11 +303,12 @@ export const usePreVenda = (id?: string) =>
 function useAcaoDePreVenda<T>(acao: (v: T) => Promise<{ message: string } | unknown>) {
   const queryClient = useQueryClient();
 
-  return useMutation<{ message: string }, Error, T>({
+  // `sale` só vem na finalização — é o que a tela usa para o comprovante.
+  return useMutation<{ message: string; sale?: Sale }, Error, T>({
     mutationFn: (v) =>
       acao(v).catch((erro) => {
         throw new Error(getErrorMessage(erro));
-      }) as Promise<{ message: string }>,
+      }) as Promise<{ message: string; sale?: Sale }>,
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['pre-sales'] });
       void queryClient.invalidateQueries({ queryKey: ['notifications'] });

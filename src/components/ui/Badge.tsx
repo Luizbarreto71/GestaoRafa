@@ -86,6 +86,8 @@ const PAYMENT_TONE: Record<PaymentMethod, Tone> = {
   DEBITO: 'info',
   CREDITO: 'purple',
   TRANSFERENCIA: 'neutral',
+  // Cor própria: não é dinheiro entrando na gaveta.
+  TROCA: 'purple',
   OUTRO: 'neutral',
 };
 

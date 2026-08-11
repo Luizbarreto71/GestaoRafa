@@ -230,3 +230,20 @@ export function numero(v: Prisma.Decimal | number | null | undefined): number {
   if (v === null || v === undefined) return 0;
   return typeof v === 'number' ? v : v.toNumber();
 }
+
+/**
+ * Como cada forma de pagamento se chama na tela e no papel.
+ *
+ * Vive aqui porque três lugares precisam dela — fechamento, relatórios e
+ * recibo — e uma cópia por arquivo é como um vira "Débito" e o outro
+ * "Cartão de débito" sem ninguém perceber.
+ */
+export const PAGAMENTO_LABEL: Record<string, string> = {
+  PIX: 'Pix',
+  DINHEIRO: 'Dinheiro',
+  DEBITO: 'Débito',
+  CREDITO: 'Crédito',
+  TRANSFERENCIA: 'Transferência',
+  TROCA: 'Troca (aparelho)',
+  OUTRO: 'Outro',
+};

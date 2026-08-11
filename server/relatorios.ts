@@ -3,7 +3,15 @@ import { z } from 'zod';
 import { autenticar } from './auth';
 import {
   AppError,
-  dataBR, dataHoraBR, intervalo, numero, rota, validar, semVazios } from './core';
+  dataBR,
+  dataHoraBR,
+  intervalo,
+  numero,
+  PAGAMENTO_LABEL,
+  rota,
+  semVazios,
+  validar,
+} from './core';
 import { exigir, podeFazer } from './permissoes';
 import { db } from './db';
 import { decimal, exportar, reais, type Coluna } from './exportar';
@@ -27,15 +35,6 @@ const base = z.object({
 });
 
 type Base = z.infer<typeof base>;
-
-const PAGAMENTO_LABEL: Record<string, string> = {
-  PIX: 'Pix',
-  DINHEIRO: 'Dinheiro',
-  DEBITO: 'Débito',
-  CREDITO: 'Crédito',
-  TRANSFERENCIA: 'Transferência',
-  OUTRO: 'Outro',
-};
 
 const periodo = (q: Base) => {
   if (!q.startDate && !q.endDate) return 'Período: todos os registros';

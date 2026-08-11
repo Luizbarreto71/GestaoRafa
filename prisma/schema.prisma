@@ -117,6 +117,9 @@ enum PaymentMethod {
   DEBITO
   CREDITO
   TRANSFERENCIA
+  /// Aparelho recebido na troca. Não é dinheiro na gaveta — o caixa nunca
+  /// escolhe esta forma à mão; ela entra sozinha quando há troca.
+  TROCA
   OUTRO
 }
 

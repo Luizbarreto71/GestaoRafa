@@ -381,6 +381,7 @@ rotasPreVendas.post(
       paymentMethod: dados.paymentMethod as never,
       installments: dados.installments,
       pagamentos: dados.payments,
+      trocaValor: preVenda.tradeIn ? numero(preVenda.tradeIn.valorAvaliado) : null,
       customerName: preVenda.customerName,
       customerPhone: preVenda.customerPhone,
       customerDocument: preVenda.customerDocument,

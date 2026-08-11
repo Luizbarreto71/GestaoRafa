@@ -5,6 +5,7 @@ import { Input, Select, Textarea } from '@/components/ui/Field';
 import { Modal } from '@/components/ui/Modal';
 import { StatCard } from '@/components/ui/StatCard';
 import { CarrinhoDeItens, totalDosItens } from '@/components/vendas/CarrinhoDeItens';
+import { ReciboDaVenda } from '@/components/vendas/ReciboDaVenda';
 import {
   FormasDePagamento,
   paraApi,
@@ -172,6 +173,8 @@ function ControleDoTurno() {
 function FilaDePreVendas() {
   const { data, isLoading } = usePreVendas({ status: FILA_DO_CAIXA });
   const [abrindo, setAbrindo] = useState<PreSale | null>(null);
+  // Fica aqui, e não na conferência: aquela tela some ao finalizar.
+  const [recibo, setRecibo] = useState<{ id: string; code: string; totalAmount: number } | null>(null);
 
   const lista = data?.data ?? [];
 
@@ -250,7 +253,13 @@ function FilaDePreVendas() {
         ))}
       </div>
 
-      <ConferenciaDaPreVenda preVenda={abrindo} aoFechar={() => setAbrindo(null)} />
+      <ConferenciaDaPreVenda
+        preVenda={abrindo}
+        aoFechar={() => setAbrindo(null)}
+        aoFinalizar={setRecibo}
+      />
+
+      <ReciboDaVenda venda={recibo} aoFechar={() => setRecibo(null)} />
     </>
   );
 }
@@ -259,9 +268,11 @@ function FilaDePreVendas() {
 function ConferenciaDaPreVenda({
   preVenda,
   aoFechar,
+  aoFinalizar,
 }: {
   preVenda: PreSale | null;
   aoFechar: () => void;
+  aoFinalizar: (venda: { id: string; code: string; totalAmount: number }) => void;
 }) {
   const { unidades } = useUnit();
   const toast = useToast();
@@ -346,6 +357,10 @@ function ConferenciaDaPreVenda({
       toast.success('Venda finalizada', r.message);
       setConfirmando(false);
       aoFechar();
+
+      if (r.sale?.id) {
+        aoFinalizar({ id: r.sale.id, code: r.sale.code, totalAmount: Number(r.sale.totalAmount) });
+      }
     } catch (erro) {
       setConfirmando(false);
       toast.error('Não foi possível finalizar', erro instanceof Error ? erro.message : undefined);
@@ -513,6 +528,8 @@ function ConferenciaDaPreVenda({
             value={form.notes}
             onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
           />
+
+
         </div>
       </Modal>
 
@@ -566,6 +583,7 @@ function VendaDireta() {
   const { data: usuarios } = useUsers({ pageSize: 100 }, true);
 
   const [itens, setItens] = useState<ItemVenda[]>([]);
+  const [recibo, setRecibo] = useState<{ id: string; code: string; totalAmount: number } | null>(null);
   const [dividido, setDividido] = useState(false);
   const [formas, setFormas] = useState<FormaDePagamento[]>([]);
   const [form, setForm] = useState({
@@ -603,7 +621,7 @@ function VendaDireta() {
     }
 
     try {
-      await criar.mutateAsync({
+      const venda = await criar.mutateAsync({
         items: itens.map((i) => ({
           productId: i.productId,
           quantity: i.quantity,
@@ -625,6 +643,10 @@ function VendaDireta() {
       });
 
       toast.success('Venda registrada', 'Estoque atualizado e movimentação gerada.');
+      // O comprovante aparece agora, que é quando o cliente ainda está aqui.
+      if (venda?.id) {
+        setRecibo({ id: venda.id, code: venda.code, totalAmount: Number(venda.totalAmount) });
+      }
       setItens([]);
       setForm((f) => ({ ...f, customerName: '', customerPhone: '', customerDocument: '', notes: '' }));
       setDividido(false);
@@ -735,6 +757,8 @@ function VendaDireta() {
             Finalizar venda · {formatCurrency(totalDosItens(itens))}
           </Button>
         </form>
+
+        <ReciboDaVenda venda={recibo} aoFechar={() => setRecibo(null)} />
       </CardBody>
     </Card>
   );

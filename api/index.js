@@ -155,6 +155,15 @@ function numero(v) {
   if (v === null || v === void 0) return 0;
   return typeof v === "number" ? v : v.toNumber();
 }
+var PAGAMENTO_LABEL = {
+  PIX: "Pix",
+  DINHEIRO: "Dinheiro",
+  DEBITO: "D\xE9bito",
+  CREDITO: "Cr\xE9dito",
+  TRANSFERENCIA: "Transfer\xEAncia",
+  TROCA: "Troca (aparelho)",
+  OUTRO: "Outro"
+};
 
 // server/db.ts
 import { PrismaClient } from "@prisma/client";
@@ -2772,14 +2781,6 @@ var base = z6.object({
   paymentMethod: z6.enum(["PIX", "DINHEIRO", "DEBITO", "CREDITO", "TRANSFERENCIA"]).optional(),
   unitId: z6.string().uuid().optional()
 });
-var PAGAMENTO_LABEL = {
-  PIX: "Pix",
-  DINHEIRO: "Dinheiro",
-  DEBITO: "D\xE9bito",
-  CREDITO: "Cr\xE9dito",
-  TRANSFERENCIA: "Transfer\xEAncia",
-  OUTRO: "Outro"
-};
 var periodo = (q) => {
   if (!q.startDate && !q.endDate) return "Per\xEDodo: todos os registros";
   return `Per\xEDodo: ${q.startDate ? dataBR(q.startDate) : "in\xEDcio"} at\xE9 ${q.endDate ? dataBR(q.endDate) : "hoje"}`;
@@ -3370,7 +3371,7 @@ rotasRelatorios.get(
       if (b === "OUTROS") return -1;
       return a.localeCompare(b, "pt-BR");
     });
-    const dinheiro2 = (v) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL", minimumFractionDigits: 0 });
+    const dinheiro3 = (v) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL", minimumFractionDigits: 0 });
     const linhas = [];
     linhas.push(`*${(q.titulo ?? "RAFA MULTIMARCAS").toUpperCase()}*`);
     linhas.push(`_Lista atualizada em ${dataBR(/* @__PURE__ */ new Date())}_`);
@@ -3384,7 +3385,7 @@ rotasRelatorios.get(
         const partes = [p.name];
         if (q.mostrarCondicao === "true" && p.condicao) partes.push(p.condicao);
         if (q.mostrarQuantidade === "true") partes.push(`${quantidade}un`);
-        linhas.push(`${partes.join(" \xB7 ")} \u2014 *${dinheiro2(precoDe(p))}*`);
+        linhas.push(`${partes.join(" \xB7 ")} \u2014 *${dinheiro3(precoDe(p))}*`);
       }
       linhas.push("");
     }
@@ -3887,28 +3888,32 @@ async function registrarVenda(dados) {
       (soma, i) => soma.add(i.costPrice.mul(i.quantity)),
       new Prisma3.Decimal(0)
     );
-    const rateio = dados.pagamentos?.length ? dados.pagamentos.map((p) => ({
+    const daTroca = new Prisma3.Decimal(dados.trocaValor ?? 0);
+    const aReceber = total.minus(daTroca);
+    const emDinheiro = dados.pagamentos?.length ? dados.pagamentos.map((p) => ({
       method: p.method,
       amount: new Prisma3.Decimal(p.amount),
       installments: p.installments ?? 1,
-      notes: p.notes?.trim() || null
-    })) : [
+      notes: null
+    })) : aReceber.greaterThan(0) ? [
       {
         method: dados.paymentMethod,
-        amount: total,
+        amount: aReceber,
         installments: dados.installments ?? 1,
         notes: null
       }
-    ];
-    const somaDoRateio = rateio.reduce((s, p) => s.add(p.amount), new Prisma3.Decimal(0));
-    if (!somaDoRateio.equals(total)) {
+    ] : [];
+    const somaEmDinheiro = emDinheiro.reduce((s, p) => s.add(p.amount), new Prisma3.Decimal(0));
+    if (!somaEmDinheiro.equals(aReceber)) {
       throw new AppError(
-        `As formas de pagamento somam R$ ${somaDoRateio.toFixed(2)}, mas a venda \xE9 de R$ ${total.toFixed(2)}.`
+        `As formas de pagamento somam R$ ${somaEmDinheiro.toFixed(2)}, mas o cliente tem a pagar R$ ${aReceber.toFixed(2)}.`
       );
     }
-    const formaPrincipal = rateio.reduce(
-      (maior, p) => p.amount.greaterThan(maior.amount) ? p : maior
-    ).method;
+    const rateio = daTroca.greaterThan(0) ? [...emDinheiro, { method: "TROCA", amount: daTroca, installments: 1, notes: null }] : emDinheiro;
+    const formaPrincipal = emDinheiro.reduce(
+      (maior, p) => !maior || p.amount.greaterThan(maior.amount) ? p : maior,
+      null
+    )?.method ?? "TROCA";
     const turno = dados.cashierId ? await tx.cashRegister.findFirst({
       where: { cashierId: dados.cashierId, status: "ABERTO" },
       orderBy: { openedAt: "desc" }
@@ -3988,14 +3993,6 @@ async function registrarVenda(dados) {
 // server/caixa.ts
 var rotasCaixa = Router10();
 rotasCaixa.use(autenticar);
-var PAGAMENTO_LABEL2 = {
-  PIX: "Pix",
-  DINHEIRO: "Dinheiro",
-  DEBITO: "D\xE9bito",
-  CREDITO: "Cr\xE9dito",
-  TRANSFERENCIA: "Transfer\xEAncia",
-  OUTRO: "Outro"
-};
 async function resumoDoTurno(where) {
   const [vendas, porPagamento, itens] = await Promise.all([
     db.sale.aggregate({ where, _sum: { totalAmount: true, costAmount: true }, _count: true }),
@@ -4026,11 +4023,11 @@ async function resumoDoTurno(where) {
      * não existe.
      */
     divergencia: Math.abs(total - somaDasFormas) < 0.01 ? 0 : total - somaDasFormas,
-    porPagamento: Object.keys(PAGAMENTO_LABEL2).map((forma) => {
+    porPagamento: Object.keys(PAGAMENTO_LABEL).map((forma) => {
       const linha = porPagamento.find((p) => p.method === forma);
       return {
         forma,
-        rotulo: PAGAMENTO_LABEL2[forma],
+        rotulo: PAGAMENTO_LABEL[forma],
         quantidade: linha?._count ?? 0,
         total: numero(linha?._sum.amount)
       };
@@ -4187,7 +4184,7 @@ rotasCaixa.get(
         serie: i.serialNumber ?? "\u2014",
         quantidade: i.quantity,
         valor: numero(i.unitPrice) * i.quantity,
-        pagamento: PAGAMENTO_LABEL2[v.paymentMethod],
+        pagamento: PAGAMENTO_LABEL[v.paymentMethod],
         parcelas: v.installments,
         unidade: v.unit.name
       }))
@@ -4507,6 +4504,7 @@ rotasPreVendas.post(
       paymentMethod: dados.paymentMethod,
       installments: dados.installments,
       pagamentos: dados.payments,
+      trocaValor: preVenda.tradeIn ? numero(preVenda.tradeIn.valorAvaliado) : null,
       customerName: preVenda.customerName,
       customerPhone: preVenda.customerPhone,
       customerDocument: preVenda.customerDocument,
@@ -4889,6 +4887,152 @@ rotasTrocas.delete(
 // server/vendas.ts
 import { Router as Router13 } from "express";
 import { z as z11 } from "zod";
+
+// server/recibo.ts
+import PDFDocument2 from "pdfkit";
+var AZUL2 = "#0F172A";
+var CINZA = "#475569";
+var CLARO = "#F8FAFC";
+var dinheiro2 = (v) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+function enviarRecibo(res, r) {
+  const doc = new PDFDocument2({ margin: 40, size: "A4" });
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `inline; filename="recibo-${r.code}.pdf"`);
+  doc.pipe(res);
+  const largura = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+  const x0 = doc.page.margins.left;
+  doc.rect(0, 0, doc.page.width, 78).fill(AZUL2);
+  doc.fillColor("#FFFFFF").fontSize(19).font("Helvetica-Bold").text("Rafa Multimarcas", x0, 20);
+  doc.fontSize(11).font("Helvetica").text("Comprovante de venda", x0, 45);
+  doc.fontSize(15).font("Helvetica-Bold").text(r.code, x0, 22, { width: largura, align: "right" });
+  doc.fontSize(9).font("Helvetica").text(r.saleDate.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" }), x0, 46, {
+    width: largura,
+    align: "right"
+  });
+  doc.y = 100;
+  const bloco = (titulo, linhas) => {
+    doc.fillColor(CINZA).fontSize(8).font("Helvetica-Bold").text(titulo.toUpperCase(), x0, doc.y);
+    doc.moveDown(0.3);
+    for (const [rotulo, valor] of linhas) {
+      const y2 = doc.y;
+      doc.fillColor(CINZA).fontSize(9).font("Helvetica").text(rotulo, x0, y2, { width: 110 });
+      doc.fillColor(AZUL2).font("Helvetica-Bold").text(valor, x0 + 110, y2, { width: largura - 110 });
+      doc.y = y2 + 14;
+    }
+    doc.moveDown(0.6);
+  };
+  bloco("Cliente", [
+    ["Nome", r.customerName?.trim() || "Consumidor n\xE3o identificado"],
+    ...r.customerDocument ? [["CPF", r.customerDocument]] : [],
+    ...r.customerPhone ? [["Telefone", r.customerPhone]] : []
+  ]);
+  bloco("Atendimento", [
+    ["Loja", r.unitName ?? "\u2014"],
+    ["Vendedor", r.sellerName?.trim() || "\u2014"],
+    ["Caixa", r.cashierName?.trim() || "\u2014"]
+  ]);
+  doc.fillColor(CINZA).fontSize(8).font("Helvetica-Bold").text("PRODUTOS", x0, doc.y);
+  doc.moveDown(0.3);
+  const colunas = [
+    { titulo: "Produto", peso: 46 },
+    { titulo: "Qtd", peso: 8, alinhar: "center" },
+    { titulo: "Valor un.", peso: 20, alinhar: "right" },
+    { titulo: "Total", peso: 20, alinhar: "right" }
+  ];
+  const peso = colunas.reduce((s, c) => s + c.peso, 0);
+  const larguras = colunas.map((c) => c.peso / peso * largura);
+  let y = doc.y;
+  doc.rect(x0, y, largura, 18).fill("#E2E8F0");
+  doc.fillColor(AZUL2).fontSize(8).font("Helvetica-Bold");
+  let x = x0;
+  colunas.forEach((c, i) => {
+    doc.text(c.titulo.toUpperCase(), x + 4, y + 5, {
+      width: larguras[i] - 8,
+      align: c.alinhar ?? "left",
+      lineBreak: false
+    });
+    x += larguras[i];
+  });
+  doc.y = y + 18;
+  r.items.forEach((item, indice) => {
+    const identificador = [item.imei && `IMEI ${item.imei}`, item.serialNumber && `N\xBA ${item.serialNumber}`].filter(Boolean).join(" \xB7 ");
+    const altura = identificador ? 26 : 16;
+    if (doc.y > doc.page.height - doc.page.margins.bottom - 160) doc.addPage();
+    y = doc.y;
+    if (indice % 2 === 1) doc.rect(x0, y, largura, altura).fill(CLARO);
+    doc.fillColor("#1E293B").fontSize(9).font("Helvetica");
+    const valores2 = [
+      item.productName,
+      String(item.quantity),
+      dinheiro2(item.unitPrice),
+      dinheiro2(item.unitPrice * item.quantity)
+    ];
+    x = x0;
+    colunas.forEach((c, i) => {
+      doc.text(valores2[i], x + 4, y + 4, {
+        width: larguras[i] - 8,
+        align: c.alinhar ?? "left",
+        lineBreak: false,
+        ellipsis: true
+      });
+      x += larguras[i];
+    });
+    if (identificador) {
+      doc.fillColor(CINZA).fontSize(7).text(identificador, x0 + 4, y + 16, {
+        width: larguras[0] - 8,
+        lineBreak: false
+      });
+    }
+    doc.y = y + altura;
+  });
+  doc.moveDown(0.8);
+  const linhaDeTotal = (rotulo, valor, forte = false) => {
+    const yl = doc.y;
+    doc.fillColor(forte ? AZUL2 : CINZA).fontSize(forte ? 12 : 9).font(forte ? "Helvetica-Bold" : "Helvetica").text(rotulo, x0 + largura / 2, yl, { width: largura / 4 });
+    doc.fillColor(forte ? AZUL2 : "#1E293B").font("Helvetica-Bold").text(valor, x0 + largura * 0.75, yl, { width: largura / 4, align: "right" });
+    doc.y = yl + (forte ? 20 : 14);
+  };
+  doc.moveTo(x0 + largura / 2, doc.y + 2).lineTo(x0 + largura, doc.y + 2).strokeColor("#CBD5E1").stroke();
+  doc.y += 8;
+  linhaDeTotal("TOTAL", dinheiro2(r.total), true);
+  doc.moveDown(0.5);
+  doc.fillColor(CINZA).fontSize(8).font("Helvetica-Bold").text("PAGAMENTO", x0, doc.y);
+  doc.moveDown(0.3);
+  for (const p of r.payments) {
+    const yp = doc.y;
+    doc.fillColor("#1E293B").fontSize(9).font("Helvetica").text(
+      `${PAGAMENTO_LABEL[p.method] ?? p.method}${p.installments > 1 ? ` \xB7 ${p.installments}x` : ""}`,
+      x0,
+      yp,
+      { width: largura / 2 }
+    );
+    doc.font("Helvetica-Bold").text(dinheiro2(p.amount), x0, yp, { width: largura, align: "right" });
+    doc.y = yp + 14;
+    if (p.method === "TROCA" && r.troca) {
+      doc.fillColor(CINZA).fontSize(7.5).font("Helvetica").text(`${r.troca.modelo} \xB7 IMEI ${r.troca.imei}`, x0 + 12, doc.y - 2, { width: largura / 2 });
+      doc.y += 11;
+    }
+  }
+  if (r.notes?.trim()) {
+    doc.moveDown(0.6);
+    doc.fillColor(CINZA).fontSize(8).font("Helvetica-Bold").text("OBSERVA\xC7\xC3O", x0, doc.y);
+    doc.moveDown(0.2);
+    doc.fontSize(9).font("Helvetica").fillColor("#1E293B").text(r.notes.trim(), x0, doc.y, {
+      width: largura
+    });
+  }
+  const rodape = doc.page.height - doc.page.margins.bottom - 34;
+  doc.moveTo(x0, rodape).lineTo(x0 + largura, rodape).strokeColor("#E2E8F0").stroke();
+  doc.fillColor(CINZA).fontSize(7.5).font("Helvetica").text(
+    "Documento sem valor fiscal, emitido para controle interno e comprova\xE7\xE3o de compra. Guarde este comprovante para qualquer atendimento de garantia ou troca.",
+    x0,
+    rodape + 8,
+    { width: largura, align: "center" }
+  );
+  doc.end();
+}
+
+// server/vendas.ts
 var rotasVendas = Router13();
 rotasVendas.use(autenticar);
 var PAGAMENTOS2 = ["PIX", "DINHEIRO", "DEBITO", "CREDITO", "TRANSFERENCIA", "OUTRO"];
@@ -5114,6 +5258,52 @@ rotasVendas.delete(
     });
     res.json({
       message: `Venda ${venda.code} cancelada. ${venda.items.length} item(ns) devolvidos ao estoque da ${venda.unit.name}.`
+    });
+  })
+);
+rotasVendas.get(
+  "/:id/recibo",
+  rota(async (req, res) => {
+    const venda = await db.sale.findUnique({
+      where: { id: req.params.id },
+      include: {
+        items: true,
+        payments: { orderBy: { amount: "desc" } },
+        unit: { select: { name: true } },
+        seller: { select: { name: true } },
+        cashier: { select: { name: true } },
+        tradeIn: { select: { modelo: true, imei: true, valorAvaliado: true } }
+      }
+    });
+    if (!venda) throw naoEncontrado("Venda");
+    enviarRecibo(res, {
+      code: venda.code,
+      saleDate: venda.saleDate,
+      unitName: venda.unit?.name,
+      customerName: venda.customerName,
+      customerPhone: venda.customerPhone,
+      customerDocument: venda.customerDocument,
+      sellerName: venda.seller?.name ?? venda.sellerName,
+      cashierName: venda.cashier?.name,
+      notes: venda.notes,
+      items: venda.items.map((i) => ({
+        productName: i.productName ?? "Produto",
+        quantity: i.quantity,
+        unitPrice: numero(i.unitPrice),
+        imei: i.imei,
+        serialNumber: i.serialNumber
+      })),
+      payments: venda.payments.map((p) => ({
+        method: p.method,
+        amount: numero(p.amount),
+        installments: p.installments
+      })),
+      troca: venda.tradeIn ? {
+        modelo: venda.tradeIn.modelo,
+        imei: venda.tradeIn.imei,
+        valor: numero(venda.tradeIn.valorAvaliado)
+      } : null,
+      total: numero(venda.totalAmount)
     });
   })
 );

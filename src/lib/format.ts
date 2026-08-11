@@ -72,6 +72,7 @@ export const PAYMENT_LABEL: Record<PaymentMethod, string> = {
   DEBITO: 'Débito',
   CREDITO: 'Crédito',
   TRANSFERENCIA: 'Transferência',
+  TROCA: 'Troca (aparelho)',
   OUTRO: 'Outro',
 };
 
@@ -130,10 +131,15 @@ export const PRE_SALE_LABEL: Record<string, string> = {
   EXPIRADA: 'Expirada',
 };
 
-export const PAYMENT_OPTIONS = (Object.keys(PAYMENT_LABEL) as PaymentMethod[]).map((value) => ({
-  value,
-  label: PAYMENT_LABEL[value],
-}));
+/**
+ * O que o caixa pode escolher à mão.
+ *
+ * "Troca" fica de fora: ela não é uma opção, é consequência de haver um
+ * aparelho na negociação, e o sistema a lança sozinho.
+ */
+export const PAYMENT_OPTIONS = (Object.keys(PAYMENT_LABEL) as PaymentMethod[])
+  .filter((value) => value !== 'TROCA')
+  .map((value) => ({ value, label: PAYMENT_LABEL[value] }));
 
 export const STATUS_OPTIONS = (Object.keys(STATUS_LABEL) as ProductStatus[]).map((value) => ({
   value,
