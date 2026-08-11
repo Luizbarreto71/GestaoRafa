@@ -2673,6 +2673,25 @@ import { z as z6 } from "zod";
 // server/exportar.ts
 import ExcelJS from "exceljs";
 import PDFDocument from "pdfkit";
+function agrupar(r) {
+  if (!r.group) return [{ titulo: "", linhas: r.rows }];
+  const mapa = /* @__PURE__ */ new Map();
+  for (const linha of r.rows) {
+    const chave = String(linha[r.group.key] ?? "\u2014") || "\u2014";
+    if (!mapa.has(chave)) mapa.set(chave, []);
+    mapa.get(chave).push(linha);
+  }
+  const ordem = r.group.order ?? [];
+  return [...mapa.entries()].sort(([a], [b]) => {
+    const ia = ordem.indexOf(a);
+    const ib = ordem.indexOf(b);
+    if (ia !== -1 || ib !== -1) return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
+    return a.localeCompare(b, "pt-BR");
+  }).map(([titulo, linhas]) => ({ titulo, linhas }));
+}
+var somarBloco = (linhas, chaves) => Object.fromEntries(
+  chaves.map((k) => [k, linhas.reduce((s, l) => s + (Number(l[k]) || 0), 0)])
+);
 var AZUL = "#0F172A";
 var valorDaCelula = (c, linha) => {
   const bruto = linha[c.key];
@@ -2692,8 +2711,22 @@ function enviarCsv(res, r) {
     return /[";\n]/.test(texto3) ? `"${texto3.replace(/"/g, '""')}"` : texto3;
   };
   const linhas = [r.columns.map((c) => escapar(c.header)).join(";")];
-  for (const linha of r.rows) {
-    linhas.push(r.columns.map((c) => escapar(valorDaCelula(c, linha))).join(";"));
+  for (const bloco of agrupar(r)) {
+    if (bloco.titulo) {
+      linhas.push("");
+      linhas.push(escapar(`${bloco.titulo.toUpperCase()} (${bloco.linhas.length})`));
+    }
+    for (const linha of bloco.linhas) {
+      linhas.push(r.columns.map((c) => escapar(valorDaCelula(c, linha))).join(";"));
+    }
+    if (bloco.titulo && r.group?.totals?.length) {
+      const somas = somarBloco(bloco.linhas, r.group.totals);
+      linhas.push(
+        r.columns.map(
+          (c, i) => r.group.totals.includes(c.key) ? escapar(String(c.format ? c.format(somas[c.key]) : somas[c.key])) : i === 0 ? escapar(`Total ${bloco.titulo}`) : ""
+        ).join(";")
+      );
+    }
   }
   if (r.summary?.length) {
     linhas.push("");
@@ -2721,11 +2754,47 @@ async function enviarExcel(res, r) {
     celula.alignment = { vertical: "middle", horizontal: "center" };
   });
   aba.getRow(1).height = 22;
-  for (const linha of r.rows) {
-    aba.addRow(Object.fromEntries(r.columns.map((c) => [c.key, valorDaCelula(c, linha)])));
+  const titulos = [];
+  const subtotais = [];
+  for (const bloco of agrupar(r)) {
+    if (bloco.titulo) {
+      const linha = aba.addRow({
+        [r.columns[0].key]: `${bloco.titulo.toUpperCase()} \u2014 ${bloco.linhas.length} item(ns)`
+      });
+      titulos.push(linha.number);
+    }
+    for (const linha of bloco.linhas) {
+      aba.addRow(Object.fromEntries(r.columns.map((c) => [c.key, valorDaCelula(c, linha)])));
+    }
+    if (bloco.titulo && r.group?.totals?.length) {
+      const somas = somarBloco(bloco.linhas, r.group.totals);
+      const linha = aba.addRow(
+        Object.fromEntries(
+          r.columns.map((c, i) => [
+            c.key,
+            r.group.totals.includes(c.key) ? c.format ? c.format(somas[c.key]) : somas[c.key] : i === 0 ? `Total ${bloco.titulo}` : ""
+          ])
+        )
+      );
+      subtotais.push(linha.number);
+    }
   }
   aba.eachRow((linha, indice) => {
     if (indice === 1) return;
+    if (titulos.includes(indice)) {
+      linha.eachCell((celula) => {
+        celula.font = { bold: true, color: { argb: "FFFFFFFF" } };
+        celula.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0F172A" } };
+      });
+      return;
+    }
+    if (subtotais.includes(indice)) {
+      linha.eachCell((celula) => {
+        celula.font = { bold: true };
+        celula.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE2E8F0" } };
+      });
+      return;
+    }
     linha.eachCell((celula) => {
       celula.alignment = { vertical: "middle" };
       if (indice % 2 === 0) {
@@ -2733,7 +2802,9 @@ async function enviarExcel(res, r) {
       }
     });
   });
-  aba.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: r.columns.length } };
+  if (!r.group) {
+    aba.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: r.columns.length } };
+  }
   if (r.summary?.length) {
     aba.addRow([]);
     r.summary.forEach((s) => {
@@ -2839,8 +2910,9 @@ function enviarPdf(res, r) {
     }
     faixaDeTitulos();
   };
+  const blocos = agrupar(r);
   abrirPagina(true);
-  r.rows.forEach((linha, indice) => {
+  const desenharLinha = (linha, indice) => {
     doc.font("Helvetica").fontSize(8);
     const textos = r.columns.map((c) => String(valorDaCelula(c, linha) ?? ""));
     const altura = Math.max(
@@ -2864,7 +2936,50 @@ function enviarPdf(res, r) {
     });
     doc.moveTo(x0, y + altura).lineTo(x0 + largura, y + altura).lineWidth(0.5).strokeColor("#E2E8F0").stroke();
     doc.y = y + altura;
-  });
+  };
+  for (const bloco of blocos) {
+    if (bloco.titulo) {
+      if (doc.y + 46 > rodapeY - 10) abrirPagina(false);
+      doc.y += 8;
+      const y = doc.y;
+      doc.rect(x0, y, largura, 20).fill(AZUL);
+      doc.fillColor("#FFFFFF").font("Helvetica-Bold").fontSize(9).text(bloco.titulo.toUpperCase(), x0 + PADDING, y + 6, { lineBreak: false });
+      doc.font("Helvetica").fontSize(8).text(`${bloco.linhas.length} ${bloco.linhas.length === 1 ? "item" : "itens"}`, x0, y + 6, {
+        width: largura - PADDING,
+        align: "right",
+        lineBreak: false
+      });
+      doc.y = y + 20;
+    }
+    bloco.linhas.forEach(desenharLinha);
+    if (bloco.titulo && r.group?.totals?.length) {
+      const somas = somarBloco(bloco.linhas, r.group.totals);
+      if (doc.y + 18 > rodapeY - 10) abrirPagina(false);
+      const y = doc.y;
+      doc.rect(x0, y, largura, 18).fill("#E2E8F0");
+      doc.fillColor(AZUL).font("Helvetica-Bold").fontSize(8);
+      const primeiroTotal = r.columns.findIndex((c) => r.group.totals.includes(c.key));
+      const larguraDoRotulo = larguras.slice(0, primeiroTotal === -1 ? larguras.length : primeiroTotal).reduce((a, b) => a + b, 0);
+      doc.text(`Total \xB7 ${bloco.titulo}`, x0 + PADDING, y + 5, {
+        width: Math.max(60, larguraDoRotulo - PADDING * 2),
+        lineBreak: false,
+        ellipsis: true
+      });
+      let x = x0;
+      r.columns.forEach((c, i) => {
+        if (r.group.totals.includes(c.key)) {
+          doc.text(String(c.format ? c.format(somas[c.key]) : somas[c.key]), x + PADDING, y + 5, {
+            width: larguras[i] - PADDING * 2,
+            align: c.align ?? "right",
+            lineBreak: false,
+            ellipsis: true
+          });
+        }
+        x += larguras[i];
+      });
+      doc.y = y + 18;
+    }
+  }
   if (r.summary?.length) {
     const alturaResumo = 26 + Math.ceil(r.summary.length / 3) * 16;
     if (doc.y + alturaResumo > rodapeY - 10) abrirPagina(false);
@@ -2920,6 +3035,7 @@ var base = z6.object({
   paymentMethod: z6.enum(["PIX", "DINHEIRO", "DEBITO", "CREDITO", "TRANSFERENCIA"]).optional(),
   unitId: z6.string().uuid().optional()
 });
+var ORDEM_CONDICAO = [...CAMPOS.condicao.opcoes ?? [], "\u2014"];
 var periodo = (q) => {
   if (!q.startDate && !q.endDate) return "Per\xEDodo: todos os registros";
   return `Per\xEDodo: ${q.startDate ? dataBR(q.startDate) : "in\xEDcio"} at\xE9 ${q.endDate ? dataBR(q.endDate) : "hoje"}`;
@@ -2983,6 +3099,10 @@ rotasRelatorios.get(
     await exportar(res, q.format, {
       title: "Relat\xF3rio de Estoque",
       subtitle: periodo(q),
+      // Separado por condição: lacrado e vitrine são mercadorias
+      // diferentes, com preço diferente, e misturá-las esconde o que a
+      // loja tem de cada uma.
+      group: { key: "condicao", order: ORDEM_CONDICAO, totals: ["quantity", "totalCost", "totalSale"] },
       columns: [
         { header: "Unidade", key: "unit", width: 12 },
         { header: "Produto", key: "name", width: 24 },
@@ -3057,6 +3177,7 @@ rotasRelatorios.get(
         phone: i.sale.customerPhone ?? "\u2014",
         product: i.productName ?? i.product.name,
         category: i.product.category.name,
+        condicao: i.product.condicao ?? "\u2014",
         imei: i.imei ?? i.serialNumber ?? "\u2014",
         quantity: i.quantity,
         unitPrice: numero(i.unitPrice),
@@ -3075,6 +3196,7 @@ rotasRelatorios.get(
     await exportar(res, q.format, {
       title: "Relat\xF3rio de Vendas",
       subtitle: periodo(q),
+      group: { key: "condicao", order: ORDEM_CONDICAO, totals: ["quantity", "total", "profit"] },
       columns: [
         // Larguras conferidas com dados reais: nome de aparelho e pagamento
         // dividido são os que estouram, e é neles que sobra espaço aqui.
@@ -3084,6 +3206,7 @@ rotasRelatorios.get(
         { header: "Cliente", key: "customer", width: 15 },
         { header: "Produto", key: "product", width: 26 },
         { header: "Categoria", key: "category", width: 11 },
+        { header: "Condi\xE7\xE3o", key: "condicao", width: 11 },
         { header: "IMEI / s\xE9rie", key: "imei", width: 14 },
         qtd("Qtd", "quantity", 5),
         money("Unit.", "unitPrice", 11),

@@ -20,7 +20,48 @@ export interface Relatorio {
   columns: Coluna[];
   rows: Record<string, unknown>[];
   summary?: { label: string; value: string }[];
+  /**
+   * Quebra o relatório em blocos por um campo — condição, categoria…
+   *
+   * Cada bloco ganha título e subtotal próprios. É a diferença entre uma
+   * lista de 80 linhas e um relatório em que se acha o que interessa.
+   */
+  group?: {
+    key: string;
+    /** Colunas somadas no rodapé de cada bloco. */
+    totals?: string[];
+    /** Ordem dos blocos. O que não estiver na lista vai para o fim. */
+    order?: string[];
+  };
 }
+
+/** Separa as linhas em blocos, respeitando a ordem pedida. */
+function agrupar(r: Relatorio): { titulo: string; linhas: Record<string, unknown>[] }[] {
+  if (!r.group) return [{ titulo: '', linhas: r.rows }];
+
+  const mapa = new Map<string, Record<string, unknown>[]>();
+  for (const linha of r.rows) {
+    const chave = String(linha[r.group.key] ?? '—') || '—';
+    if (!mapa.has(chave)) mapa.set(chave, []);
+    mapa.get(chave)!.push(linha);
+  }
+
+  const ordem = r.group.order ?? [];
+  return [...mapa.entries()]
+    .sort(([a], [b]) => {
+      const ia = ordem.indexOf(a);
+      const ib = ordem.indexOf(b);
+      if (ia !== -1 || ib !== -1) return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
+      return a.localeCompare(b, 'pt-BR');
+    })
+    .map(([titulo, linhas]) => ({ titulo, linhas }));
+}
+
+/** Soma das colunas pedidas num bloco. */
+const somarBloco = (linhas: Record<string, unknown>[], chaves: string[]) =>
+  Object.fromEntries(
+    chaves.map((k) => [k, linhas.reduce((s, l) => s + (Number(l[k]) || 0), 0)]),
+  );
 
 const AZUL = '#0F172A';
 
@@ -52,8 +93,31 @@ function enviarCsv(res: Response, r: Relatorio): void {
   };
 
   const linhas = [r.columns.map((c) => escapar(c.header)).join(';')];
-  for (const linha of r.rows) {
-    linhas.push(r.columns.map((c) => escapar(valorDaCelula(c, linha))).join(';'));
+
+  for (const bloco of agrupar(r)) {
+    if (bloco.titulo) {
+      linhas.push('');
+      linhas.push(escapar(`${bloco.titulo.toUpperCase()} (${bloco.linhas.length})`));
+    }
+
+    for (const linha of bloco.linhas) {
+      linhas.push(r.columns.map((c) => escapar(valorDaCelula(c, linha))).join(';'));
+    }
+
+    if (bloco.titulo && r.group?.totals?.length) {
+      const somas = somarBloco(bloco.linhas, r.group.totals);
+      linhas.push(
+        r.columns
+          .map((c, i) =>
+            r.group!.totals!.includes(c.key)
+              ? escapar(String(c.format ? c.format(somas[c.key]) : somas[c.key]))
+              : i === 0
+                ? escapar(`Total ${bloco.titulo}`)
+                : '',
+          )
+          .join(';'),
+      );
+    }
   }
 
   if (r.summary?.length) {
@@ -91,13 +155,61 @@ async function enviarExcel(res: Response, r: Relatorio): Promise<void> {
   });
   aba.getRow(1).height = 22;
 
-  for (const linha of r.rows) {
-    aba.addRow(Object.fromEntries(r.columns.map((c) => [c.key, valorDaCelula(c, linha)])));
+  // Guarda quais linhas são título e subtotal, para pintar depois sem
+  // confundir com dado.
+  const titulos: number[] = [];
+  const subtotais: number[] = [];
+
+  for (const bloco of agrupar(r)) {
+    if (bloco.titulo) {
+      const linha = aba.addRow({
+        [r.columns[0].key]: `${bloco.titulo.toUpperCase()} — ${bloco.linhas.length} item(ns)`,
+      });
+      titulos.push(linha.number);
+    }
+
+    for (const linha of bloco.linhas) {
+      aba.addRow(Object.fromEntries(r.columns.map((c) => [c.key, valorDaCelula(c, linha)])));
+    }
+
+    if (bloco.titulo && r.group?.totals?.length) {
+      const somas = somarBloco(bloco.linhas, r.group.totals);
+      const linha = aba.addRow(
+        Object.fromEntries(
+          r.columns.map((c, i) => [
+            c.key,
+            r.group!.totals!.includes(c.key)
+              ? (c.format ? c.format(somas[c.key]) : somas[c.key])
+              : i === 0
+                ? `Total ${bloco.titulo}`
+                : '',
+          ]),
+        ),
+      );
+      subtotais.push(linha.number);
+    }
   }
 
   // Zebra nas linhas, para leitura mais fácil.
   aba.eachRow((linha, indice) => {
     if (indice === 1) return;
+
+    if (titulos.includes(indice)) {
+      linha.eachCell((celula) => {
+        celula.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+        celula.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
+      });
+      return;
+    }
+
+    if (subtotais.includes(indice)) {
+      linha.eachCell((celula) => {
+        celula.font = { bold: true };
+        celula.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2E8F0' } };
+      });
+      return;
+    }
+
     linha.eachCell((celula) => {
       celula.alignment = { vertical: 'middle' };
       if (indice % 2 === 0) {
@@ -106,7 +218,11 @@ async function enviarExcel(res: Response, r: Relatorio): Promise<void> {
     });
   });
 
-  aba.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: r.columns.length } };
+  // Filtro só sem agrupamento: com títulos no meio, filtrar esconderia as
+  // faixas e o resultado ficaria sem contexto.
+  if (!r.group) {
+    aba.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: r.columns.length } };
+  }
 
   if (r.summary?.length) {
     aba.addRow([]);
@@ -272,10 +388,12 @@ function enviarPdf(res: Response, r: Relatorio): void {
     faixaDeTitulos();
   };
 
+  const blocos = agrupar(r);
+
   abrirPagina(true);
 
   // ------------------------------------------------------------------ linhas
-  r.rows.forEach((linha, indice) => {
+  const desenharLinha = (linha: Record<string, unknown>, indice: number) => {
     doc.font('Helvetica').fontSize(8);
 
     const textos = r.columns.map((c) => String(valorDaCelula(c, linha) ?? ''));
@@ -313,7 +431,72 @@ function enviarPdf(res: Response, r: Relatorio): void {
       .stroke();
 
     doc.y = y + altura;
-  });
+  };
+
+  for (const bloco of blocos) {
+    if (bloco.titulo) {
+      // Título e primeira linha não se separam: título sozinho no pé da
+      // página faz a pessoa virar a folha para descobrir do que se trata.
+      if (doc.y + 46 > rodapeY - 10) abrirPagina(false);
+
+      doc.y += 8;
+      const y = doc.y;
+      doc.rect(x0, y, largura, 20).fill(AZUL);
+      doc
+        .fillColor('#FFFFFF')
+        .font('Helvetica-Bold')
+        .fontSize(9)
+        .text(bloco.titulo.toUpperCase(), x0 + PADDING, y + 6, { lineBreak: false });
+      doc
+        .font('Helvetica')
+        .fontSize(8)
+        .text(`${bloco.linhas.length} ${bloco.linhas.length === 1 ? 'item' : 'itens'}`, x0, y + 6, {
+          width: largura - PADDING,
+          align: 'right',
+          lineBreak: false,
+        });
+      doc.y = y + 20;
+    }
+
+    bloco.linhas.forEach(desenharLinha);
+
+    // Subtotal do bloco.
+    if (bloco.titulo && r.group?.totals?.length) {
+      const somas = somarBloco(bloco.linhas, r.group.totals);
+      if (doc.y + 18 > rodapeY - 10) abrirPagina(false);
+
+      const y = doc.y;
+      doc.rect(x0, y, largura, 18).fill('#E2E8F0');
+      doc.fillColor(AZUL).font('Helvetica-Bold').fontSize(8);
+
+      // O rótulo ocupa todas as colunas até o primeiro total: espremido na
+      // primeira, "Total · Xiaomi Lacrado" quebrava no meio da palavra.
+      const primeiroTotal = r.columns.findIndex((c) => r.group!.totals!.includes(c.key));
+      const larguraDoRotulo = larguras
+        .slice(0, primeiroTotal === -1 ? larguras.length : primeiroTotal)
+        .reduce((a, b) => a + b, 0);
+
+      doc.text(`Total · ${bloco.titulo}`, x0 + PADDING, y + 5, {
+        width: Math.max(60, larguraDoRotulo - PADDING * 2),
+        lineBreak: false,
+        ellipsis: true,
+      });
+
+      let x = x0;
+      r.columns.forEach((c, i) => {
+        if (r.group!.totals!.includes(c.key)) {
+          doc.text(String(c.format ? c.format(somas[c.key]) : somas[c.key]), x + PADDING, y + 5, {
+            width: larguras[i] - PADDING * 2,
+            align: c.align ?? 'right',
+            lineBreak: false,
+            ellipsis: true,
+          });
+        }
+        x += larguras[i];
+      });
+      doc.y = y + 18;
+    }
+  }
 
   // ------------------------------------------------------------------ resumo
   if (r.summary?.length) {

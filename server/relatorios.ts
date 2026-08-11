@@ -17,6 +17,7 @@ import { db } from './db';
 import { decimal, exportar, reais, type Coluna } from './exportar';
 import { MOTIVO_LABEL, STATUS_PRODUTO_LABEL, TIPO_LABEL } from './estoque';
 import { unidadePermitida } from './unidades';
+import { CAMPOS } from '../shared/campos';
 
 /** Os seis relatórios, todos exportáveis em PDF, Excel ou CSV. */
 
@@ -35,6 +36,14 @@ const base = z.object({
 });
 
 type Base = z.infer<typeof base>;
+
+/**
+ * Ordem dos blocos por condição.
+ *
+ * Segue a do cadastro, e não a alfabética: quem lê o relatório procura
+ * primeiro o que tem mais valor.
+ */
+const ORDEM_CONDICAO = [...(CAMPOS.condicao.opcoes ?? []), '—'];
 
 const periodo = (q: Base) => {
   if (!q.startDate && !q.endDate) return 'Período: todos os registros';
@@ -117,6 +126,10 @@ rotasRelatorios.get(
     await exportar(res, q.format, {
       title: 'Relatório de Estoque',
       subtitle: periodo(q),
+      // Separado por condição: lacrado e vitrine são mercadorias
+      // diferentes, com preço diferente, e misturá-las esconde o que a
+      // loja tem de cada uma.
+      group: { key: 'condicao', order: ORDEM_CONDICAO, totals: ['quantity', 'totalCost', 'totalSale'] },
       columns: [
         { header: 'Unidade', key: 'unit', width: 12 },
         { header: 'Produto', key: 'name', width: 24 },
@@ -193,6 +206,7 @@ rotasRelatorios.get(
         phone: i.sale.customerPhone ?? '—',
         product: i.productName ?? i.product.name,
         category: i.product.category.name,
+        condicao: i.product.condicao ?? '—',
         imei: i.imei ?? i.serialNumber ?? '—',
         quantity: i.quantity,
         unitPrice: numero(i.unitPrice),
@@ -218,6 +232,7 @@ rotasRelatorios.get(
     await exportar(res, q.format, {
       title: 'Relatório de Vendas',
       subtitle: periodo(q),
+      group: { key: 'condicao', order: ORDEM_CONDICAO, totals: ['quantity', 'total', 'profit'] },
       columns: [
         // Larguras conferidas com dados reais: nome de aparelho e pagamento
         // dividido são os que estouram, e é neles que sobra espaço aqui.
@@ -227,6 +242,7 @@ rotasRelatorios.get(
         { header: 'Cliente', key: 'customer', width: 15 },
         { header: 'Produto', key: 'product', width: 26 },
         { header: 'Categoria', key: 'category', width: 11 },
+        { header: 'Condição', key: 'condicao', width: 11 },
         { header: 'IMEI / série', key: 'imei', width: 14 },
         qtd('Qtd', 'quantity', 5),
         money('Unit.', 'unitPrice', 11),
