@@ -665,6 +665,36 @@ const chaveDaMarca = (marca: string | null): string =>
  * separada por marca. Não é PDF de propósito: no grupo o que serve é
  * mensagem, não anexo.
  */
+/**
+ * Duas marcas que só diferem por um deslize de teclado.
+ *
+ * Uma letra a mais, a menos ou trocada — "XIOMI" e "XIAOMI". Marcas de
+ * verdade que existem juntas no mercado ("POCO" e "PODO") são raras o
+ * bastante para valer o aviso; o sistema só avisa, não junta sozinho.
+ */
+function ehErroDeDigitacao(a: string, b: string): boolean {
+  if (a === b) return false;
+  // Nomes muito curtos diferem por uma letra com facilidade demais.
+  if (Math.min(a.length, b.length) < 4) return false;
+  if (Math.abs(a.length - b.length) > 1) return false;
+
+  // Distância de edição, cortando assim que passa de 1.
+  let anterior = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i += 1) {
+    const atual = [i];
+    for (let j = 1; j <= b.length; j += 1) {
+      atual[j] = Math.min(
+        anterior[j] + 1,
+        atual[j - 1] + 1,
+        anterior[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1),
+      );
+    }
+    if (Math.min(...atual) > 1) return false;
+    anterior = atual;
+  }
+  return anterior[b.length] <= 1;
+}
+
 rotasRelatorios.get(
   '/whatsapp-list',
   rota(async (req, res) => {
@@ -770,10 +800,7 @@ rotasRelatorios.get(
     const chaves = [...grupos.keys()].filter((c) => c !== 'OUTROS');
     for (let i = 0; i < chaves.length; i += 1) {
       for (let j = i + 1; j < chaves.length; j += 1) {
-        const [a, b] = [chaves[i], chaves[j]];
-        if (Math.abs(a.length - b.length) <= 1 && (a.includes(b.slice(0, 4)) || b.includes(a.slice(0, 4)))) {
-          parecidas.push(`${a} / ${b}`);
-        }
+        if (ehErroDeDigitacao(chaves[i], chaves[j])) parecidas.push(`${chaves[i]} / ${chaves[j]}`);
       }
     }
 
