@@ -118,36 +118,43 @@ export default function SalesPage() {
     {
       key: 'product',
       header: 'Produto',
-      sortKey: 'product.name',
       render: (sale) => (
         <div className="min-w-[160px]">
-          <p className="text-sm font-medium text-navy-900 dark:text-slate-100">{sale.product?.name}</p>
-          <p className="text-xs text-slate-500 dark:text-slate-400">{sale.product?.category?.name}</p>
+          <p className="text-sm font-medium text-navy-900 dark:text-slate-100">
+            {sale.items?.[0]?.productName ?? '—'}
+            {sale.items && sale.items.length > 1 && (
+              <span className="text-slate-400"> +{sale.items.length - 1}</span>
+            )}
+          </p>
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            {[sale.items?.[0]?.imei, sale.items?.[0]?.serialNumber].filter(Boolean).join(' · ') || sale.code}
+          </p>
         </div>
       ),
     },
     {
       key: 'quantity',
       header: 'Qtd',
-      sortKey: 'quantity',
       align: 'center',
-      render: (sale) => <span className="font-semibold">{sale.quantity}</span>,
+      render: (sale) => (
+        <span className="font-semibold">{sale.items?.reduce((n, i) => n + i.quantity, 0) ?? 0}</span>
+      ),
     },
     {
-      key: 'unitPrice',
-      header: 'Valor unit.',
-      align: 'right',
+      key: 'code',
+      header: 'Venda',
+      align: 'left',
       hideOnMobile: true,
       render: (sale) => (
-        <span className="text-sm text-slate-600 dark:text-slate-400">{formatCurrency(sale.unitPrice)}</span>
+        <span className="font-mono text-xs text-slate-600 dark:text-slate-400">{sale.code}</span>
       ),
     },
     {
       key: 'totalPrice',
       header: 'Total',
-      sortKey: 'totalPrice',
+      sortKey: 'totalAmount',
       align: 'right',
-      render: (sale) => <span className="font-bold text-success">{formatCurrency(sale.totalPrice)}</span>,
+      render: (sale) => <span className="font-bold text-success">{formatCurrency(sale.totalAmount)}</span>,
     },
     {
       key: 'unit',
@@ -164,11 +171,16 @@ export default function SalesPage() {
       render: (sale) => <PaymentBadge method={sale.paymentMethod} />,
     },
     {
-      key: 'user',
-      header: 'Vendedor',
+      key: 'seller',
+      header: 'Vendedor / Caixa',
       hideOnMobile: true,
       render: (sale) => (
-        <span className="text-sm text-slate-600 dark:text-slate-400">{sale.user?.name ?? '—'}</span>
+        <span className="block text-sm text-slate-600 dark:text-slate-400">
+          {sale.seller?.name ?? '—'}
+          {sale.cashier && sale.cashier.name !== sale.seller?.name && (
+            <span className="block text-xs text-slate-400">caixa: {sale.cashier.name}</span>
+          )}
+        </span>
       ),
     },
     ...(isAdmin
@@ -328,12 +340,12 @@ export default function SalesPage() {
                     {sale.customerName ?? 'Cliente'}
                   </p>
                   <p className="truncate text-xs text-slate-500 dark:text-slate-400">
-                    {sale.quantity}× {sale.product?.name}
+                    {sale.items?.reduce((n, i) => n + i.quantity, 0)}× {sale.items?.[0]?.productName}
                     {sale.unit ? ` · ${sale.unit.name}` : ''}
                   </p>
                 </div>
                 <span className="shrink-0 text-sm font-bold text-success">
-                  {formatCurrency(sale.totalPrice)}
+                  {formatCurrency(sale.totalAmount)}
                 </span>
               </div>
 
@@ -365,7 +377,7 @@ export default function SalesPage() {
       <ConfirmDialog
         open={Boolean(deleting)}
         title="Cancelar venda"
-        message={`A venda de "${deleting?.product?.name}" para ${deleting?.customerName ?? 'o cliente'} será removida e ${deleting?.quantity ?? 0} unidade(s) voltarão ao estoque.`}
+        message={`A venda ${deleting?.code} para ${deleting?.customerName ?? 'o cliente'} será removida e ${deleting?.items?.reduce((n, i) => n + i.quantity, 0) ?? 0} unidade(s) voltarão ao estoque.`}
         confirmLabel="Cancelar venda"
         cancelLabel="Voltar"
         loading={deleteSale.isPending}

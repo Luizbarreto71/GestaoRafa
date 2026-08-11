@@ -4,13 +4,14 @@ import { z } from 'zod';
 import { autenticar, somenteAdmin } from './auth';
 import { AppError, contem, limpar, naoEncontrado, ordenar, paginacao, paginado, rota, validar, semVazios } from './core';
 import { db, registrarLog } from './db';
+import { exigir } from './permissoes';
 import { estoqueBaixo, movimentar, saldosDoProduto } from './estoque';
 import { unidadePermitida } from './unidades';
 
 /** Cadastro, busca, edição, ajuste de estoque e exclusão de produtos. */
 
 export const rotasProdutos = Router();
-rotasProdutos.use(autenticar);
+rotasProdutos.use(autenticar, exigir('produtos.ver'));
 
 const COM_RELACOES = {
   category: true,
@@ -229,8 +230,8 @@ rotasProdutos.get(
         orderBy: { updatedAt: 'desc' },
       }),
       db.sale.findMany({
-        where: { OR: [{ customerName: t }, { customerPhone: t }, { product: { name: t } }] },
-        include: { product: { select: { name: true } } },
+        where: { OR: [{ customerName: t }, { customerPhone: t }, { items: { some: { productName: t } } }] },
+        include: { items: { select: { productName: true } } },
         take: 5,
         orderBy: { saleDate: 'desc' },
       }),
@@ -314,7 +315,21 @@ rotasProdutos.get(
           take: 20,
           include: { user: { select: { name: true } }, unit: { select: { name: true } } },
         },
-        sales: { orderBy: { saleDate: 'desc' }, take: 10, include: { unit: { select: { name: true } } } },
+        // Últimas vendas deste produto, vindas dos itens.
+        saleItems: {
+          orderBy: { sale: { saleDate: 'desc' } },
+          take: 10,
+          include: {
+            sale: {
+              select: {
+                code: true,
+                saleDate: true,
+                customerName: true,
+                unit: { select: { name: true } },
+              },
+            },
+          },
+        },
       },
     });
 
@@ -345,6 +360,7 @@ rotasProdutos.get(
 
 rotasProdutos.post(
   '/',
+  exigir('produtos.editar'),
   rota(async (req, res) => {
     const { photos, quantity, unitId, ...dados } = validar(produtoSchema, req.body);
     const { novas } = separarFotos(photos ?? []);
@@ -400,6 +416,7 @@ rotasProdutos.post(
 
 rotasProdutos.put(
   '/:id',
+  exigir('produtos.editar'),
   rota(async (req, res) => {
     // `quantity` é ignorada de propósito: mexer no estoque é papel da tela
     // de Movimentação, que registra unidade, motivo e responsável.
@@ -451,6 +468,7 @@ rotasProdutos.put(
 /** Entrada ou baixa avulsa numa unidade, sempre com motivo. */
 rotasProdutos.patch(
   '/:id/stock',
+  exigir('estoque.movimentar'),
   rota(async (req, res) => {
     const { quantity, reason, unitId } = validar(
       z.object({
@@ -514,7 +532,7 @@ rotasProdutos.delete(
 
     // Com vendas registradas, arquiva em vez de excluir: o histórico
     // financeiro precisa continuar batendo.
-    const vendas = await db.sale.count({ where: { productId: produto.id } });
+    const vendas = await db.saleItem.count({ where: { productId: produto.id } });
     if (vendas > 0) {
       await db.product.update({ where: { id: produto.id }, data: { status: 'VENDIDO' } });
       await registrarLog({ acao: 'ARCHIVE', entidade: 'Product', id: produto.id, req });

@@ -4,6 +4,7 @@ import multer from 'multer';
 import { Readable } from 'stream';
 import { autenticar, somenteAdmin } from './auth';
 import { AppError, limpar, numero, rota } from './core';
+import { exigir } from './permissoes';
 import { db, registrarLog } from './db';
 import { MOTIVO_LABEL, movimentar, TIPO_LABEL } from './estoque';
 import { enviarParaPlanilha, planilhaConfigurada, reescreverPlanilha, statusPlanilha } from './planilha';
@@ -11,7 +12,7 @@ import { enviarParaPlanilha, planilhaConfigurada, reescreverPlanilha, statusPlan
 /** Importação de planilha, backup e integração com o Google Sheets. */
 
 export const rotasSistema = Router();
-rotasSistema.use(autenticar);
+rotasSistema.use(autenticar, exigir('configuracoes'));
 
 // ---------------------------------------------------------------- Planilha
 

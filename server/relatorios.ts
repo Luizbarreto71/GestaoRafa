@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { autenticar } from './auth';
 import { dataBR, dataHoraBR, intervalo, numero, rota, validar, semVazios } from './core';
+import { exigir } from './permissoes';
 import { db } from './db';
 import { decimal, exportar, reais, type Coluna } from './exportar';
 import { MOTIVO_LABEL, STATUS_PRODUTO_LABEL, TIPO_LABEL } from './estoque';
@@ -10,7 +11,7 @@ import { unidadePermitida } from './unidades';
 /** Os seis relatórios, todos exportáveis em PDF, Excel ou CSV. */
 
 export const rotasRelatorios = Router();
-rotasRelatorios.use(autenticar);
+rotasRelatorios.use(autenticar, exigir('relatorios'));
 
 const base = z.object({
   format: z.enum(['json', 'pdf', 'xlsx', 'csv']).default('json'),
@@ -31,6 +32,7 @@ const PAGAMENTO_LABEL: Record<string, string> = {
   DEBITO: 'Débito',
   CREDITO: 'Crédito',
   TRANSFERENCIA: 'Transferência',
+  OUTRO: 'Outro',
 };
 
 const periodo = (q: Base) => {
@@ -150,33 +152,54 @@ rotasRelatorios.get(
   '/sales',
   rota(async (req, res) => {
     const q = validar(base, semVazios(req.query));
+    const unidade = unidadePermitida(req.usuario, q.unitId);
     const quando = intervalo(q.startDate, q.endDate);
 
-    const vendas = await db.sale.findMany({
+    // Uma linha por item vendido: é o nível em que se confere produto,
+    // IMEI e valor. Uma venda com três aparelhos vira três linhas.
+    const itens = await db.saleItem.findMany({
       where: {
-        ...(quando ? { saleDate: quando } : {}),
-        ...(q.paymentMethod ? { paymentMethod: q.paymentMethod } : {}),
+        sale: {
+          status: 'FINALIZADA',
+          ...(quando ? { saleDate: quando } : {}),
+          ...(q.paymentMethod ? { paymentMethod: q.paymentMethod } : {}),
+          ...(unidade ? { unitId: unidade } : {}),
+        },
         ...(q.categoryId ? { product: { categoryId: q.categoryId } } : {}),
         ...(q.supplierId ? { product: { supplierId: q.supplierId } } : {}),
       },
-      include: { product: { include: { category: true } }, user: { select: { name: true } } },
-      orderBy: { saleDate: 'desc' },
+      include: {
+        product: { include: { category: true } },
+        sale: {
+          include: {
+            seller: { select: { name: true } },
+            cashier: { select: { name: true } },
+            unit: { select: { name: true } },
+          },
+        },
+      },
+      orderBy: { sale: { saleDate: 'desc' } },
     });
 
-    const linhas = vendas.map((v) => {
-      const total = numero(v.totalPrice);
+    const linhas = itens.map((i) => {
+      const total = numero(i.unitPrice) * i.quantity;
       return {
-        date: dataHoraBR(v.saleDate),
-        customer: v.customerName ?? '—',
-        phone: v.customerPhone ?? '—',
-        product: v.product.name,
-        category: v.product.category.name,
-        quantity: v.quantity,
-        unitPrice: numero(v.unitPrice),
+        code: i.sale.code,
+        date: dataHoraBR(i.sale.saleDate),
+        unit: i.sale.unit.name,
+        customer: i.sale.customerName ?? '—',
+        phone: i.sale.customerPhone ?? '—',
+        product: i.productName ?? i.product.name,
+        category: i.product.category.name,
+        imei: i.imei ?? i.serialNumber ?? '—',
+        quantity: i.quantity,
+        unitPrice: numero(i.unitPrice),
         total,
-        profit: total - numero(v.costAtSale) * v.quantity,
-        payment: PAGAMENTO_LABEL[v.paymentMethod] ?? v.paymentMethod,
-        user: v.user?.name ?? '—',
+        profit: total - numero(i.costPrice) * i.quantity,
+        payment: PAGAMENTO_LABEL[i.sale.paymentMethod] ?? i.sale.paymentMethod,
+        installments: i.sale.installments,
+        seller: i.sale.seller?.name ?? '—',
+        cashier: i.sale.cashier?.name ?? '—',
       };
     });
 
@@ -186,17 +209,20 @@ rotasRelatorios.get(
       title: 'Relatório de Vendas',
       subtitle: periodo(q),
       columns: [
+        { header: 'Venda', key: 'code', width: 10 },
         { header: 'Data', key: 'date', width: 14 },
-        { header: 'Cliente', key: 'customer', width: 20 },
-        { header: 'Telefone', key: 'phone', width: 13 },
-        { header: 'Produto', key: 'product', width: 24 },
-        { header: 'Categoria', key: 'category', width: 13 },
-        qtd('Qtd', 'quantity', 6),
+        { header: 'Unidade', key: 'unit', width: 11 },
+        { header: 'Cliente', key: 'customer', width: 18 },
+        { header: 'Produto', key: 'product', width: 22 },
+        { header: 'Categoria', key: 'category', width: 12 },
+        { header: 'IMEI / série', key: 'imei', width: 15 },
+        qtd('Qtd', 'quantity', 5),
         money('Valor unit.', 'unitPrice', 11),
         money('Total', 'total', 11),
         money('Lucro', 'profit', 11),
-        { header: 'Pagamento', key: 'payment', width: 13 },
-        { header: 'Vendedor', key: 'user', width: 14 },
+        { header: 'Pagamento', key: 'payment', width: 12 },
+        { header: 'Vendedor', key: 'seller', width: 13 },
+        { header: 'Caixa', key: 'cashier', width: 13 },
       ],
       rows: linhas,
       summary: [
@@ -228,13 +254,19 @@ rotasRelatorios.get(
           product: { select: { categoryId: true, costPrice: true, salePrice: true, wholesalePrice: true } },
         },
       }),
-      db.sale.findMany({
-        where: { ...(quando ? { saleDate: quando } : {}), ...(unidade ? { unitId: unidade } : {}) },
+      db.saleItem.findMany({
+        where: {
+          sale: {
+            status: 'FINALIZADA',
+            ...(quando ? { saleDate: quando } : {}),
+            ...(unidade ? { unitId: unidade } : {}),
+          },
+        },
         select: {
           quantity: true,
-          totalPrice: true,
-          costAtSale: true,
-          product: { select: { categoryId: true } },
+          unitPrice: true,
+          costPrice: true,
+          product: { select: { categoryId: true, supplierId: true } },
         },
       }),
     ]);
@@ -242,8 +274,8 @@ rotasRelatorios.get(
     const linhas = categorias.map((c) => {
       const doEstoque = linhasDeEstoque.filter((l) => l.product.categoryId === c.id);
       const daCategoria = vendas.filter((v) => v.product.categoryId === c.id);
-      const faturamento = daCategoria.reduce((s, v) => s + numero(v.totalPrice), 0);
-      const custo = daCategoria.reduce((s, v) => s + numero(v.costAtSale) * v.quantity, 0);
+      const faturamento = daCategoria.reduce((s, v) => s + numero(v.unitPrice) * v.quantity, 0);
+      const custo = daCategoria.reduce((s, v) => s + numero(v.costPrice) * v.quantity, 0);
 
       return {
         category: c.name,
@@ -295,13 +327,19 @@ rotasRelatorios.get(
         where: unidade ? { unitId: unidade } : {},
         select: { quantity: true, product: { select: { supplierId: true, costPrice: true } } },
       }),
-      db.sale.findMany({
-        where: { ...(quando ? { saleDate: quando } : {}), ...(unidade ? { unitId: unidade } : {}) },
+      db.saleItem.findMany({
+        where: {
+          sale: {
+            status: 'FINALIZADA',
+            ...(quando ? { saleDate: quando } : {}),
+            ...(unidade ? { unitId: unidade } : {}),
+          },
+        },
         select: {
           quantity: true,
-          totalPrice: true,
-          costAtSale: true,
-          product: { select: { supplierId: true } },
+          unitPrice: true,
+          costPrice: true,
+          product: { select: { categoryId: true, supplierId: true } },
         },
       }),
     ]);
@@ -309,8 +347,8 @@ rotasRelatorios.get(
     const linhas = fornecedores.map((f) => {
       const doEstoque = linhasDeEstoque.filter((l) => l.product.supplierId === f.id);
       const doFornecedor = vendas.filter((v) => v.product.supplierId === f.id);
-      const faturamento = doFornecedor.reduce((s, v) => s + numero(v.totalPrice), 0);
-      const custo = doFornecedor.reduce((s, v) => s + numero(v.costAtSale) * v.quantity, 0);
+      const faturamento = doFornecedor.reduce((s, v) => s + numero(v.unitPrice) * v.quantity, 0);
+      const custo = doFornecedor.reduce((s, v) => s + numero(v.costPrice) * v.quantity, 0);
 
       return {
         supplier: f.name,
@@ -356,10 +394,14 @@ rotasRelatorios.get(
     const quando = intervalo(q.startDate, q.endDate);
 
     const [vendas, movimentos] = await Promise.all([
-      db.sale.findMany({
-        where: quando ? { saleDate: quando } : {},
-        select: { saleDate: true, quantity: true, totalPrice: true, costAtSale: true },
-        orderBy: { saleDate: 'asc' },
+      db.saleItem.findMany({
+        where: { sale: { status: 'FINALIZADA', ...(quando ? { saleDate: quando } : {}) } },
+        select: {
+          quantity: true,
+          unitPrice: true,
+          costPrice: true,
+          sale: { select: { saleDate: true } },
+        },
       }),
       db.stockMovement.findMany({
         where: quando ? { createdAt: quando } : {},
@@ -385,11 +427,11 @@ rotasRelatorios.get(
     };
 
     for (const v of vendas) {
-      const b = balde(chave(v.saleDate));
-      b.sales += 1;
+      const b = balde(chave(v.sale.saleDate));
+      const total = numero(v.unitPrice) * v.quantity;
       b.quantity += v.quantity;
-      b.revenue += numero(v.totalPrice);
-      b.profit += numero(v.totalPrice) - numero(v.costAtSale) * v.quantity;
+      b.revenue += total;
+      b.profit += total - numero(v.costPrice) * v.quantity;
     }
 
     for (const m of movimentos) {

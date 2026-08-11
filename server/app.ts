@@ -11,6 +11,9 @@ import { rotasFotos, rotasProdutos } from './produtos';
 import { rotasRelatorios } from './relatorios';
 import { rotasSistema } from './sistema';
 import { rotasUnidades } from './unidades';
+import { rotasCaixa } from './caixa';
+import { rotasNotificacoes } from './notificacoes';
+import { rotasPreVendas } from './prevendas';
 import { rotasVendas } from './vendas';
 
 /**
@@ -113,6 +116,9 @@ export function createApp(): Application {
   app.use('/api/products', rotasProdutos);
   app.use('/api/fotos', rotasFotos);
   app.use('/api/sales', rotasVendas);
+  app.use('/api/pre-sales', rotasPreVendas);
+  app.use('/api/cash', rotasCaixa);
+  app.use('/api/notifications', rotasNotificacoes);
   app.use('/api/movements', rotasMovimentacoes);
   app.use('/api/units', rotasUnidades);
   app.use('/api/categories', rotasCategorias);

@@ -72,6 +72,7 @@ export const PAYMENT_LABEL: Record<PaymentMethod, string> = {
   DEBITO: 'Débito',
   CREDITO: 'Crédito',
   TRANSFERENCIA: 'Transferência',
+  OUTRO: 'Outro',
 };
 
 export const MOVEMENT_LABEL: Record<MovementType, string> = {
@@ -116,7 +117,17 @@ export const EXIT_REASON_OPTIONS = EXIT_REASONS.map((value) => ({
 export const ROLE_LABEL: Record<UserRole, string> = {
   ADMIN: 'Administrador',
   GERENTE: 'Gerente',
+  CAIXA: 'Caixa',
   VENDEDOR: 'Vendedor',
+};
+
+/** Situação da pré-venda, com a cor que a acompanha na tela. */
+export const PRE_SALE_LABEL: Record<string, string> = {
+  AGUARDANDO_CAIXA: 'Aguardando caixa',
+  EM_ATENDIMENTO: 'Em atendimento',
+  FINALIZADA: 'Venda finalizada',
+  CANCELADA: 'Cancelada',
+  EXPIRADA: 'Expirada',
 };
 
 export const PAYMENT_OPTIONS = (Object.keys(PAYMENT_LABEL) as PaymentMethod[]).map((value) => ({

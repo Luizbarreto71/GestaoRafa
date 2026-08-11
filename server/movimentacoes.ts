@@ -1,7 +1,8 @@
 import { Prisma } from '@prisma/client';
 import { Router } from 'express';
 import { z } from 'zod';
-import { autenticar, gerenteOuAdmin, somenteAdmin } from './auth';
+import { autenticar, somenteAdmin } from './auth';
+import { exigir } from './permissoes';
 import {
   AppError,
   contem,
@@ -21,7 +22,7 @@ import { exigirAcessoNaUnidade, unidadePermitida } from './unidades';
 /** Entrada, saída, transferência e o histórico de tudo isso. */
 
 export const rotasMovimentacoes = Router();
-rotasMovimentacoes.use(autenticar);
+rotasMovimentacoes.use(autenticar, exigir('estoque.ver'));
 
 const MOTIVOS = [
   'COMPRA',
@@ -49,7 +50,7 @@ const entradaSchema = z.object({
 
 rotasMovimentacoes.post(
   '/entrada',
-  gerenteOuAdmin,
+  exigir('estoque.movimentar'),
   rota(async (req, res) => {
     const dados = validar(entradaSchema, req.body);
     exigirAcessoNaUnidade(req.usuario, dados.unitId);
@@ -99,7 +100,7 @@ const saidaSchema = z.object({
 
 rotasMovimentacoes.post(
   '/saida',
-  gerenteOuAdmin,
+  exigir('estoque.movimentar'),
   rota(async (req, res) => {
     const dados = validar(saidaSchema, req.body);
     exigirAcessoNaUnidade(req.usuario, dados.unitId);
@@ -137,7 +138,7 @@ const transferenciaSchema = z.object({
 
 rotasMovimentacoes.post(
   '/transferencia',
-  gerenteOuAdmin,
+  exigir('estoque.movimentar'),
   rota(async (req, res) => {
     const dados = validar(transferenciaSchema, req.body);
     // Quem não é admin só transfere a partir da própria unidade.
@@ -241,7 +242,7 @@ const retiradaSchema = z.object({
  */
 rotasMovimentacoes.post(
   '/retirada',
-  gerenteOuAdmin,
+  exigir('estoque.movimentar'),
   rota(async (req, res) => {
     const dados = validar(retiradaSchema, req.body);
     exigirAcessoNaUnidade(req.usuario, dados.unitId);
@@ -333,7 +334,7 @@ const aprovarSchema = z.object({
  */
 rotasMovimentacoes.post(
   '/retiradas/:id/aprovar',
-  gerenteOuAdmin,
+  exigir('estoque.movimentar'),
   rota(async (req, res) => {
     const { soldQuantity, notes } = validar(aprovarSchema, req.body);
 
@@ -411,7 +412,7 @@ rotasMovimentacoes.post(
 /** Cancela a retirada e libera a reserva. O estoque nunca chegou a sair. */
 rotasMovimentacoes.post(
   '/retiradas/:id/cancelar',
-  gerenteOuAdmin,
+  exigir('estoque.movimentar'),
   rota(async (req, res) => {
     const retirada = await db.stockWithdrawal.findUnique({ where: { id: req.params.id } });
     if (!retirada) throw naoEncontrado('Retirada');
@@ -542,7 +543,7 @@ const ajusteSchema = z.object({
  */
 rotasMovimentacoes.post(
   '/ajuste',
-  gerenteOuAdmin,
+  exigir('estoque.movimentar'),
   rota(async (req, res) => {
     const dados = validar(ajusteSchema, req.body);
     exigirAcessoNaUnidade(req.usuario, dados.unitId);

@@ -16,7 +16,7 @@ declare global {
         id: string;
         nome: string;
         email: string;
-        papel: 'ADMIN' | 'GERENTE' | 'VENDEDOR';
+        papel: 'ADMIN' | 'GERENTE' | 'CAIXA' | 'VENDEDOR';
         admin: boolean;
         /** Unidade do Gerente/Vendedor. Administrador não tem — vê todas. */
         unidadeId?: string | null;

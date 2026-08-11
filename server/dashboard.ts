@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { autenticar } from './auth';
 import { fimDoDia, inicioDoDia, limpar, numero, rota, somarDias } from './core';
+import { exigir } from './permissoes';
 import { db } from './db';
 import { estoqueBaixo, totalEmEstoque, valorDoEstoque } from './estoque';
 import { unidadePermitida } from './unidades';
@@ -14,7 +15,7 @@ import { unidadePermitida } from './unidades';
  */
 
 export const rotasDashboard = Router();
-rotasDashboard.use(autenticar);
+rotasDashboard.use(autenticar, exigir('dashboard'));
 
 rotasDashboard.get(
   '/',
@@ -35,6 +36,7 @@ rotasDashboard.get(
       totalProdutos,
       itensEmEstoque,
       vendidosHoje,
+      itensHoje,
       faturamentoHoje,
       produtosBaixos,
       semEstoque,
@@ -44,18 +46,23 @@ rotasDashboard.get(
       linhasDeEstoque,
       categorias,
       mes,
+      itensMes,
       valor,
     ] = await Promise.all([
       db.product.count(),
       totalEmEstoque(unidade),
       db.sale.aggregate({
         where: { saleDate: { gte: inicioHoje, lte: fimHoje }, ...naUnidade },
-        _sum: { quantity: true },
         _count: true,
+      }),
+      // Itens vendidos vêm da tabela de itens: uma venda pode ter vários.
+      db.saleItem.aggregate({
+        where: { sale: { saleDate: { gte: inicioHoje, lte: fimHoje }, ...naUnidade } },
+        _sum: { quantity: true },
       }),
       db.sale.aggregate({
         where: { saleDate: { gte: inicioHoje, lte: fimHoje }, ...naUnidade },
-        _sum: { totalPrice: true, costAtSale: true },
+        _sum: { totalAmount: true, costAmount: true },
       }),
       db.product.findMany({
         where: { id: { in: baixos.map((b) => b.productId) } },
@@ -71,14 +78,15 @@ rotasDashboard.get(
         orderBy: { saleDate: 'desc' },
         take: 8,
         include: {
-          product: { select: { name: true, model: true, category: { select: { name: true } } } },
-          user: { select: { name: true } },
+          items: { select: { productName: true, quantity: true } },
+          seller: { select: { name: true } },
+          cashier: { select: { name: true } },
           unit: { select: { name: true } },
         },
       }),
       db.sale.findMany({
         where: { saleDate: { gte: inicioGrafico, lte: fimHoje }, ...naUnidade },
-        select: { saleDate: true, totalPrice: true, quantity: true },
+        select: { saleDate: true, totalAmount: true, items: { select: { quantity: true } } },
       }),
       db.stockMovement.findMany({
         where: { createdAt: { gte: inicioGrafico, lte: fimHoje }, ...naUnidade },
@@ -91,7 +99,11 @@ rotasDashboard.get(
       db.category.findMany(),
       db.sale.aggregate({
         where: { saleDate: { gte: inicioDoMes }, ...naUnidade },
-        _sum: { totalPrice: true, costAtSale: true, quantity: true },
+        _sum: { totalAmount: true, costAmount: true },
+      }),
+      db.saleItem.aggregate({
+        where: { sale: { saleDate: { gte: inicioDoMes }, ...naUnidade } },
+        _sum: { quantity: true },
       }),
       valorDoEstoque(unidade),
     ]);
@@ -112,8 +124,8 @@ rotasDashboard.get(
     for (const venda of vendasDoPeriodo) {
       const balde = baldes.get(dia(venda.saleDate));
       if (!balde) continue;
-      balde.vendas += venda.quantity;
-      balde.faturamento += numero(venda.totalPrice);
+      balde.vendas += venda.items.reduce((n, i) => n + i.quantity, 0);
+      balde.faturamento += numero(venda.totalAmount);
     }
 
     for (const mov of movimentosDoPeriodo) {
@@ -133,8 +145,8 @@ rotasDashboard.get(
       porCategoria.set(id, atual);
     }
 
-    const receitaHoje = numero(faturamentoHoje._sum.totalPrice);
-    const receitaMes = numero(mes._sum.totalPrice);
+    const receitaHoje = numero(faturamentoHoje._sum?.totalAmount);
+    const receitaMes = numero(mes._sum?.totalAmount);
 
     res.json(
       limpar({
@@ -142,17 +154,17 @@ rotasDashboard.get(
         cards: {
           totalProducts: totalProdutos,
           itemsInStock: itensEmEstoque,
-          soldToday: vendidosHoje._sum.quantity ?? 0,
+          soldToday: itensHoje._sum.quantity ?? 0,
           salesCountToday: vendidosHoje._count,
           revenueToday: receitaHoje,
-          profitToday: receitaHoje - numero(faturamentoHoje._sum.costAtSale),
+          profitToday: receitaHoje - numero(faturamentoHoje._sum?.costAmount),
           stockValueCost: valor.custo,
           stockValueSale: valor.venda,
           lowStockCount: baixos.length,
           outOfStockCount: semEstoque,
           revenueMonth: receitaMes,
-          profitMonth: receitaMes - numero(mes._sum.costAtSale),
-          itemsSoldMonth: mes._sum.quantity ?? 0,
+          profitMonth: receitaMes - numero(mes._sum?.costAmount),
+          itemsSoldMonth: itensMes._sum.quantity ?? 0,
           entradas: movimentosDoPeriodo
             .filter((m) => m.type === 'ENTRADA')
             .reduce((s, m) => s + m.quantity, 0),
@@ -209,11 +221,11 @@ rotasDashboard.get(
         where: { saleDate: { gte: inicioDoDia(), lte: fimDoDia() }, ...naUnidade },
         select: {
           id: true,
+          code: true,
           customerName: true,
-          totalPrice: true,
-          quantity: true,
+          totalAmount: true,
           saleDate: true,
-          product: { select: { name: true } },
+          items: { select: { productName: true, quantity: true } },
           unit: { select: { name: true } },
         },
         orderBy: { saleDate: 'desc' },
@@ -238,8 +250,8 @@ rotasDashboard.get(
         }),
         outOfStock: zerados.map((z) => ({ ...z.product, unitName: z.unit.name })),
         soldToday: vendasHoje,
-        soldTodayCount: vendasHoje.reduce((s, v) => s + v.quantity, 0),
-        revenueToday: vendasHoje.reduce((s, v) => s + numero(v.totalPrice), 0),
+        soldTodayCount: vendasHoje.reduce((s, v) => s + v.items.reduce((n, i) => n + i.quantity, 0), 0),
+        revenueToday: vendasHoje.reduce((s, v) => s + numero(v.totalAmount), 0),
         stockValue: valor.venda,
         updatedAt: new Date().toISOString(),
       }),

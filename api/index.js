@@ -297,13 +297,6 @@ function somenteAdmin(req, _res, next) {
   if (!req.usuario.admin) return next(new AppError("Apenas administradores podem fazer isso", 403));
   next();
 }
-function gerenteOuAdmin(req, _res, next) {
-  if (!req.usuario) return next(new AppError("N\xE3o autorizado", 401));
-  if (req.usuario.papel === "VENDEDOR") {
-    return next(new AppError("Vendedor n\xE3o pode fazer esta opera\xE7\xE3o.", 403));
-  }
-  next();
-}
 var rotasAuth = Router();
 var loginSchema = z.object({
   // O `.trim()` vem antes do `.email()`: espaço colado junto (ou vindo do
@@ -775,7 +768,7 @@ rotasClientes.get(
         sales: {
           orderBy: { saleDate: "desc" },
           take: 20,
-          include: { product: { select: { name: true, model: true } } }
+          include: { items: { select: { productName: true, quantity: true } } }
         }
       }
     });
@@ -827,7 +820,7 @@ var usuarioSchema = z2.object({
   name: z2.string().trim().min(2, "Informe o nome").max(120),
   email: z2.string().trim().toLowerCase().email("E-mail inv\xE1lido"),
   password: z2.string().trim().min(6, "A senha deve ter ao menos 6 caracteres"),
-  role: z2.enum(["ADMIN", "GERENTE", "VENDEDOR"]).default("VENDEDOR"),
+  role: z2.enum(["ADMIN", "GERENTE", "CAIXA", "VENDEDOR"]).default("VENDEDOR"),
   /** Gerente e Vendedor precisam de unidade; Administrador vê todas. */
   unitId: z2.string().uuid().optional().nullable(),
   active: z2.boolean().default(true)
@@ -913,6 +906,64 @@ rotasUsuarios.delete(
 
 // server/dashboard.ts
 import { Router as Router4 } from "express";
+
+// server/permissoes.ts
+var TODAS = [
+  "dashboard",
+  "produtos.ver",
+  "produtos.editar",
+  "estoque.ver",
+  "estoque.movimentar",
+  "estoque.transferir",
+  "prevenda.criar",
+  "prevenda.verTodas",
+  "pdv",
+  "venda.finalizar",
+  "venda.cancelar",
+  "caixa.fechar",
+  "caixa.verTodos",
+  "relatorios",
+  "financeiro",
+  "usuarios",
+  "configuracoes"
+];
+var PERMISSOES = {
+  ADMIN: TODAS,
+  // Toca no estoque da sua unidade, mas não mexe em usuários nem no caixa.
+  GERENTE: [
+    "dashboard",
+    "produtos.ver",
+    "produtos.editar",
+    "estoque.ver",
+    "estoque.movimentar",
+    "estoque.transferir",
+    "prevenda.criar",
+    "prevenda.verTodas",
+    "relatorios"
+  ],
+  // Recebe, confere e finaliza. Não cadastra nem altera preço.
+  CAIXA: [
+    "produtos.ver",
+    "estoque.ver",
+    "prevenda.verTodas",
+    "pdv",
+    "venda.finalizar",
+    "venda.cancelar",
+    "caixa.fechar"
+  ],
+  // Só monta a intenção de venda. Nunca baixa estoque.
+  VENDEDOR: ["produtos.ver", "estoque.ver", "prevenda.criar"]
+};
+var podeFazer = (perfil, permissao) => Boolean(perfil && PERMISSOES[perfil]?.includes(permissao));
+function exigir(permissao) {
+  return (req, _res, next) => {
+    if (!req.usuario) return next(new AppError("N\xE3o autorizado", 401));
+    if (!podeFazer(req.usuario.papel, permissao)) {
+      return next(new AppError("Voc\xEA n\xE3o tem permiss\xE3o para esta a\xE7\xE3o", 403));
+    }
+    next();
+  };
+}
 
 // server/estoque.ts
 import { Prisma as Prisma2 } from "@prisma/client";
@@ -1428,7 +1479,7 @@ rotasUnidades.delete(
 
 // server/dashboard.ts
 var rotasDashboard = Router4();
-rotasDashboard.use(autenticar);
+rotasDashboard.use(autenticar, exigir("dashboard"));
 rotasDashboard.get(
   "/",
   rota(async (req, res) => {
@@ -1445,6 +1496,7 @@ rotasDashboard.get(
       totalProdutos,
       itensEmEstoque,
       vendidosHoje,
+      itensHoje,
       faturamentoHoje,
       produtosBaixos,
       semEstoque,
@@ -1454,18 +1506,23 @@ rotasDashboard.get(
       linhasDeEstoque,
       categorias,
       mes,
+      itensMes,
       valor
     ] = await Promise.all([
       db.product.count(),
       totalEmEstoque(unidade),
       db.sale.aggregate({
         where: { saleDate: { gte: inicioHoje, lte: fimHoje }, ...naUnidade },
-        _sum: { quantity: true },
         _count: true
+      }),
+      // Itens vendidos vêm da tabela de itens: uma venda pode ter vários.
+      db.saleItem.aggregate({
+        where: { sale: { saleDate: { gte: inicioHoje, lte: fimHoje }, ...naUnidade } },
+        _sum: { quantity: true }
       }),
       db.sale.aggregate({
         where: { saleDate: { gte: inicioHoje, lte: fimHoje }, ...naUnidade },
-        _sum: { totalPrice: true, costAtSale: true }
+        _sum: { totalAmount: true, costAmount: true }
       }),
       db.product.findMany({
         where: { id: { in: baixos.map((b) => b.productId) } },
@@ -1481,14 +1538,15 @@ rotasDashboard.get(
         orderBy: { saleDate: "desc" },
         take: 8,
         include: {
-          product: { select: { name: true, model: true, category: { select: { name: true } } } },
-          user: { select: { name: true } },
+          items: { select: { productName: true, quantity: true } },
+          seller: { select: { name: true } },
+          cashier: { select: { name: true } },
           unit: { select: { name: true } }
         }
       }),
       db.sale.findMany({
         where: { saleDate: { gte: inicioGrafico, lte: fimHoje }, ...naUnidade },
-        select: { saleDate: true, totalPrice: true, quantity: true }
+        select: { saleDate: true, totalAmount: true, items: { select: { quantity: true } } }
       }),
       db.stockMovement.findMany({
         where: { createdAt: { gte: inicioGrafico, lte: fimHoje }, ...naUnidade },
@@ -1501,7 +1559,11 @@ rotasDashboard.get(
       db.category.findMany(),
       db.sale.aggregate({
         where: { saleDate: { gte: inicioDoMes }, ...naUnidade },
-        _sum: { totalPrice: true, costAtSale: true, quantity: true }
+        _sum: { totalAmount: true, costAmount: true }
+      }),
+      db.saleItem.aggregate({
+        where: { sale: { saleDate: { gte: inicioDoMes }, ...naUnidade } },
+        _sum: { quantity: true }
       }),
       valorDoEstoque(unidade)
     ]);
@@ -1514,8 +1576,8 @@ rotasDashboard.get(
     for (const venda of vendasDoPeriodo) {
       const balde = baldes.get(dia(venda.saleDate));
       if (!balde) continue;
-      balde.vendas += venda.quantity;
-      balde.faturamento += numero(venda.totalPrice);
+      balde.vendas += venda.items.reduce((n, i) => n + i.quantity, 0);
+      balde.faturamento += numero(venda.totalAmount);
     }
     for (const mov of movimentosDoPeriodo) {
       const balde = baldes.get(dia(mov.createdAt));
@@ -1531,25 +1593,25 @@ rotasDashboard.get(
       atual.produtos += 1;
       porCategoria.set(id, atual);
     }
-    const receitaHoje = numero(faturamentoHoje._sum.totalPrice);
-    const receitaMes = numero(mes._sum.totalPrice);
+    const receitaHoje = numero(faturamentoHoje._sum?.totalAmount);
+    const receitaMes = numero(mes._sum?.totalAmount);
     res.json(
       limpar({
         unitId: unidade ?? null,
         cards: {
           totalProducts: totalProdutos,
           itemsInStock: itensEmEstoque,
-          soldToday: vendidosHoje._sum.quantity ?? 0,
+          soldToday: itensHoje._sum.quantity ?? 0,
           salesCountToday: vendidosHoje._count,
           revenueToday: receitaHoje,
-          profitToday: receitaHoje - numero(faturamentoHoje._sum.costAtSale),
+          profitToday: receitaHoje - numero(faturamentoHoje._sum?.costAmount),
           stockValueCost: valor.custo,
           stockValueSale: valor.venda,
           lowStockCount: baixos.length,
           outOfStockCount: semEstoque,
           revenueMonth: receitaMes,
-          profitMonth: receitaMes - numero(mes._sum.costAtSale),
-          itemsSoldMonth: mes._sum.quantity ?? 0,
+          profitMonth: receitaMes - numero(mes._sum?.costAmount),
+          itemsSoldMonth: itensMes._sum.quantity ?? 0,
           entradas: movimentosDoPeriodo.filter((m) => m.type === "ENTRADA").reduce((s, m) => s + m.quantity, 0),
           saidas: movimentosDoPeriodo.filter((m) => m.type === "SAIDA").reduce((s, m) => s + m.quantity, 0)
         },
@@ -1598,11 +1660,11 @@ rotasDashboard.get(
         where: { saleDate: { gte: inicioDoDia(), lte: fimDoDia() }, ...naUnidade },
         select: {
           id: true,
+          code: true,
           customerName: true,
-          totalPrice: true,
-          quantity: true,
+          totalAmount: true,
           saleDate: true,
-          product: { select: { name: true } },
+          items: { select: { productName: true, quantity: true } },
           unit: { select: { name: true } }
         },
         orderBy: { saleDate: "desc" }
@@ -1623,10 +1685,10 @@ rotasDashboard.get(
             unitName: unidades.find((u) => u.id === b.unitId)?.name ?? null
           };
         }),
-        outOfStock: zerados.map((z8) => ({ ...z8.product, unitName: z8.unit.name })),
+        outOfStock: zerados.map((z11) => ({ ...z11.product, unitName: z11.unit.name })),
         soldToday: vendasHoje,
-        soldTodayCount: vendasHoje.reduce((s, v) => s + v.quantity, 0),
-        revenueToday: vendasHoje.reduce((s, v) => s + numero(v.totalPrice), 0),
+        soldTodayCount: vendasHoje.reduce((s, v) => s + v.items.reduce((n, i) => n + i.quantity, 0), 0),
+        revenueToday: vendasHoje.reduce((s, v) => s + numero(v.totalAmount), 0),
         stockValue: valor.venda,
         updatedAt: (/* @__PURE__ */ new Date()).toISOString()
       })
@@ -1638,7 +1700,7 @@ rotasDashboard.get(
 import { Router as Router5 } from "express";
 import { z as z4 } from "zod";
 var rotasMovimentacoes = Router5();
-rotasMovimentacoes.use(autenticar);
+rotasMovimentacoes.use(autenticar, exigir("estoque.ver"));
 var MOTIVOS = [
   "COMPRA",
   "VENDA",
@@ -1661,7 +1723,7 @@ var entradaSchema = z4.object({
 });
 rotasMovimentacoes.post(
   "/entrada",
-  gerenteOuAdmin,
+  exigir("estoque.movimentar"),
   rota(async (req, res) => {
     const dados = validar(entradaSchema, req.body);
     exigirAcessoNaUnidade(req.usuario, dados.unitId);
@@ -1701,7 +1763,7 @@ var saidaSchema = z4.object({
 });
 rotasMovimentacoes.post(
   "/saida",
-  gerenteOuAdmin,
+  exigir("estoque.movimentar"),
   rota(async (req, res) => {
     const dados = validar(saidaSchema, req.body);
     exigirAcessoNaUnidade(req.usuario, dados.unitId);
@@ -1732,7 +1794,7 @@ var transferenciaSchema = z4.object({
 });
 rotasMovimentacoes.post(
   "/transferencia",
-  gerenteOuAdmin,
+  exigir("estoque.movimentar"),
   rota(async (req, res) => {
     const dados = validar(transferenciaSchema, req.body);
     exigirAcessoNaUnidade(req.usuario, dados.originUnitId);
@@ -1810,7 +1872,7 @@ var retiradaSchema = z4.object({
 });
 rotasMovimentacoes.post(
   "/retirada",
-  gerenteOuAdmin,
+  exigir("estoque.movimentar"),
   rota(async (req, res) => {
     const dados = validar(retiradaSchema, req.body);
     exigirAcessoNaUnidade(req.usuario, dados.unitId);
@@ -1882,7 +1944,7 @@ var aprovarSchema = z4.object({
 });
 rotasMovimentacoes.post(
   "/retiradas/:id/aprovar",
-  gerenteOuAdmin,
+  exigir("estoque.movimentar"),
   rota(async (req, res) => {
     const { soldQuantity, notes } = validar(aprovarSchema, req.body);
     const resultado = await db.$transaction(async (tx) => {
@@ -1939,7 +2001,7 @@ rotasMovimentacoes.post(
 );
 rotasMovimentacoes.post(
   "/retiradas/:id/cancelar",
-  gerenteOuAdmin,
+  exigir("estoque.movimentar"),
   rota(async (req, res) => {
     const retirada = await db.stockWithdrawal.findUnique({ where: { id: req.params.id } });
     if (!retirada) throw naoEncontrado("Retirada");
@@ -2041,7 +2103,7 @@ var ajusteSchema = z4.object({
 });
 rotasMovimentacoes.post(
   "/ajuste",
-  gerenteOuAdmin,
+  exigir("estoque.movimentar"),
   rota(async (req, res) => {
     const dados = validar(ajusteSchema, req.body);
     exigirAcessoNaUnidade(req.usuario, dados.unitId);
@@ -2076,7 +2138,7 @@ rotasMovimentacoes.post(
 import { Router as Router6 } from "express";
 import { z as z5 } from "zod";
 var rotasProdutos = Router6();
-rotasProdutos.use(autenticar);
+rotasProdutos.use(autenticar, exigir("produtos.ver"));
 var COM_RELACOES = {
   category: true,
   supplier: true,
@@ -2229,8 +2291,8 @@ rotasProdutos.get(
         orderBy: { updatedAt: "desc" }
       }),
       db.sale.findMany({
-        where: { OR: [{ customerName: t }, { customerPhone: t }, { product: { name: t } }] },
-        include: { product: { select: { name: true } } },
+        where: { OR: [{ customerName: t }, { customerPhone: t }, { items: { some: { productName: t } } }] },
+        include: { items: { select: { productName: true } } },
         take: 5,
         orderBy: { saleDate: "desc" }
       }),
@@ -2303,7 +2365,21 @@ rotasProdutos.get(
           take: 20,
           include: { user: { select: { name: true } }, unit: { select: { name: true } } }
         },
-        sales: { orderBy: { saleDate: "desc" }, take: 10, include: { unit: { select: { name: true } } } }
+        // Últimas vendas deste produto, vindas dos itens.
+        saleItems: {
+          orderBy: { sale: { saleDate: "desc" } },
+          take: 10,
+          include: {
+            sale: {
+              select: {
+                code: true,
+                saleDate: true,
+                customerName: true,
+                unit: { select: { name: true } }
+              }
+            }
+          }
+        }
       }
     });
     if (!produto) throw naoEncontrado("Produto");
@@ -2325,6 +2401,7 @@ rotasProdutos.get(
 );
 rotasProdutos.post(
   "/",
+  exigir("produtos.editar"),
   rota(async (req, res) => {
     const { photos, quantity, unitId, ...dados } = validar(produtoSchema, req.body);
     const { novas } = separarFotos(photos ?? []);
@@ -2370,6 +2447,7 @@ rotasProdutos.post(
 );
 rotasProdutos.put(
   "/:id",
+  exigir("produtos.editar"),
   rota(async (req, res) => {
     const { photos, reason, quantity: _ignorada, unitId: _tambem, ...dados } = validar(
       alterarSchema,
@@ -2410,6 +2488,7 @@ rotasProdutos.put(
 );
 rotasProdutos.patch(
   "/:id/stock",
+  exigir("estoque.movimentar"),
   rota(async (req, res) => {
     const { quantity, reason, unitId } = validar(
       z5.object({
@@ -2460,7 +2539,7 @@ rotasProdutos.delete(
         usuarioNome: req.usuario?.nome
       });
     }
-    const vendas = await db.sale.count({ where: { productId: produto.id } });
+    const vendas = await db.saleItem.count({ where: { productId: produto.id } });
     if (vendas > 0) {
       await db.product.update({ where: { id: produto.id }, data: { status: "VENDIDO" } });
       await registrarLog({ acao: "ARCHIVE", entidade: "Product", id: produto.id, req });
@@ -2650,7 +2729,7 @@ var decimal = (v) => Number(v ?? 0).toFixed(2).replace(".", ",");
 
 // server/relatorios.ts
 var rotasRelatorios = Router7();
-rotasRelatorios.use(autenticar);
+rotasRelatorios.use(autenticar, exigir("relatorios"));
 var base = z6.object({
   format: z6.enum(["json", "pdf", "xlsx", "csv"]).default("json"),
   startDate: z6.coerce.date().optional(),
@@ -2666,7 +2745,8 @@ var PAGAMENTO_LABEL = {
   DINHEIRO: "Dinheiro",
   DEBITO: "D\xE9bito",
   CREDITO: "Cr\xE9dito",
-  TRANSFERENCIA: "Transfer\xEAncia"
+  TRANSFERENCIA: "Transfer\xEAncia",
+  OUTRO: "Outro"
 };
 var periodo = (q) => {
   if (!q.startDate && !q.endDate) return "Per\xEDodo: todos os registros";
@@ -2769,31 +2849,50 @@ rotasRelatorios.get(
   "/sales",
   rota(async (req, res) => {
     const q = validar(base, semVazios(req.query));
+    const unidade = unidadePermitida(req.usuario, q.unitId);
     const quando = intervalo(q.startDate, q.endDate);
-    const vendas = await db.sale.findMany({
+    const itens = await db.saleItem.findMany({
       where: {
-        ...quando ? { saleDate: quando } : {},
-        ...q.paymentMethod ? { paymentMethod: q.paymentMethod } : {},
+        sale: {
+          status: "FINALIZADA",
+          ...quando ? { saleDate: quando } : {},
+          ...q.paymentMethod ? { paymentMethod: q.paymentMethod } : {},
+          ...unidade ? { unitId: unidade } : {}
+        },
         ...q.categoryId ? { product: { categoryId: q.categoryId } } : {},
         ...q.supplierId ? { product: { supplierId: q.supplierId } } : {}
       },
-      include: { product: { include: { category: true } }, user: { select: { name: true } } },
-      orderBy: { saleDate: "desc" }
+      include: {
+        product: { include: { category: true } },
+        sale: {
+          include: {
+            seller: { select: { name: true } },
+            cashier: { select: { name: true } },
+            unit: { select: { name: true } }
+          }
+        }
+      },
+      orderBy: { sale: { saleDate: "desc" } }
     });
-    const linhas = vendas.map((v) => {
-      const total = numero(v.totalPrice);
+    const linhas = itens.map((i) => {
+      const total = numero(i.unitPrice) * i.quantity;
       return {
-        date: dataHoraBR(v.saleDate),
-        customer: v.customerName ?? "\u2014",
-        phone: v.customerPhone ?? "\u2014",
-        product: v.product.name,
-        category: v.product.category.name,
-        quantity: v.quantity,
-        unitPrice: numero(v.unitPrice),
+        code: i.sale.code,
+        date: dataHoraBR(i.sale.saleDate),
+        unit: i.sale.unit.name,
+        customer: i.sale.customerName ?? "\u2014",
+        phone: i.sale.customerPhone ?? "\u2014",
+        product: i.productName ?? i.product.name,
+        category: i.product.category.name,
+        imei: i.imei ?? i.serialNumber ?? "\u2014",
+        quantity: i.quantity,
+        unitPrice: numero(i.unitPrice),
         total,
-        profit: total - numero(v.costAtSale) * v.quantity,
-        payment: PAGAMENTO_LABEL[v.paymentMethod] ?? v.paymentMethod,
-        user: v.user?.name ?? "\u2014"
+        profit: total - numero(i.costPrice) * i.quantity,
+        payment: PAGAMENTO_LABEL[i.sale.paymentMethod] ?? i.sale.paymentMethod,
+        installments: i.sale.installments,
+        seller: i.sale.seller?.name ?? "\u2014",
+        cashier: i.sale.cashier?.name ?? "\u2014"
       };
     });
     const faturamento = linhas.reduce((s, l) => s + l.total, 0);
@@ -2801,17 +2900,20 @@ rotasRelatorios.get(
       title: "Relat\xF3rio de Vendas",
       subtitle: periodo(q),
       columns: [
+        { header: "Venda", key: "code", width: 10 },
         { header: "Data", key: "date", width: 14 },
-        { header: "Cliente", key: "customer", width: 20 },
-        { header: "Telefone", key: "phone", width: 13 },
-        { header: "Produto", key: "product", width: 24 },
-        { header: "Categoria", key: "category", width: 13 },
-        qtd("Qtd", "quantity", 6),
+        { header: "Unidade", key: "unit", width: 11 },
+        { header: "Cliente", key: "customer", width: 18 },
+        { header: "Produto", key: "product", width: 22 },
+        { header: "Categoria", key: "category", width: 12 },
+        { header: "IMEI / s\xE9rie", key: "imei", width: 15 },
+        qtd("Qtd", "quantity", 5),
         money("Valor unit.", "unitPrice", 11),
         money("Total", "total", 11),
         money("Lucro", "profit", 11),
-        { header: "Pagamento", key: "payment", width: 13 },
-        { header: "Vendedor", key: "user", width: 14 }
+        { header: "Pagamento", key: "payment", width: 12 },
+        { header: "Vendedor", key: "seller", width: 13 },
+        { header: "Caixa", key: "cashier", width: 13 }
       ],
       rows: linhas,
       summary: [
@@ -2839,21 +2941,27 @@ rotasRelatorios.get(
           product: { select: { categoryId: true, costPrice: true, salePrice: true, wholesalePrice: true } }
         }
       }),
-      db.sale.findMany({
-        where: { ...quando ? { saleDate: quando } : {}, ...unidade ? { unitId: unidade } : {} },
+      db.saleItem.findMany({
+        where: {
+          sale: {
+            status: "FINALIZADA",
+            ...quando ? { saleDate: quando } : {},
+            ...unidade ? { unitId: unidade } : {}
+          }
+        },
         select: {
           quantity: true,
-          totalPrice: true,
-          costAtSale: true,
-          product: { select: { categoryId: true } }
+          unitPrice: true,
+          costPrice: true,
+          product: { select: { categoryId: true, supplierId: true } }
         }
       })
     ]);
     const linhas = categorias.map((c) => {
       const doEstoque = linhasDeEstoque.filter((l) => l.product.categoryId === c.id);
       const daCategoria = vendas.filter((v) => v.product.categoryId === c.id);
-      const faturamento = daCategoria.reduce((s, v) => s + numero(v.totalPrice), 0);
-      const custo = daCategoria.reduce((s, v) => s + numero(v.costAtSale) * v.quantity, 0);
+      const faturamento = daCategoria.reduce((s, v) => s + numero(v.unitPrice) * v.quantity, 0);
+      const custo = daCategoria.reduce((s, v) => s + numero(v.costPrice) * v.quantity, 0);
       return {
         category: c.name,
         products: doEstoque.length,
@@ -2899,21 +3007,27 @@ rotasRelatorios.get(
         where: unidade ? { unitId: unidade } : {},
         select: { quantity: true, product: { select: { supplierId: true, costPrice: true } } }
       }),
-      db.sale.findMany({
-        where: { ...quando ? { saleDate: quando } : {}, ...unidade ? { unitId: unidade } : {} },
+      db.saleItem.findMany({
+        where: {
+          sale: {
+            status: "FINALIZADA",
+            ...quando ? { saleDate: quando } : {},
+            ...unidade ? { unitId: unidade } : {}
+          }
+        },
         select: {
           quantity: true,
-          totalPrice: true,
-          costAtSale: true,
-          product: { select: { supplierId: true } }
+          unitPrice: true,
+          costPrice: true,
+          product: { select: { categoryId: true, supplierId: true } }
         }
       })
     ]);
     const linhas = fornecedores.map((f) => {
       const doEstoque = linhasDeEstoque.filter((l) => l.product.supplierId === f.id);
       const doFornecedor = vendas.filter((v) => v.product.supplierId === f.id);
-      const faturamento = doFornecedor.reduce((s, v) => s + numero(v.totalPrice), 0);
-      const custo = doFornecedor.reduce((s, v) => s + numero(v.costAtSale) * v.quantity, 0);
+      const faturamento = doFornecedor.reduce((s, v) => s + numero(v.unitPrice) * v.quantity, 0);
+      const custo = doFornecedor.reduce((s, v) => s + numero(v.costPrice) * v.quantity, 0);
       return {
         supplier: f.name,
         active: f.active ? "Sim" : "N\xE3o",
@@ -2953,10 +3067,14 @@ rotasRelatorios.get(
     const q = validar(base.extend({ groupBy: z6.enum(["day", "month"]).default("day") }), req.query);
     const quando = intervalo(q.startDate, q.endDate);
     const [vendas, movimentos] = await Promise.all([
-      db.sale.findMany({
-        where: quando ? { saleDate: quando } : {},
-        select: { saleDate: true, quantity: true, totalPrice: true, costAtSale: true },
-        orderBy: { saleDate: "asc" }
+      db.saleItem.findMany({
+        where: { sale: { status: "FINALIZADA", ...quando ? { saleDate: quando } : {} } },
+        select: {
+          quantity: true,
+          unitPrice: true,
+          costPrice: true,
+          sale: { select: { saleDate: true } }
+        }
       }),
       db.stockMovement.findMany({
         where: quando ? { createdAt: quando } : {},
@@ -2972,11 +3090,11 @@ rotasRelatorios.get(
       return mapa.get(k);
     };
     for (const v of vendas) {
-      const b = balde(chave(v.saleDate));
-      b.sales += 1;
+      const b = balde(chave(v.sale.saleDate));
+      const total = numero(v.unitPrice) * v.quantity;
       b.quantity += v.quantity;
-      b.revenue += numero(v.totalPrice);
-      b.profit += numero(v.totalPrice) - numero(v.costAtSale) * v.quantity;
+      b.revenue += total;
+      b.profit += total - numero(v.costPrice) * v.quantity;
     }
     for (const m of movimentos) {
       const b = balde(chave(m.createdAt));
@@ -3083,7 +3201,7 @@ import { Router as Router8 } from "express";
 import multer from "multer";
 import { Readable } from "stream";
 var rotasSistema = Router8();
-rotasSistema.use(autenticar);
+rotasSistema.use(autenticar, exigir("configuracoes"));
 rotasSistema.get(
   "/sheets/status",
   rota(async (_req, res) => {
@@ -3396,97 +3514,814 @@ rotasSistema.post(
   })
 );
 
-// server/vendas.ts
+// server/caixa.ts
+import { Router as Router10 } from "express";
+import { z as z8 } from "zod";
+
+// server/vendas-service.ts
 import { Prisma as Prisma3 } from "@prisma/client";
+
+// server/notificacoes.ts
 import { Router as Router9 } from "express";
 import { z as z7 } from "zod";
-var rotasVendas = Router9();
-rotasVendas.use(autenticar);
-var COM_RELACOES2 = {
-  product: { include: { category: true, supplier: true } },
-  customer: true,
-  user: { select: { id: true, name: true } },
-  unit: { select: { id: true, name: true } }
+async function notificar(aviso) {
+  try {
+    await db.notification.create({ data: aviso });
+  } catch (erro) {
+    console.error("[notifica\xE7\xE3o]", erro.message);
+  }
+}
+async function notificarPerfil(papel, aviso) {
+  try {
+    const pessoas = await db.user.findMany({
+      where: { role: papel, active: true },
+      select: { id: true }
+    });
+    if (!pessoas.length) return;
+    await db.notification.createMany({
+      data: pessoas.map((p) => ({ ...aviso, userId: p.id }))
+    });
+  } catch (erro) {
+    console.error("[notifica\xE7\xE3o]", erro.message);
+  }
+}
+var rotasNotificacoes = Router9();
+rotasNotificacoes.use(autenticar);
+rotasNotificacoes.get(
+  "/",
+  rota(async (req, res) => {
+    const q = validar(
+      z7.object({
+        page: z7.coerce.number().int().min(1).optional(),
+        pageSize: z7.coerce.number().int().min(1).max(100).optional(),
+        naoLidas: z7.enum(["true", "false"]).optional()
+      }),
+      semVazios(req.query)
+    );
+    const p = paginacao(q, 20);
+    const where = {
+      userId: req.usuario.id,
+      ...q.naoLidas === "true" ? { read: false } : {}
+    };
+    const [lista, total, naoLidas] = await Promise.all([
+      db.notification.findMany({ where, skip: p.skip, take: p.take, orderBy: { createdAt: "desc" } }),
+      db.notification.count({ where }),
+      db.notification.count({ where: { userId: req.usuario.id, read: false } })
+    ]);
+    res.json(limpar({ ...paginado(lista, total, p), unread: naoLidas }));
+  })
+);
+rotasNotificacoes.post(
+  "/ler",
+  rota(async (req, res) => {
+    const { id } = validar(z7.object({ id: z7.string().uuid().optional() }), req.body ?? {});
+    await db.notification.updateMany({
+      where: { userId: req.usuario.id, ...id ? { id } : { read: false } },
+      data: { read: true }
+    });
+    res.json({ message: "Avisos marcados como lidos" });
+  })
+);
+
+// server/vendas-service.ts
+async function proximoCodigo(nome, prefixo, tx) {
+  const cliente3 = tx ?? db;
+  const contador = await cliente3.sequence.upsert({
+    where: { name: nome },
+    update: { value: { increment: 1 } },
+    create: { name: nome, value: 1 }
+  });
+  return `${prefixo}-${String(contador.value).padStart(6, "0")}`;
+}
+async function conferirIdentificadores(itens, tx) {
+  const cliente3 = tx ?? db;
+  const identificadores = itens.flatMap(
+    (i) => [i.imei?.trim(), i.serialNumber?.trim()].filter((v) => Boolean(v))
+  );
+  if (!identificadores.length) return;
+  const jaVendido = await cliente3.saleItem.findFirst({
+    where: {
+      sale: { status: "FINALIZADA" },
+      OR: [{ imei: { in: identificadores } }, { serialNumber: { in: identificadores } }]
+    },
+    include: { sale: { select: { code: true, saleDate: true } } }
+  });
+  if (jaVendido) {
+    const qual = jaVendido.imei ?? jaVendido.serialNumber;
+    throw new AppError(
+      `Este produto j\xE1 foi vendido ou est\xE1 sendo finalizado em outra venda (${qual} \u2014 venda ${jaVendido.sale.code}).`,
+      409
+    );
+  }
+}
+async function registrarVenda(dados) {
+  if (!dados.itens.length) throw new AppError("Inclua ao menos um produto na venda");
+  const resultado = await db.$transaction(async (tx) => {
+    const unidade = await tx.unit.findUnique({ where: { id: dados.unitId } });
+    if (!unidade) throw naoEncontrado("Unidade");
+    await conferirIdentificadores(dados.itens, tx);
+    const produtos = /* @__PURE__ */ new Map();
+    for (const item of dados.itens) {
+      const produto = produtos.get(item.productId) ?? await tx.product.findUnique({ where: { id: item.productId } });
+      if (!produto) throw naoEncontrado("Produto");
+      produtos.set(item.productId, produto);
+      const livre = await disponivel(item.productId, dados.unitId, tx);
+      if (livre < item.quantity) {
+        throw new AppError(
+          `Estoque insuficiente na ${unidade.name} para "${produto.name}". Dispon\xEDvel: ${livre} unidade(s).`
+        );
+      }
+    }
+    let clienteId = dados.customerId ?? null;
+    if (!clienteId) {
+      const existente = (dados.customerPhone ? await tx.customer.findFirst({ where: { phone: dados.customerPhone } }) : null) ?? (dados.customerDocument ? await tx.customer.findFirst({ where: { document: dados.customerDocument } }) : null) ?? await tx.customer.findFirst({
+        where: { name: { equals: dados.customerName, mode: "insensitive" } }
+      });
+      clienteId = existente?.id ?? (await tx.customer.create({
+        data: {
+          name: dados.customerName,
+          phone: dados.customerPhone ?? null,
+          document: dados.customerDocument ?? null
+        }
+      })).id;
+    }
+    const itensComCusto = dados.itens.map((item) => {
+      const produto = produtos.get(item.productId);
+      return {
+        ...item,
+        productName: produto.name,
+        costPrice: new Prisma3.Decimal(produto.costPrice)
+      };
+    });
+    const total = itensComCusto.reduce(
+      (soma, i) => soma.add(new Prisma3.Decimal(i.unitPrice).mul(i.quantity)),
+      new Prisma3.Decimal(0)
+    );
+    const custo = itensComCusto.reduce(
+      (soma, i) => soma.add(i.costPrice.mul(i.quantity)),
+      new Prisma3.Decimal(0)
+    );
+    const turno = dados.cashierId ? await tx.cashRegister.findFirst({
+      where: { cashierId: dados.cashierId, status: "ABERTO" },
+      orderBy: { openedAt: "desc" }
+    }) : null;
+    const venda = await tx.sale.create({
+      data: {
+        code: await proximoCodigo("venda", "VD", tx),
+        totalAmount: total,
+        costAmount: custo,
+        paymentMethod: dados.paymentMethod,
+        installments: dados.installments ?? 1,
+        saleDate: dados.saleDate ?? /* @__PURE__ */ new Date(),
+        notes: dados.notes ?? null,
+        unitId: dados.unitId,
+        customerId: clienteId,
+        customerName: dados.customerName,
+        customerPhone: dados.customerPhone ?? null,
+        customerDocument: dados.customerDocument ?? null,
+        sellerId: dados.sellerId ?? null,
+        cashierId: dados.cashierId ?? null,
+        cashRegisterId: turno?.id ?? null,
+        preSaleId: dados.preSaleId ?? null,
+        items: {
+          create: itensComCusto.map((i) => ({
+            productId: i.productId,
+            productName: i.productName,
+            quantity: i.quantity,
+            unitPrice: new Prisma3.Decimal(i.unitPrice),
+            costPrice: i.costPrice,
+            imei: i.imei?.trim() || null,
+            serialNumber: i.serialNumber?.trim() || null
+          }))
+        }
+      },
+      include: {
+        items: { include: { product: { select: { name: true } } } },
+        unit: { select: { name: true } },
+        seller: { select: { id: true, name: true } },
+        cashier: { select: { id: true, name: true } }
+      }
+    });
+    for (const item of itensComCusto) {
+      await movimentar({
+        produtoId: item.productId,
+        produtoNome: item.productName,
+        unidadeId: dados.unitId,
+        tipo: "SAIDA",
+        motivo: "VENDA",
+        quantidade: item.quantity,
+        observacao: `Venda ${venda.code} para ${dados.customerName}` + (item.imei ? ` \xB7 IMEI ${item.imei}` : "") + (item.serialNumber ? ` \xB7 s\xE9rie ${item.serialNumber}` : ""),
+        vendaId: venda.id,
+        usuarioId: dados.cashierId ?? dados.sellerId,
+        usuarioNome: dados.cashierName,
+        tx
+      });
+    }
+    return venda;
+  });
+  if (dados.sellerId && dados.sellerId !== dados.cashierId) {
+    await notificar({
+      userId: dados.sellerId,
+      title: `Venda ${resultado.code} finalizada`,
+      message: `${dados.customerName} \xB7 ${resultado.items.length} item(ns) \xB7 R$ ${Number(resultado.totalAmount).toFixed(2)}`,
+      link: "/minhas-vendas"
+    });
+  }
+  return resultado;
+}
+
+// server/caixa.ts
+var rotasCaixa = Router10();
+rotasCaixa.use(autenticar);
+var PAGAMENTO_LABEL2 = {
+  PIX: "Pix",
+  DINHEIRO: "Dinheiro",
+  DEBITO: "D\xE9bito",
+  CREDITO: "Cr\xE9dito",
+  TRANSFERENCIA: "Transfer\xEAncia",
+  OUTRO: "Outro"
 };
-var PAGAMENTOS = ["PIX", "DINHEIRO", "DEBITO", "CREDITO", "TRANSFERENCIA"];
-var vendaSchema = z7.object({
-  productId: z7.string().uuid("Selecione o produto"),
-  /** Obrigatória: é o que diz de qual loja o produto saiu. */
-  unitId: z7.string().uuid("Selecione a unidade da venda"),
-  customerName: z7.string().trim().min(2, "Informe o nome do cliente").max(180),
-  customerPhone: z7.string().trim().max(30).optional().nullable().transform((v) => v || null),
-  customerId: z7.string().uuid().optional().nullable(),
-  quantity: z7.coerce.number().int().min(1, "A quantidade deve ser no m\xEDnimo 1"),
-  unitPrice: z7.coerce.number().min(0, "Informe o valor vendido"),
-  paymentMethod: z7.enum(PAGAMENTOS, { errorMap: () => ({ message: "Selecione a forma de pagamento" }) }),
-  saleDate: z7.coerce.date().optional(),
-  notes: z7.string().trim().max(1e3).optional().nullable()
+async function resumoDoTurno(where) {
+  const [vendas, porPagamento, itens] = await Promise.all([
+    db.sale.aggregate({ where, _sum: { totalAmount: true, costAmount: true }, _count: true }),
+    db.sale.groupBy({ by: ["paymentMethod"], where, _sum: { totalAmount: true }, _count: true }),
+    db.saleItem.aggregate({ where: { sale: where }, _sum: { quantity: true } })
+  ]);
+  const total = numero(vendas._sum.totalAmount);
+  return {
+    quantidadeDeVendas: vendas._count,
+    itensVendidos: itens._sum.quantity ?? 0,
+    total,
+    lucro: total - numero(vendas._sum.costAmount),
+    ticketMedio: vendas._count ? total / vendas._count : 0,
+    porPagamento: Object.keys(PAGAMENTO_LABEL2).map((forma) => {
+      const linha = porPagamento.find((p) => p.paymentMethod === forma);
+      return {
+        forma,
+        rotulo: PAGAMENTO_LABEL2[forma],
+        quantidade: linha?._count ?? 0,
+        total: numero(linha?._sum.totalAmount)
+      };
+    })
+  };
+}
+rotasCaixa.get(
+  "/atual",
+  exigir("pdv"),
+  rota(async (req, res) => {
+    const turno = await db.cashRegister.findFirst({
+      where: { cashierId: req.usuario.id, status: "ABERTO" },
+      include: { unit: { select: { id: true, name: true } } },
+      orderBy: { openedAt: "desc" }
+    });
+    if (!turno) {
+      res.json({ aberto: false, turno: null, resumo: null });
+      return;
+    }
+    const resumo = await resumoDoTurno({
+      cashRegisterId: turno.id,
+      status: "FINALIZADA"
+    });
+    res.json(limpar({ aberto: true, turno, resumo }));
+  })
+);
+rotasCaixa.post(
+  "/abrir",
+  exigir("pdv"),
+  rota(async (req, res) => {
+    const { unitId, notes } = validar(
+      z8.object({
+        unitId: z8.string().uuid().optional().nullable(),
+        notes: z8.string().trim().max(300).optional().nullable()
+      }),
+      req.body ?? {}
+    );
+    const aberto = await db.cashRegister.findFirst({
+      where: { cashierId: req.usuario.id, status: "ABERTO" }
+    });
+    if (aberto) throw new AppError("Voc\xEA j\xE1 tem um caixa aberto. Feche-o antes de abrir outro.");
+    const turno = await db.cashRegister.create({
+      data: {
+        code: await proximoCodigo("caixa", "CX"),
+        cashierId: req.usuario.id,
+        unitId: unitId ?? req.usuario.unidadeId ?? null,
+        notes: notes ?? null
+      },
+      include: { unit: { select: { name: true } } }
+    });
+    await registrarLog({ acao: "ABRIR_CAIXA", entidade: "CashRegister", id: turno.id, req });
+    res.status(201).json(limpar({ turno, message: `Caixa ${turno.code} aberto.` }));
+  })
+);
+rotasCaixa.post(
+  "/fechar",
+  exigir("caixa.fechar"),
+  rota(async (req, res) => {
+    const { notes } = validar(
+      z8.object({ notes: z8.string().trim().max(500).optional().nullable() }),
+      req.body ?? {}
+    );
+    const turno = await db.cashRegister.findFirst({
+      where: { cashierId: req.usuario.id, status: "ABERTO" },
+      orderBy: { openedAt: "desc" }
+    });
+    if (!turno) throw new AppError("Voc\xEA n\xE3o tem caixa aberto.");
+    const resumo = await resumoDoTurno({ cashRegisterId: turno.id, status: "FINALIZADA" });
+    const fechado = await db.cashRegister.update({
+      where: { id: turno.id },
+      data: {
+        status: "FECHADO",
+        closedAt: /* @__PURE__ */ new Date(),
+        notes: notes ?? turno.notes,
+        // Congela o resumo: o fechamento é o retrato daquele momento.
+        summary: JSON.parse(JSON.stringify(resumo))
+      },
+      include: { unit: { select: { name: true } }, cashier: { select: { name: true } } }
+    });
+    await registrarLog({
+      acao: "FECHAR_CAIXA",
+      entidade: "CashRegister",
+      id: turno.id,
+      alteracoes: { total: resumo.total, vendas: resumo.quantidadeDeVendas },
+      req
+    });
+    res.json(
+      limpar({
+        turno: fechado,
+        resumo,
+        message: `Caixa ${turno.code} fechado \xB7 ${resumo.quantidadeDeVendas} venda(s) \xB7 ${reais(resumo.total)}`
+      })
+    );
+  })
+);
+rotasCaixa.get(
+  "/",
+  exigir("pdv"),
+  rota(async (req, res) => {
+    const q = validar(
+      z8.object({
+        cashierId: z8.string().uuid().optional(),
+        status: z8.enum(["ABERTO", "FECHADO"]).optional()
+      }),
+      semVazios(req.query)
+    );
+    const de = podeFazer(req.usuario?.papel, "caixa.verTodos") ? q.cashierId : req.usuario.id;
+    const turnos = await db.cashRegister.findMany({
+      where: { ...de ? { cashierId: de } : {}, ...q.status ? { status: q.status } : {} },
+      include: { cashier: { select: { name: true } }, unit: { select: { name: true } } },
+      orderBy: { openedAt: "desc" },
+      take: 60
+    });
+    res.json(limpar(turnos));
+  })
+);
+rotasCaixa.get(
+  "/:id/relatorio",
+  exigir("pdv"),
+  rota(async (req, res) => {
+    const { format } = validar(
+      z8.object({ format: z8.enum(["json", "pdf", "xlsx", "csv"]).default("json") }),
+      semVazios(req.query)
+    );
+    const turno = await db.cashRegister.findUnique({
+      where: { id: req.params.id },
+      include: { cashier: { select: { id: true, name: true } }, unit: { select: { name: true } } }
+    });
+    if (!turno) throw naoEncontrado("Caixa");
+    if (!podeFazer(req.usuario?.papel, "caixa.verTodos") && turno.cashierId !== req.usuario.id) {
+      throw new AppError("Este fechamento \xE9 de outro caixa", 403);
+    }
+    const where = { cashRegisterId: turno.id, status: "FINALIZADA" };
+    const [vendas, resumo] = await Promise.all([
+      db.sale.findMany({
+        where,
+        include: {
+          items: true,
+          seller: { select: { name: true } },
+          unit: { select: { name: true } }
+        },
+        orderBy: { saleDate: "asc" }
+      }),
+      resumoDoTurno(where)
+    ]);
+    const linhas = vendas.flatMap(
+      (v) => v.items.map((i) => ({
+        code: v.code,
+        data: dataHoraBR(v.saleDate),
+        vendedor: v.seller?.name ?? "\u2014",
+        cliente: v.customerName ?? "\u2014",
+        produto: i.productName ?? "\u2014",
+        imei: i.imei ?? "\u2014",
+        serie: i.serialNumber ?? "\u2014",
+        quantidade: i.quantity,
+        valor: numero(i.unitPrice) * i.quantity,
+        pagamento: PAGAMENTO_LABEL2[v.paymentMethod],
+        parcelas: v.installments,
+        unidade: v.unit.name
+      }))
+    );
+    if (format === "json") {
+      res.json(limpar({ turno, resumo, vendas: linhas }));
+      return;
+    }
+    await exportar(res, format, {
+      title: `Fechamento de Caixa ${turno.code}`,
+      subtitle: `Caixa: ${turno.cashier.name} \xB7 Aberto em ${dataHoraBR(turno.openedAt)}` + (turno.closedAt ? ` \xB7 Fechado em ${dataHoraBR(turno.closedAt)}` : " \xB7 EM ABERTO"),
+      columns: [
+        { header: "Venda", key: "code", width: 11 },
+        { header: "Data/hora", key: "data", width: 15 },
+        { header: "Vendedor", key: "vendedor", width: 15 },
+        { header: "Cliente", key: "cliente", width: 18 },
+        { header: "Produto", key: "produto", width: 24 },
+        { header: "IMEI", key: "imei", width: 16 },
+        { header: "N\xBA s\xE9rie", key: "serie", width: 14 },
+        { header: "Qtd", key: "quantidade", width: 5, align: "right" },
+        { header: "Valor", key: "valor", width: 12, align: "right", format: decimal },
+        { header: "Pagamento", key: "pagamento", width: 12 },
+        { header: "Parc.", key: "parcelas", width: 6, align: "right" },
+        { header: "Unidade", key: "unidade", width: 12 }
+      ],
+      rows: linhas,
+      summary: [
+        { label: "Vendas", value: String(resumo.quantidadeDeVendas) },
+        { label: "Produtos vendidos", value: String(resumo.itensVendidos) },
+        ...resumo.porPagamento.filter((p) => p.quantidade > 0).map((p) => ({ label: `Total em ${p.rotulo}`, value: reais(p.total) })),
+        { label: "TOTAL GERAL", value: reais(resumo.total) },
+        { label: "Ticket m\xE9dio", value: reais(resumo.ticketMedio) },
+        { label: "Lucro estimado", value: reais(resumo.lucro) }
+      ]
+    });
+  })
+);
+
+// server/prevendas.ts
+import { Prisma as Prisma4 } from "@prisma/client";
+import { Router as Router11 } from "express";
+import { z as z9 } from "zod";
+var rotasPreVendas = Router11();
+rotasPreVendas.use(autenticar);
+var PAGAMENTOS = ["PIX", "DINHEIRO", "DEBITO", "CREDITO", "TRANSFERENCIA", "OUTRO"];
+var COM_TUDO = {
+  items: { include: { product: { select: { id: true, name: true, model: true, imei: true } } } },
+  seller: { select: { id: true, name: true } },
+  cashier: { select: { id: true, name: true } },
+  unit: { select: { id: true, name: true } },
+  sale: { select: { id: true, code: true } }
+};
+var itemSchema = z9.object({
+  productId: z9.string().uuid("Selecione o produto"),
+  quantity: z9.coerce.number().int().min(1, "Quantidade m\xEDnima: 1"),
+  unitPrice: z9.coerce.number().min(0, "Informe o valor"),
+  imei: z9.string().trim().max(40).optional().nullable(),
+  serialNumber: z9.string().trim().max(60).optional().nullable()
 });
-var filtrosSchema2 = z7.object({
-  page: z7.coerce.number().int().min(1).optional(),
-  pageSize: z7.coerce.number().int().min(1).max(200).optional(),
-  search: z7.string().trim().optional(),
-  productId: z7.string().uuid().optional(),
-  categoryId: z7.string().uuid().optional(),
-  supplierId: z7.string().uuid().optional(),
-  paymentMethod: z7.enum(PAGAMENTOS).optional(),
-  unitId: z7.string().uuid().optional(),
-  startDate: z7.coerce.date().optional(),
-  endDate: z7.coerce.date().optional(),
-  sortBy: z7.string().optional(),
-  sortOrder: z7.enum(["asc", "desc"]).optional()
+var preVendaSchema = z9.object({
+  customerName: z9.string().trim().min(2, "Informe o nome do cliente").max(180),
+  customerPhone: z9.string().trim().max(30).optional().nullable(),
+  customerDocument: z9.string().trim().max(30).optional().nullable(),
+  customerId: z9.string().uuid().optional().nullable(),
+  unitId: z9.string().uuid().optional().nullable(),
+  paymentMethod: z9.enum(PAGAMENTOS).optional().nullable(),
+  installments: z9.coerce.number().int().min(1).max(24).default(1),
+  notes: z9.string().trim().max(1e3).optional().nullable(),
+  items: z9.array(itemSchema).min(1, "Inclua ao menos um produto")
 });
-function filtrarVendas(q) {
-  const cond = [];
+var podeVerTodas = (req) => podeFazer(req.usuario?.papel, "prevenda.verTodas");
+rotasPreVendas.get(
+  "/",
+  rota(async (req, res) => {
+    const q = validar(
+      z9.object({
+        page: z9.coerce.number().int().min(1).optional(),
+        pageSize: z9.coerce.number().int().min(1).max(100).optional(),
+        status: z9.enum(["AGUARDANDO_CAIXA", "EM_ATENDIMENTO", "FINALIZADA", "CANCELADA", "EXPIRADA"]).optional(),
+        sellerId: z9.string().uuid().optional(),
+        search: z9.string().trim().optional(),
+        startDate: z9.coerce.date().optional(),
+        endDate: z9.coerce.date().optional()
+      }),
+      semVazios(req.query)
+    );
+    const p = paginacao(q);
+    const periodo2 = intervalo(q.startDate, q.endDate);
+    const where = {
+      // Um vendedor nunca vê a pré-venda de outro.
+      ...podeVerTodas(req) ? q.sellerId ? { sellerId: q.sellerId } : {} : { sellerId: req.usuario.id },
+      ...q.status ? { status: q.status } : {},
+      ...periodo2 ? { createdAt: periodo2 } : {},
+      ...q.search ? {
+        OR: [
+          { code: { contains: q.search, mode: "insensitive" } },
+          { customerName: { contains: q.search, mode: "insensitive" } },
+          { customerPhone: { contains: q.search, mode: "insensitive" } }
+        ]
+      } : {}
+    };
+    const [lista, total, pendentes] = await Promise.all([
+      db.preSale.findMany({
+        where,
+        include: COM_TUDO,
+        skip: p.skip,
+        take: p.take,
+        // Aguardando primeiro: são as que pedem ação do caixa.
+        orderBy: [{ status: "asc" }, { createdAt: "desc" }]
+      }),
+      db.preSale.count({ where }),
+      db.preSale.count({ where: { ...where, status: "AGUARDANDO_CAIXA" } })
+    ]);
+    res.json(limpar({ ...paginado(lista, total, p), pendentes }));
+  })
+);
+rotasPreVendas.get(
+  "/:id",
+  rota(async (req, res) => {
+    const preVenda = await db.preSale.findUnique({ where: { id: req.params.id }, include: COM_TUDO });
+    if (!preVenda) throw naoEncontrado("Pr\xE9-venda");
+    if (!podeVerTodas(req) && preVenda.sellerId !== req.usuario.id) {
+      throw new AppError("Esta pr\xE9-venda \xE9 de outro vendedor", 403);
+    }
+    const itens = await Promise.all(
+      preVenda.items.map(async (item) => ({
+        ...item,
+        disponivel: preVenda.unitId ? await disponivel(item.productId, preVenda.unitId) : null
+      }))
+    );
+    res.json(limpar({ ...preVenda, items: itens }));
+  })
+);
+rotasPreVendas.post(
+  "/",
+  exigir("prevenda.criar"),
+  rota(async (req, res) => {
+    const dados = validar(preVendaSchema, req.body);
+    const produtos = await db.product.findMany({
+      where: { id: { in: dados.items.map((i) => i.productId) } },
+      select: { id: true, name: true }
+    });
+    if (produtos.length !== new Set(dados.items.map((i) => i.productId)).size) {
+      throw naoEncontrado("Produto");
+    }
+    const total = dados.items.reduce((s, i) => s + i.unitPrice * i.quantity, 0);
+    const preVenda = await db.preSale.create({
+      data: {
+        code: await proximoCodigo("prevenda", "PV"),
+        sellerId: req.usuario.id,
+        customerId: dados.customerId ?? null,
+        customerName: dados.customerName,
+        customerPhone: dados.customerPhone ?? null,
+        customerDocument: dados.customerDocument ?? null,
+        unitId: dados.unitId ?? req.usuario.unidadeId ?? null,
+        paymentMethod: dados.paymentMethod ?? null,
+        installments: dados.installments,
+        notes: dados.notes ?? null,
+        totalAmount: new Prisma4.Decimal(total),
+        // Sem atendimento no mesmo dia, some da fila do caixa.
+        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1e3),
+        items: {
+          create: dados.items.map((i) => ({
+            productId: i.productId,
+            productName: produtos.find((p) => p.id === i.productId)?.name,
+            quantity: i.quantity,
+            unitPrice: new Prisma4.Decimal(i.unitPrice),
+            imei: i.imei?.trim() || null,
+            serialNumber: i.serialNumber?.trim() || null
+          }))
+        }
+      },
+      include: COM_TUDO
+    });
+    await notificarPerfil("CAIXA", {
+      title: `Nova pr\xE9-venda ${preVenda.code}`,
+      message: `${preVenda.customerName} \xB7 ${dados.items.length} item(ns) \xB7 R$ ${total.toFixed(2)} \xB7 por ${req.usuario.nome}`,
+      link: "/caixa"
+    });
+    await registrarLog({
+      acao: "CRIAR_PREVENDA",
+      entidade: "PreSale",
+      id: preVenda.id,
+      alteracoes: { codigo: preVenda.code, total, itens: dados.items.length },
+      req
+    });
+    res.status(201).json(limpar({ ...preVenda, message: `Pr\xE9-venda ${preVenda.code} enviada ao caixa.` }));
+  })
+);
+rotasPreVendas.post(
+  "/:id/atender",
+  exigir("venda.finalizar"),
+  rota(async (req, res) => {
+    const preVenda = await db.preSale.findUnique({ where: { id: req.params.id } });
+    if (!preVenda) throw naoEncontrado("Pr\xE9-venda");
+    if (preVenda.status === "FINALIZADA") throw new AppError("Esta pr\xE9-venda j\xE1 virou venda.");
+    if (preVenda.status === "CANCELADA") throw new AppError("Esta pr\xE9-venda foi cancelada.");
+    if (preVenda.status === "EM_ATENDIMENTO" && preVenda.cashierId !== req.usuario.id) {
+      const outro = await db.user.findUnique({ where: { id: preVenda.cashierId ?? "" } });
+      throw new AppError(`${outro?.name ?? "Outro caixa"} j\xE1 est\xE1 atendendo esta pr\xE9-venda.`, 409);
+    }
+    const atualizada = await db.preSale.update({
+      where: { id: preVenda.id },
+      data: { status: "EM_ATENDIMENTO", cashierId: req.usuario.id },
+      include: COM_TUDO
+    });
+    res.json(limpar(atualizada));
+  })
+);
+var finalizarSchema = z9.object({
+  unitId: z9.string().uuid("Informe de qual unidade o produto saiu"),
+  paymentMethod: z9.enum(PAGAMENTOS),
+  installments: z9.coerce.number().int().min(1).max(24).default(1),
+  notes: z9.string().trim().max(1e3).optional().nullable(),
+  /** O caixa pode corrigir valor e identificadores antes de fechar. */
+  items: z9.array(itemSchema.extend({ id: z9.string().uuid().optional() })).optional()
+});
+rotasPreVendas.post(
+  "/:id/finalizar",
+  exigir("venda.finalizar"),
+  rota(async (req, res) => {
+    const dados = validar(finalizarSchema, req.body);
+    const preVenda = await db.preSale.findUnique({
+      where: { id: req.params.id },
+      include: { items: true, seller: { select: { id: true, name: true } } }
+    });
+    if (!preVenda) throw naoEncontrado("Pr\xE9-venda");
+    if (preVenda.status === "FINALIZADA") throw new AppError("Esta pr\xE9-venda j\xE1 virou venda.");
+    if (preVenda.status === "CANCELADA") throw new AppError("Esta pr\xE9-venda foi cancelada.");
+    const itens = (dados.items ?? preVenda.items).map((i) => ({
+      productId: i.productId,
+      quantity: i.quantity,
+      unitPrice: numero(i.unitPrice),
+      imei: i.imei ?? null,
+      serialNumber: i.serialNumber ?? null
+    }));
+    const venda = await registrarVenda({
+      itens,
+      unitId: dados.unitId,
+      paymentMethod: dados.paymentMethod,
+      installments: dados.installments,
+      customerName: preVenda.customerName,
+      customerPhone: preVenda.customerPhone,
+      customerDocument: preVenda.customerDocument,
+      customerId: preVenda.customerId,
+      notes: dados.notes ?? preVenda.notes,
+      sellerId: preVenda.sellerId,
+      cashierId: req.usuario.id,
+      cashierName: req.usuario.nome,
+      preSaleId: preVenda.id
+    });
+    await db.preSale.update({
+      where: { id: preVenda.id },
+      data: { status: "FINALIZADA", cashierId: req.usuario.id }
+    });
+    await registrarLog({
+      acao: "FINALIZAR_PREVENDA",
+      entidade: "Sale",
+      id: venda.id,
+      alteracoes: {
+        preVenda: preVenda.code,
+        venda: venda.code,
+        unidade: venda.unit.name,
+        pagamento: dados.paymentMethod,
+        total: numero(venda.totalAmount)
+      },
+      req
+    });
+    res.json(
+      limpar({
+        sale: venda,
+        message: `Venda ${venda.code} registrada. Estoque atualizado na ${venda.unit.name}.`
+      })
+    );
+  })
+);
+rotasPreVendas.post(
+  "/:id/cancelar",
+  exigir("venda.finalizar"),
+  rota(async (req, res) => {
+    const { motivo } = validar(
+      z9.object({ motivo: z9.string().trim().max(300).optional() }),
+      req.body ?? {}
+    );
+    const preVenda = await db.preSale.findUnique({ where: { id: req.params.id } });
+    if (!preVenda) throw naoEncontrado("Pr\xE9-venda");
+    if (preVenda.status === "FINALIZADA") throw new AppError("Esta pr\xE9-venda j\xE1 virou venda.");
+    await db.preSale.update({
+      where: { id: preVenda.id },
+      data: {
+        status: "CANCELADA",
+        cashierId: req.usuario.id,
+        notes: motivo ? `${preVenda.notes ?? ""}
+Cancelada: ${motivo}`.trim() : preVenda.notes
+      }
+    });
+    await notificar({
+      userId: preVenda.sellerId,
+      title: `Pr\xE9-venda ${preVenda.code} cancelada`,
+      message: motivo ? `Motivo: ${motivo}` : `Cancelada por ${req.usuario.nome}`,
+      link: "/minhas-prevendas"
+    });
+    await registrarLog({ acao: "CANCELAR_PREVENDA", entidade: "PreSale", id: preVenda.id, req });
+    res.json({ message: `Pr\xE9-venda ${preVenda.code} cancelada. O estoque n\xE3o foi alterado.` });
+  })
+);
+rotasPreVendas.delete(
+  "/:id",
+  rota(async (req, res) => {
+    const preVenda = await db.preSale.findUnique({ where: { id: req.params.id } });
+    if (!preVenda) throw naoEncontrado("Pr\xE9-venda");
+    const dono = preVenda.sellerId === req.usuario.id;
+    if (!dono && !podeVerTodas(req)) throw new AppError("Esta pr\xE9-venda \xE9 de outro vendedor", 403);
+    if (preVenda.status !== "AGUARDANDO_CAIXA") {
+      throw new AppError("O caixa j\xE1 come\xE7ou a atender \u2014 pe\xE7a para ele cancelar.");
+    }
+    await db.preSale.update({ where: { id: preVenda.id }, data: { status: "CANCELADA" } });
+    await registrarLog({ acao: "CANCELAR_PREVENDA", entidade: "PreSale", id: preVenda.id, req });
+    res.json({ message: `Pr\xE9-venda ${preVenda.code} cancelada.` });
+  })
+);
+
+// server/vendas.ts
+import { Router as Router12 } from "express";
+import { z as z10 } from "zod";
+var rotasVendas = Router12();
+rotasVendas.use(autenticar);
+var PAGAMENTOS2 = ["PIX", "DINHEIRO", "DEBITO", "CREDITO", "TRANSFERENCIA", "OUTRO"];
+var COM_TUDO2 = {
+  items: { include: { product: { select: { id: true, name: true, model: true, category: true } } } },
+  customer: true,
+  unit: { select: { id: true, name: true } },
+  seller: { select: { id: true, name: true } },
+  cashier: { select: { id: true, name: true } },
+  preSale: { select: { id: true, code: true } }
+};
+var filtrosSchema2 = z10.object({
+  page: z10.coerce.number().int().min(1).optional(),
+  pageSize: z10.coerce.number().int().min(1).max(200).optional(),
+  search: z10.string().trim().optional(),
+  productId: z10.string().uuid().optional(),
+  categoryId: z10.string().uuid().optional(),
+  paymentMethod: z10.enum(PAGAMENTOS2).optional(),
+  sellerId: z10.string().uuid().optional(),
+  cashierId: z10.string().uuid().optional(),
+  unitId: z10.string().uuid().optional(),
+  startDate: z10.coerce.date().optional(),
+  endDate: z10.coerce.date().optional(),
+  sortBy: z10.string().optional(),
+  sortOrder: z10.enum(["asc", "desc"]).optional()
+});
+function filtrarVendas(q, unidadeId) {
+  const cond = [{ status: "FINALIZADA" }];
   if (q.search) {
     cond.push({
       OR: [
+        { code: contem(q.search) },
         { customerName: contem(q.search) },
         { customerPhone: contem(q.search) },
-        { notes: contem(q.search) },
-        { product: { name: contem(q.search) } },
-        { product: { imei: contem(q.search) } },
-        { product: { serialNumber: contem(q.search) } },
-        { product: { model: contem(q.search) } },
-        { product: { brand: contem(q.search) } }
+        { customerDocument: contem(q.search) },
+        { items: { some: { productName: contem(q.search) } } },
+        { items: { some: { imei: contem(q.search) } } },
+        { items: { some: { serialNumber: contem(q.search) } } },
+        { items: { some: { product: { name: contem(q.search) } } } }
       ]
     });
   }
-  if (q.productId) cond.push({ productId: q.productId });
-  if (q.categoryId) cond.push({ product: { categoryId: q.categoryId } });
-  if (q.supplierId) cond.push({ product: { supplierId: q.supplierId } });
+  if (q.productId) cond.push({ items: { some: { productId: q.productId } } });
+  if (q.categoryId) cond.push({ items: { some: { product: { categoryId: q.categoryId } } } });
   if (q.paymentMethod) cond.push({ paymentMethod: q.paymentMethod });
-  if (q.unitId) cond.push({ unitId: q.unitId });
+  if (q.sellerId) cond.push({ sellerId: q.sellerId });
+  if (q.cashierId) cond.push({ cashierId: q.cashierId });
+  if (unidadeId) cond.push({ unitId: unidadeId });
   const periodo2 = intervalo(q.startDate, q.endDate);
   if (periodo2) cond.push({ saleDate: periodo2 });
-  return cond.length ? { AND: cond } : {};
+  return { AND: cond };
 }
 rotasVendas.get(
   "/",
   rota(async (req, res) => {
     const q = validar(filtrosSchema2, semVazios(req.query));
+    const unidade = unidadePermitida(req.usuario, q.unitId);
     const p = paginacao(q);
-    const where = filtrarVendas({ ...q, unitId: unidadePermitida(req.usuario, q.unitId) });
-    const [lista, total, somas] = await Promise.all([
+    const where = filtrarVendas(q, unidade);
+    const [lista, total, somas, itens] = await Promise.all([
       db.sale.findMany({
         where,
-        include: COM_RELACOES2,
+        include: COM_TUDO2,
         skip: p.skip,
         take: p.take,
-        orderBy: ordenar(
-          q.sortBy,
-          q.sortOrder,
-          ["saleDate", "totalPrice", "quantity", "createdAt", "customerName", "product.name"],
-          { saleDate: "desc" }
-        )
+        orderBy: ordenar(q.sortBy, q.sortOrder, ["saleDate", "totalAmount", "code", "createdAt"], {
+          saleDate: "desc"
+        })
       }),
       db.sale.count({ where }),
-      db.sale.aggregate({ where, _sum: { totalPrice: true, quantity: true } })
+      db.sale.aggregate({ where, _sum: { totalAmount: true, costAmount: true } }),
+      db.saleItem.aggregate({ where: { sale: where }, _sum: { quantity: true } })
     ]);
     res.json(
       limpar({
         ...paginado(lista, total, p),
-        totals: { revenue: somas._sum.totalPrice ?? 0, items: somas._sum.quantity ?? 0 }
+        totals: {
+          revenue: somas._sum.totalAmount ?? 0,
+          profit: numero(somas._sum.totalAmount) - numero(somas._sum.costAmount),
+          items: itens._sum.quantity ?? 0
+        }
       })
     );
   })
@@ -3494,104 +4329,104 @@ rotasVendas.get(
 rotasVendas.get(
   "/:id",
   rota(async (req, res) => {
-    const venda = await db.sale.findUnique({ where: { id: req.params.id }, include: COM_RELACOES2 });
+    const venda = await db.sale.findUnique({ where: { id: req.params.id }, include: COM_TUDO2 });
     if (!venda) throw naoEncontrado("Venda");
     res.json(limpar(venda));
   })
 );
+var vendaSchema = z10.object({
+  items: z10.array(
+    z10.object({
+      productId: z10.string().uuid("Selecione o produto"),
+      quantity: z10.coerce.number().int().min(1, "Quantidade m\xEDnima: 1"),
+      unitPrice: z10.coerce.number().min(0, "Informe o valor"),
+      imei: z10.string().trim().max(40).optional().nullable(),
+      serialNumber: z10.string().trim().max(60).optional().nullable()
+    })
+  ).min(1, "Inclua ao menos um produto"),
+  unitId: z10.string().uuid("Informe de qual unidade o produto saiu"),
+  paymentMethod: z10.enum(PAGAMENTOS2),
+  installments: z10.coerce.number().int().min(1).max(24).default(1),
+  customerName: z10.string().trim().min(2, "Informe o nome do cliente").max(180),
+  customerPhone: z10.string().trim().max(30).optional().nullable(),
+  customerDocument: z10.string().trim().max(30).optional().nullable(),
+  customerId: z10.string().uuid().optional().nullable(),
+  /** Vendedor que atendeu, para a comissão. Vazio = o próprio caixa. */
+  sellerId: z10.string().uuid().optional().nullable(),
+  notes: z10.string().trim().max(1e3).optional().nullable(),
+  saleDate: z10.coerce.date().optional()
+});
 rotasVendas.post(
   "/",
+  exigir("pdv"),
   rota(async (req, res) => {
     const dados = validar(vendaSchema, req.body);
-    const usuario = req.usuario;
-    exigirAcessoNaUnidade(usuario, dados.unitId);
-    const resultado = await db.$transaction(async (tx) => {
-      const produto = await tx.product.findUnique({ where: { id: dados.productId } });
-      if (!produto) throw naoEncontrado("Produto");
-      let clienteId = dados.customerId ?? null;
-      if (!clienteId) {
-        const existente = dados.customerPhone ? await tx.customer.findFirst({ where: { phone: dados.customerPhone } }) : await tx.customer.findFirst({
-          where: { name: { equals: dados.customerName, mode: "insensitive" } }
-        });
-        clienteId = existente?.id ?? (await tx.customer.create({
-          data: { name: dados.customerName, phone: dados.customerPhone ?? null }
-        })).id;
-      }
-      const venda = await tx.sale.create({
-        data: {
-          productId: produto.id,
-          unitId: dados.unitId,
-          customerId: clienteId,
-          customerName: dados.customerName,
-          customerPhone: dados.customerPhone ?? null,
-          quantity: dados.quantity,
-          unitPrice: new Prisma3.Decimal(dados.unitPrice),
-          totalPrice: new Prisma3.Decimal(dados.unitPrice).mul(dados.quantity),
-          // Guarda o custo do momento: o lucro histórico não muda depois.
-          costAtSale: produto.costPrice,
-          paymentMethod: dados.paymentMethod,
-          saleDate: dados.saleDate ?? /* @__PURE__ */ new Date(),
-          notes: dados.notes ?? null,
-          userId: usuario?.id ?? null
-        },
-        include: COM_RELACOES2
-      });
-      const baixa = await movimentar({
-        produtoId: produto.id,
-        produtoNome: produto.name,
-        unidadeId: dados.unitId,
-        tipo: "SAIDA",
-        motivo: "VENDA",
-        quantidade: dados.quantity,
-        observacao: `Venda para ${dados.customerName}`,
-        vendaId: venda.id,
-        usuarioId: usuario?.id,
-        usuarioNome: usuario?.nome,
-        tx
-      });
-      const restante = await tx.stock.aggregate({
-        where: { productId: produto.id },
-        _sum: { quantity: true }
-      });
-      if ((restante._sum.quantity ?? 0) === 0) {
-        await tx.product.update({ where: { id: produto.id }, data: { status: "VENDIDO" } });
-      }
-      return { venda, baixa };
+    const venda = await registrarVenda({
+      itens: dados.items,
+      unitId: dados.unitId,
+      paymentMethod: dados.paymentMethod,
+      installments: dados.installments,
+      customerName: dados.customerName,
+      customerPhone: dados.customerPhone,
+      customerDocument: dados.customerDocument,
+      customerId: dados.customerId,
+      notes: dados.notes,
+      sellerId: dados.sellerId ?? req.usuario.id,
+      cashierId: req.usuario.id,
+      cashierName: req.usuario.nome,
+      saleDate: dados.saleDate
     });
-    await registrarLog({ acao: "CREATE", entidade: "Sale", id: resultado.venda.id, req });
-    res.status(201).json(limpar(resultado.venda));
+    await registrarLog({
+      acao: "CRIAR_VENDA",
+      entidade: "Sale",
+      id: venda.id,
+      alteracoes: {
+        venda: venda.code,
+        unidade: venda.unit.name,
+        pagamento: dados.paymentMethod,
+        total: numero(venda.totalAmount)
+      },
+      req
+    });
+    res.status(201).json(limpar(venda));
   })
 );
 rotasVendas.delete(
   "/:id",
-  somenteAdmin,
+  exigir("venda.cancelar"),
   rota(async (req, res) => {
-    const usuario = req.usuario;
-    await db.$transaction(async (tx) => {
-      const venda = await tx.sale.findUnique({
-        where: { id: req.params.id },
-        include: { product: true, unit: true }
-      });
-      if (!venda) throw naoEncontrado("Venda");
+    const motivo = String(req.query.reason ?? "").trim();
+    const venda = await db.sale.findUnique({
+      where: { id: req.params.id },
+      include: { items: true, unit: { select: { name: true } } }
+    });
+    if (!venda) throw naoEncontrado("Venda");
+    if (venda.status === "CANCELADA") throw new AppError("Esta venda j\xE1 foi cancelada.");
+    for (const item of venda.items) {
       await movimentar({
-        produtoId: venda.productId,
-        produtoNome: venda.product.name,
+        produtoId: item.productId,
+        produtoNome: item.productName ?? "Produto",
         unidadeId: venda.unitId,
         tipo: "ENTRADA",
         motivo: "CANCELAMENTO",
-        quantidade: venda.quantity,
-        observacao: `Cancelamento de venda (${venda.customerName ?? "cliente"}) \u2014 voltou para a ${venda.unit.name}`,
-        usuarioId: usuario?.id,
-        usuarioNome: usuario?.nome,
-        tx
+        quantidade: item.quantity,
+        observacao: `Cancelamento da venda ${venda.code}${motivo ? ` \xB7 ${motivo}` : ""}`,
+        vendaId: venda.id,
+        usuarioId: req.usuario?.id,
+        usuarioNome: req.usuario?.nome
       });
-      if (venda.product.status === "VENDIDO") {
-        await tx.product.update({ where: { id: venda.productId }, data: { status: "EM_ESTOQUE" } });
-      }
-      await tx.sale.delete({ where: { id: venda.id } });
+    }
+    await db.sale.update({ where: { id: venda.id }, data: { status: "CANCELADA" } });
+    await registrarLog({
+      acao: "CANCELAR_VENDA",
+      entidade: "Sale",
+      id: venda.id,
+      alteracoes: { venda: venda.code, motivo },
+      req
     });
-    await registrarLog({ acao: "DELETE", entidade: "Sale", id: req.params.id, req });
-    res.json({ message: "Venda cancelada e estoque devolvido \xE0 unidade de origem." });
+    res.json({
+      message: `Venda ${venda.code} cancelada. ${venda.items.length} item(ns) devolvidos ao estoque da ${venda.unit.name}.`
+    });
   })
 );
 
@@ -3661,6 +4496,9 @@ function createApp() {
   app2.use("/api/products", rotasProdutos);
   app2.use("/api/fotos", rotasFotos);
   app2.use("/api/sales", rotasVendas);
+  app2.use("/api/pre-sales", rotasPreVendas);
+  app2.use("/api/cash", rotasCaixa);
+  app2.use("/api/notifications", rotasNotificacoes);
   app2.use("/api/movements", rotasMovimentacoes);
   app2.use("/api/units", rotasUnidades);
   app2.use("/api/categories", rotasCategorias);

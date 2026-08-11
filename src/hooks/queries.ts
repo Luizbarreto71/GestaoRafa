@@ -4,7 +4,10 @@ import {
   categoryService,
   customerService,
   dashboardService,
+  caixaService,
   movementService,
+  notificacaoService,
+  preVendaService,
   productService,
   saleService,
   settingsService,
@@ -274,6 +277,113 @@ export const useSheetsStatus = () =>
     queryFn: settingsService.sheetsStatus,
     staleTime: 5 * 60_000,
   });
+
+// ------------------------------------------------------------- Pré-vendas
+
+export const usePreVendas = (params: { status?: string; search?: string; page?: number } = {}) =>
+  useQuery({
+    queryKey: ['pre-sales', params],
+    queryFn: () => preVendaService.listar(params),
+    placeholderData: (previous) => previous,
+    // A fila do caixa precisa aparecer sozinha: recarrega de meio em meio minuto.
+    refetchInterval: 30_000,
+    staleTime: 10_000,
+  });
+
+export const usePreVenda = (id?: string) =>
+  useQuery({
+    queryKey: ['pre-sales', id],
+    queryFn: () => preVendaService.buscar(id!),
+    enabled: Boolean(id),
+  });
+
+/** Tudo que mexe em pré-venda invalida a fila, o estoque e as vendas. */
+function useAcaoDePreVenda<T>(acao: (v: T) => Promise<{ message: string } | unknown>) {
+  const queryClient = useQueryClient();
+
+  return useMutation<{ message: string }, Error, T>({
+    mutationFn: (v) =>
+      acao(v).catch((erro) => {
+        throw new Error(getErrorMessage(erro));
+      }) as Promise<{ message: string }>,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['pre-sales'] });
+      void queryClient.invalidateQueries({ queryKey: ['notifications'] });
+      invalidateStock(queryClient);
+    },
+  });
+}
+
+export const useCriarPreVenda = () =>
+  useAcaoDePreVenda((dados: Record<string, unknown>) => preVendaService.criar(dados)) as ReturnType<
+    typeof useMutation<{ message: string }, Error, Record<string, unknown>>
+  >;
+
+export const useAtenderPreVenda = () => useAcaoDePreVenda((id: string) => preVendaService.atender(id));
+
+export const useFinalizarPreVenda = () =>
+  useAcaoDePreVenda((v: { id: string; dados: Record<string, unknown> }) =>
+    preVendaService.finalizar(v.id, v.dados),
+  );
+
+export const useCancelarPreVenda = () =>
+  useAcaoDePreVenda((v: { id: string; motivo?: string }) => preVendaService.cancelar(v.id, v.motivo));
+
+export const useDesistirPreVenda = () => useAcaoDePreVenda((id: string) => preVendaService.desistir(id));
+
+// ------------------------------------------------------------------ Caixa
+
+export const useCaixaAtual = (habilitado = true) =>
+  useQuery({
+    queryKey: ['cash', 'atual'],
+    queryFn: caixaService.atual,
+    enabled: habilitado,
+    refetchInterval: 60_000,
+    staleTime: 15_000,
+  });
+
+export const useTurnosDeCaixa = (params: { status?: string } = {}, habilitado = true) =>
+  useQuery({
+    queryKey: ['cash', params],
+    queryFn: () => caixaService.turnos(params),
+    enabled: habilitado,
+    staleTime: 30_000,
+  });
+
+export function useAcaoDeCaixa<T>(acao: (v: T) => Promise<unknown>) {
+  const queryClient = useQueryClient();
+
+  return useMutation<{ message: string }, Error, T>({
+    mutationFn: (v) =>
+      acao(v).catch((erro) => {
+        throw new Error(getErrorMessage(erro));
+      }) as Promise<{ message: string }>,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['cash'] });
+      invalidateStock(queryClient);
+    },
+  });
+}
+
+// ------------------------------------------------------------ Notificações
+
+export const useNotificacoes = () =>
+  useQuery({
+    queryKey: ['notifications'],
+    queryFn: () => notificacaoService.listar(),
+    // O caixa precisa saber da pré-venda nova sem recarregar a página.
+    refetchInterval: 30_000,
+    staleTime: 10_000,
+  });
+
+export function useMarcarLida() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (id?: string) => notificacaoService.marcarLida(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['notifications'] }),
+  });
+}
 
 // ------------------------------------------------- Movimentação de estoque
 

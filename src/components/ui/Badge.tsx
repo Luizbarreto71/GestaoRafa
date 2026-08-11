@@ -86,6 +86,7 @@ const PAYMENT_TONE: Record<PaymentMethod, Tone> = {
   DEBITO: 'info',
   CREDITO: 'purple',
   TRANSFERENCIA: 'neutral',
+  OUTRO: 'neutral',
 };
 
 export function PaymentBadge({ method }: { method: PaymentMethod }) {

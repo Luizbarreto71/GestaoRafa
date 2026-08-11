@@ -17,7 +17,29 @@ datasource db {
 enum UserRole {
   ADMIN
   GERENTE
+  /// Opera o PDV: recebe pré-vendas, cobra e finaliza. Não mexe em cadastro.
+  CAIXA
+  /// Monta pré-vendas. Nunca dá baixa em estoque nem finaliza venda.
   VENDEDOR
+}
+
+/// Situação de uma pré-venda, do vendedor até o caixa.
+enum PreSaleStatus {
+  AGUARDANDO_CAIXA
+  EM_ATENDIMENTO
+  FINALIZADA
+  CANCELADA
+  EXPIRADA
+}
+
+enum SaleStatus {
+  FINALIZADA
+  CANCELADA
+}
+
+enum CashRegisterStatus {
+  ABERTO
+  FECHADO
 }
 
 enum ProductStatus {
@@ -71,6 +93,7 @@ enum PaymentMethod {
   DEBITO
   CREDITO
   TRANSFERENCIA
+  OUTRO
 }
 
 /// Matriz, Sede… Cada uma tem seu estoque, que nunca se mistura.
@@ -90,6 +113,8 @@ model Unit {
   transfersOut StockTransfer[]   @relation("origem")
   transfersIn  StockTransfer[]   @relation("destino")
   withdrawals  StockWithdrawal[]
+  PreSale      PreSale[]
+  CashRegister CashRegister[]
 
   @@map("units")
 }
@@ -109,8 +134,14 @@ model User {
   unit   Unit?   @relation(fields: [unitId], references: [id], onDelete: SetNull)
 
   movements StockMovement[]
-  sales     Sale[]
   auditLogs AuditLog[]
+
+  vendasComoVendedor Sale[]         @relation("vendedor")
+  vendasComoCaixa    Sale[]         @relation("caixa")
+  preVendasCriadas   PreSale[]      @relation("vendedorPreVenda")
+  preVendasAtendidas PreSale[]      @relation("caixaPreVenda")
+  turnosDeCaixa      CashRegister[] @relation("turnoDoCaixa")
+  notificacoes       Notification[]
 
   @@index([unitId])
   @@map("users")
@@ -161,7 +192,8 @@ model Customer {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  sales Sale[]
+  sales   Sale[]
+  PreSale PreSale[]
 
   @@index([name])
   @@index([phone])
@@ -202,12 +234,13 @@ model Product {
   /// A quantidade vive aqui, uma linha por unidade. Nunca no produto:
   /// misturar os estoques da Matriz e da Sede seria o mesmo que não tê-los
   /// separados.
-  stock       Stock[]
-  photos      ProductPhoto[]
-  sales       Sale[]
-  movements   StockMovement[]
-  transfers   StockTransfer[]
-  withdrawals StockWithdrawal[]
+  stock        Stock[]
+  photos       ProductPhoto[]
+  saleItems    SaleItem[]
+  preSaleItems PreSaleItem[]
+  movements    StockMovement[]
+  transfers    StockTransfer[]
+  withdrawals  StockWithdrawal[]
 
   @@index([name])
   @@index([brand])
@@ -237,43 +270,212 @@ model ProductPhoto {
   @@map("product_photos")
 }
 
+/// Venda concluída. Só o caixa cria — é aqui que o estoque baixa.
 model Sale {
-  id            String        @id @default(uuid())
-  quantity      Int
-  unitPrice     Decimal       @db.Decimal(12, 2)
-  totalPrice    Decimal       @db.Decimal(12, 2)
-  costAtSale    Decimal       @default(0) @db.Decimal(12, 2)
-  paymentMethod PaymentMethod
-  saleDate      DateTime      @default(now())
-  notes         String?
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
+  id     String     @id @default(uuid())
+  /// Número visível: VD-000001.
+  code   String     @unique
+  status SaleStatus @default(FINALIZADA)
 
-  productId String
-  product   Product @relation(fields: [productId], references: [id])
+  /// Somas dos itens, guardadas aqui para os relatórios não precisarem
+  /// recalcular a cada consulta.
+  totalAmount Decimal @db.Decimal(12, 2)
+  costAmount  Decimal @default(0) @db.Decimal(12, 2)
+
+  paymentMethod PaymentMethod
+  /// 1 = à vista.
+  installments  Int           @default(1)
+
+  saleDate  DateTime @default(now())
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// Quando veio de uma pré-venda.
+  preSaleId String?  @unique
+  preSale   PreSale? @relation(fields: [preSaleId], references: [id], onDelete: SetNull)
+
+  /// Quem vendeu (para comissão) e quem recebeu (caixa).
+  sellerId  String?
+  seller    User?   @relation("vendedor", fields: [sellerId], references: [id], onDelete: SetNull)
+  cashierId String?
+  cashier   User?   @relation("caixa", fields: [cashierId], references: [id], onDelete: SetNull)
+
+  cashRegisterId String?
+  cashRegister   CashRegister? @relation(fields: [cashRegisterId], references: [id], onDelete: SetNull)
 
   customerId String?
   customer   Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
 
   // Cópia dos dados do cliente no momento da venda
-  customerName  String?
-  customerPhone String?
+  customerName     String?
+  customerPhone    String?
+  customerDocument String?
 
-  userId String?
-  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
-
-  /// De qual unidade o produto saiu. Obrigatório: sem isso não dá para
-  /// saber quanto cada loja vendeu.
+  /// De qual unidade o produto saiu.
   unitId String
   unit   Unit   @relation(fields: [unitId], references: [id])
 
+  /// Estrutura pronta para comissão; ainda não usada nos cálculos.
+  commissionRate   Decimal? @db.Decimal(5, 2)
+  commissionAmount Decimal? @db.Decimal(12, 2)
+
+  items     SaleItem[]
   movements StockMovement[]
 
   @@index([unitId])
   @@index([saleDate])
-  @@index([productId])
   @@index([customerId])
+  @@index([sellerId])
+  @@index([cashierId])
   @@map("sales")
+}
+
+/// Cada produto dentro de uma venda.
+model SaleItem {
+  id       String @id @default(uuid())
+  quantity Int
+
+  unitPrice Decimal @db.Decimal(12, 2)
+  /// Custo no momento da venda: o lucro histórico não muda depois.
+  costPrice Decimal @default(0) @db.Decimal(12, 2)
+
+  /// Identificação da peça vendida. É por aqui que se impede vender o
+  /// mesmo aparelho duas vezes.
+  imei         String?
+  serialNumber String?
+
+  saleId String
+  sale   Sale   @relation(fields: [saleId], references: [id], onDelete: Cascade)
+
+  productId   String
+  product     Product @relation(fields: [productId], references: [id])
+  /// Nome no momento da venda, para o histórico não depender do cadastro.
+  productName String?
+
+  commissionAmount Decimal? @db.Decimal(12, 2)
+
+  @@index([saleId])
+  @@index([productId])
+  @@index([imei])
+  @@index([serialNumber])
+  @@map("sale_items")
+}
+
+/// Intenção de venda montada pelo vendedor. NÃO mexe no estoque.
+model PreSale {
+  id     String        @id @default(uuid())
+  /// Número visível: PV-000001.
+  code   String        @unique
+  status PreSaleStatus @default(AGUARDANDO_CAIXA)
+
+  totalAmount   Decimal        @default(0) @db.Decimal(12, 2)
+  paymentMethod PaymentMethod?
+  installments  Int            @default(1)
+  notes         String?
+
+  customerId       String?
+  customer         Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  customerName     String
+  customerPhone    String?
+  customerDocument String?
+
+  sellerId String
+  seller   User   @relation("vendedorPreVenda", fields: [sellerId], references: [id])
+
+  /// Caixa que assumiu o atendimento.
+  cashierId String?
+  cashier   User?   @relation("caixaPreVenda", fields: [cashierId], references: [id], onDelete: SetNull)
+
+  /// Unidade sugerida pelo vendedor; o caixa confirma na finalização.
+  unitId String?
+  unit   Unit?   @relation(fields: [unitId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  /// Depois disso a pré-venda vira EXPIRADA.
+  expiresAt DateTime?
+
+  items PreSaleItem[]
+  sale  Sale?
+
+  @@index([status])
+  @@index([sellerId])
+  @@index([createdAt])
+  @@map("pre_sales")
+}
+
+model PreSaleItem {
+  id       String @id @default(uuid())
+  quantity Int
+
+  unitPrice    Decimal @db.Decimal(12, 2)
+  imei         String?
+  serialNumber String?
+
+  preSaleId String
+  preSale   PreSale @relation(fields: [preSaleId], references: [id], onDelete: Cascade)
+
+  productId   String
+  product     Product @relation(fields: [productId], references: [id])
+  productName String?
+
+  @@index([preSaleId])
+  @@index([productId])
+  @@map("pre_sale_items")
+}
+
+/// Turno do caixa: abertura, vendas do período e fechamento.
+model CashRegister {
+  id     String             @id @default(uuid())
+  code   String             @unique
+  status CashRegisterStatus @default(ABERTO)
+
+  cashierId String
+  cashier   User   @relation("turnoDoCaixa", fields: [cashierId], references: [id])
+
+  unitId String?
+  unit   Unit?   @relation(fields: [unitId], references: [id], onDelete: SetNull)
+
+  openedAt DateTime  @default(now())
+  closedAt DateTime?
+
+  /// Resumo congelado no fechamento (totais por forma de pagamento).
+  summary Json?
+  notes   String?
+
+  sales Sale[]
+
+  @@index([cashierId])
+  @@index([status])
+  @@map("cash_registers")
+}
+
+/// Aviso na tela para um usuário específico.
+model Notification {
+  id      String  @id @default(uuid())
+  title   String
+  message String
+  /// Para onde a notificação leva ao ser clicada.
+  link    String?
+  read    Boolean @default(false)
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, read])
+  @@index([createdAt])
+  @@map("notifications")
+}
+
+/// Contador para os números visíveis (PV-000001, VD-000001).
+model Sequence {
+  name  String @id
+  value Int    @default(0)
+
+  @@map("sequences")
 }
 
 /// Saldo de um produto numa unidade. É a fonte da verdade do estoque.

@@ -124,8 +124,8 @@ export function GlobalSearch() {
                   key={sale.id}
                   icon={<ShoppingCart className="h-4 w-4" />}
                   title={sale.customerName ?? 'Cliente'}
-                  subtitle={sale.product?.name}
-                  meta={`${formatDate(sale.saleDate)} · ${formatCurrency(sale.totalPrice)}`}
+                  subtitle={sale.items?.map((i) => i.productName).filter(Boolean).join(', ')}
+                  meta={`${formatDate(sale.saleDate)} · ${formatCurrency(sale.totalAmount)}`}
                   onClick={() => go(`/vendas?busca=${encodeURIComponent(sale.customerName ?? '')}`)}
                 />
               ))}

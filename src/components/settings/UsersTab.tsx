@@ -272,9 +272,10 @@ export function UsersTab() {
               value={form.role}
               onChange={(event) => setForm((f) => ({ ...f, role: event.target.value }))}
               options={[
-                { value: 'VENDEDOR', label: 'Vendedor' },
-                { value: 'GERENTE', label: 'Gerente' },
-                { value: 'ADMIN', label: 'Administrador' },
+                { value: 'VENDEDOR', label: 'Vendedor — só cria pré-venda' },
+                { value: 'CAIXA', label: 'Caixa — finaliza vendas e fecha o caixa' },
+                { value: 'GERENTE', label: 'Gerente — cuida do estoque da unidade' },
+                { value: 'ADMIN', label: 'Administrador — acesso total' },
               ]}
             />
             <Select

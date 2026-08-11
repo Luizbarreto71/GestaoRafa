@@ -53,8 +53,14 @@ export interface StockLine {
   /** Livre para vender (quantity - reserved). */
   available?: number;
 }
-export type PaymentMethod = 'PIX' | 'DINHEIRO' | 'DEBITO' | 'CREDITO' | 'TRANSFERENCIA';
-export type UserRole = 'ADMIN' | 'GERENTE' | 'VENDEDOR';
+export type PaymentMethod =
+  | 'PIX'
+  | 'DINHEIRO'
+  | 'DEBITO'
+  | 'CREDITO'
+  | 'TRANSFERENCIA'
+  | 'OUTRO';
+export type UserRole = 'ADMIN' | 'GERENTE' | 'CAIXA' | 'VENDEDOR';
 
 export interface User {
   id: string;
@@ -145,23 +151,97 @@ export interface Product {
   sales?: Sale[];
 }
 
-export interface Sale {
-  id: string;
+export type PreSaleStatus =
+  | 'AGUARDANDO_CAIXA'
+  | 'EM_ATENDIMENTO'
+  | 'FINALIZADA'
+  | 'CANCELADA'
+  | 'EXPIRADA';
+
+/** Item dentro de uma venda ou pré-venda. */
+export interface ItemVenda {
+  id?: string;
+  productId: string;
+  productName?: string | null;
   quantity: number;
   unitPrice: number;
-  totalPrice: number;
-  costAtSale: number;
+  costPrice?: number;
+  imei?: string | null;
+  serialNumber?: string | null;
+  product?: { id: string; name: string; model?: string | null };
+  /** Saldo atual na unidade, calculado pela API ao abrir a pré-venda. */
+  disponivel?: number | null;
+}
+
+/** Intenção de venda montada pelo vendedor. Não mexe no estoque. */
+export interface PreSale {
+  id: string;
+  code: string;
+  status: PreSaleStatus;
+  totalAmount: number;
+  paymentMethod?: PaymentMethod | null;
+  installments: number;
+  notes?: string | null;
+  customerName: string;
+  customerPhone?: string | null;
+  customerDocument?: string | null;
+  createdAt: string;
+  expiresAt?: string | null;
+  items: ItemVenda[];
+  seller?: { id: string; name: string } | null;
+  cashier?: { id: string; name: string } | null;
+  unit?: { id: string; name: string } | null;
+  sale?: { id: string; code: string } | null;
+}
+
+export interface Notificacao {
+  id: string;
+  title: string;
+  message: string;
+  link?: string | null;
+  read: boolean;
+  createdAt: string;
+}
+
+export interface TurnoDeCaixa {
+  id: string;
+  code: string;
+  status: 'ABERTO' | 'FECHADO';
+  openedAt: string;
+  closedAt?: string | null;
+  notes?: string | null;
+  cashier?: { name: string };
+  unit?: { name: string } | null;
+}
+
+export interface ResumoDoCaixa {
+  quantidadeDeVendas: number;
+  itensVendidos: number;
+  total: number;
+  lucro: number;
+  ticketMedio: number;
+  porPagamento: { forma: PaymentMethod; rotulo: string; quantidade: number; total: number }[];
+}
+
+export interface Sale {
+  id: string;
+  code: string;
+  status: 'FINALIZADA' | 'CANCELADA';
+  totalAmount: number;
+  costAmount: number;
   paymentMethod: PaymentMethod;
+  installments: number;
   saleDate: string;
   notes?: string | null;
-  productId: string;
-  product: Pick<Product, 'id' | 'name' | 'model' | 'category'> & Partial<Product>;
-  unitId: string;
-  unit?: { id: string; name: string } | null;
+  items: ItemVenda[];
   customerId?: string | null;
   customerName?: string | null;
   customerPhone?: string | null;
-  user?: { id: string; name: string } | null;
+  customerDocument?: string | null;
+  unit: { id: string; name: string };
+  seller?: { id: string; name: string } | null;
+  cashier?: { id: string; name: string } | null;
+  preSale?: { id: string; code: string } | null;
 }
 
 export interface Movement {
@@ -220,7 +300,11 @@ export interface Paginated<T> {
 }
 
 export interface SalesPage extends Paginated<Sale> {
-  totals: { revenue: number; items: number };
+  totals: { revenue: number; profit: number; items: number };
+}
+
+export interface PreSalesPage extends Paginated<PreSale> {
+  pendentes: number;
 }
 
 export interface MovementsPage extends Paginated<Movement> {

@@ -6,13 +6,18 @@ import type {
   Customer,
   DashboardData,
   MovementsPage,
+  Notificacao,
   Paginated,
+  PreSale,
+  PreSalesPage,
   Product,
   QuickSearchResult,
+  ResumoDoCaixa,
   Sale,
   SalesPage,
   Supplier,
   Transfer,
+  TurnoDeCaixa,
   Unit,
   User,
   Withdrawal,
@@ -214,6 +219,62 @@ export const importService = {
     });
     return data;
   },
+};
+
+// -------------------------------------------------------------- Pré-vendas
+
+export const preVendaService = {
+  listar: (params: { status?: string; sellerId?: string; search?: string; page?: number } = {}) =>
+    api.get<PreSalesPage>('/pre-sales', { params: clean(params) }).then((r) => r.data),
+
+  buscar: (id: string) => api.get<PreSale>(`/pre-sales/${id}`).then((r) => r.data),
+
+  criar: (data: Record<string, unknown>) =>
+    api.post<PreSale & { message: string }>('/pre-sales', data).then((r) => r.data),
+
+  /** Caixa assume o atendimento, para dois não mexerem na mesma. */
+  atender: (id: string) => api.post<PreSale>(`/pre-sales/${id}/atender`).then((r) => r.data),
+
+  finalizar: (id: string, data: Record<string, unknown>) =>
+    api.post<{ sale: Sale; message: string }>(`/pre-sales/${id}/finalizar`, data).then((r) => r.data),
+
+  cancelar: (id: string, motivo?: string) =>
+    api.post<{ message: string }>(`/pre-sales/${id}/cancelar`, { motivo }).then((r) => r.data),
+
+  desistir: (id: string) => api.delete<{ message: string }>(`/pre-sales/${id}`).then((r) => r.data),
+};
+
+// ------------------------------------------------------------------ Caixa
+
+export const caixaService = {
+  atual: () =>
+    api
+      .get<{ aberto: boolean; turno: TurnoDeCaixa | null; resumo: ResumoDoCaixa | null }>('/cash/atual')
+      .then((r) => r.data),
+
+  abrir: (data: { unitId?: string; notes?: string }) =>
+    api.post<{ turno: TurnoDeCaixa; message: string }>('/cash/abrir', data).then((r) => r.data),
+
+  fechar: (notes?: string) =>
+    api
+      .post<{ turno: TurnoDeCaixa; resumo: ResumoDoCaixa; message: string }>('/cash/fechar', { notes })
+      .then((r) => r.data),
+
+  turnos: (params: { status?: string; cashierId?: string } = {}) =>
+    api.get<TurnoDeCaixa[]>('/cash', { params: clean(params) }).then((r) => r.data),
+};
+
+// ------------------------------------------------------------ Notificações
+
+export const notificacaoService = {
+  listar: (naoLidas = false) =>
+    api
+      .get<Paginated<Notificacao> & { unread: number }>('/notifications', {
+        params: clean({ naoLidas: naoLidas ? 'true' : undefined }),
+      })
+      .then((r) => r.data),
+
+  marcarLida: (id?: string) => api.post('/notifications/ler', id ? { id } : {}).then((r) => r.data),
 };
 
 // -------------------------------------------------------------- Configurações

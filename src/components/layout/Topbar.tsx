@@ -1,9 +1,20 @@
-import { useAlerts } from '@/hooks/queries';
+import { useAlerts, useMarcarLida, useNotificacoes } from '@/hooks/queries';
 import { useOnlineStatus } from '@/hooks/useOnlineStatus';
 import { useTheme } from '@/contexts/ThemeContext';
 import { cn } from '@/lib/cn';
-import { formatCurrency } from '@/lib/format';
-import { AlertTriangle, Bell, CloudOff, Menu, Moon, PackageX, RefreshCw, Sun, Wallet } from 'lucide-react';
+import { formatCurrency, formatRelative } from '@/lib/format';
+import {
+  AlertTriangle,
+  Bell,
+  CloudOff,
+  Menu,
+  MessageSquare,
+  Moon,
+  PackageX,
+  RefreshCw,
+  Sun,
+  Wallet,
+} from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { GlobalSearch } from './GlobalSearch';
@@ -77,6 +88,8 @@ export function Topbar({ onOpenMobileMenu }: { onOpenMobileMenu: () => void }) {
             <span className="hidden sm:inline">{online ? `Sincronizando ${queue.length}` : 'Offline'}</span>
           </div>
         )}
+
+        <SinoDeAvisos />
 
         {/* Alertas */}
         <div ref={alertRef} className="relative">
@@ -171,5 +184,105 @@ export function Topbar({ onOpenMobileMenu }: { onOpenMobileMenu: () => void }) {
         </button>
       </div>
     </header>
+  );
+}
+
+/**
+ * Avisos de pré-venda e de venda finalizada.
+ *
+ * Fica separado do sino de estoque de propósito: um fala do que precisa
+ * de reposição, este fala do que precisa de ação agora.
+ */
+function SinoDeAvisos() {
+  const [aberto, setAberto] = useState(false);
+  const caixa = useRef<HTMLDivElement>(null);
+  const navigate = useNavigate();
+
+  const { data } = useNotificacoes();
+  const marcar = useMarcarLida();
+
+  useEffect(() => {
+    const fora = (e: MouseEvent) => {
+      if (!caixa.current?.contains(e.target as Node)) setAberto(false);
+    };
+    document.addEventListener('mousedown', fora);
+    return () => document.removeEventListener('mousedown', fora);
+  }, []);
+
+  const naoLidas = data?.unread ?? 0;
+  const avisos = data?.data ?? [];
+
+  return (
+    <div ref={caixa} className="relative">
+      <button
+        type="button"
+        onClick={() => setAberto((v) => !v)}
+        className="relative rounded-lg p-2 text-slate-600 transition hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-navy-800"
+        aria-label="Avisos"
+      >
+        <MessageSquare className="h-5 w-5" />
+        {naoLidas > 0 && (
+          <span className="absolute right-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-accent px-1 text-[10px] font-bold text-white">
+            {naoLidas > 9 ? '9+' : naoLidas}
+          </span>
+        )}
+      </button>
+
+      {aberto && (
+        <div className="absolute right-0 top-12 z-50 w-[min(24rem,calc(100vw-2rem))] animate-slide-up overflow-hidden rounded-xl border border-slate-200 bg-white shadow-modal dark:border-navy-700 dark:bg-navy-800">
+          <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-navy-700">
+            <p className="text-sm font-bold text-navy-900 dark:text-slate-100">Avisos</p>
+            {naoLidas > 0 && (
+              <button
+                type="button"
+                onClick={() => marcar.mutate(undefined)}
+                className="text-xs font-semibold text-accent hover:underline"
+              >
+                Marcar todos como lidos
+              </button>
+            )}
+          </div>
+
+          <div className="max-h-80 overflow-y-auto p-2">
+            {avisos.length === 0 && (
+              <p className="px-3 py-6 text-center text-sm text-slate-500 dark:text-slate-400">
+                Nenhum aviso por aqui
+              </p>
+            )}
+
+            {avisos.map((aviso) => (
+              <button
+                key={aviso.id}
+                type="button"
+                onClick={() => {
+                  marcar.mutate(aviso.id);
+                  setAberto(false);
+                  if (aviso.link) navigate(aviso.link);
+                }}
+                className={cn(
+                  'block w-full rounded-lg px-3 py-2 text-left transition hover:bg-slate-100 dark:hover:bg-navy-700',
+                  !aviso.read && 'bg-accent/5',
+                )}
+              >
+                <span className="flex items-start gap-2">
+                  {!aviso.read && <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-accent" />}
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-semibold text-navy-900 dark:text-slate-100">
+                      {aviso.title}
+                    </span>
+                    <span className="block text-xs text-slate-500 dark:text-slate-400">
+                      {aviso.message}
+                    </span>
+                    <span className="mt-0.5 block text-[11px] text-slate-400">
+                      {formatRelative(aviso.createdAt)}
+                    </span>
+                  </span>
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }

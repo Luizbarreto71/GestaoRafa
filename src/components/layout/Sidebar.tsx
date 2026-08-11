@@ -8,30 +8,36 @@ import {
   LogOut,
   Package,
   PackagePlus,
+  Receipt,
   Settings,
+  ShoppingBag,
   ShoppingCart,
   Users,
   X,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import { pode, type Permissao } from '@/lib/permissoes';
 import { NavLink } from 'react-router-dom';
 
 interface NavItem {
   to: string;
   label: string;
   icon: LucideIcon;
-  adminOnly?: boolean;
+  /** Permissão necessária para o item aparecer. */
+  permissao?: Permissao;
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { to: '/', label: 'Dashboard', icon: LayoutDashboard },
-  { to: '/estoque', label: 'Estoque', icon: Package },
-  { to: '/vendas', label: 'Vendas', icon: ShoppingCart },
-  { to: '/movimentacao', label: 'Movimentação', icon: PackagePlus },
-  { to: '/movimentacoes', label: 'Histórico', icon: History },
-  { to: '/clientes', label: 'Clientes', icon: Users },
-  { to: '/relatorios', label: 'Relatórios', icon: BarChart3 },
-  { to: '/configuracoes', label: 'Configurações', icon: Settings },
+  { to: '/', label: 'Dashboard', icon: LayoutDashboard, permissao: 'dashboard' },
+  { to: '/caixa', label: 'Caixa', icon: Receipt, permissao: 'pdv' },
+  { to: '/pre-vendas', label: 'Pré-vendas', icon: ShoppingBag, permissao: 'prevenda.criar' },
+  { to: '/estoque', label: 'Estoque', icon: Package, permissao: 'produtos.ver' },
+  { to: '/vendas', label: 'Vendas', icon: ShoppingCart, permissao: 'prevenda.verTodas' },
+  { to: '/movimentacao', label: 'Movimentação', icon: PackagePlus, permissao: 'estoque.movimentar' },
+  { to: '/movimentacoes', label: 'Histórico', icon: History, permissao: 'estoque.ver' },
+  { to: '/clientes', label: 'Clientes', icon: Users, permissao: 'prevenda.verTodas' },
+  { to: '/relatorios', label: 'Relatórios', icon: BarChart3, permissao: 'relatorios' },
+  { to: '/configuracoes', label: 'Configurações', icon: Settings, permissao: 'configuracoes' },
 ];
 
 interface SidebarProps {
@@ -74,7 +80,7 @@ export function Sidebar({ collapsed, onToggleCollapse, mobileOpen, onCloseMobile
 
       {/* Navegação */}
       <nav className="flex-1 space-y-1 overflow-y-auto p-3">
-        {NAV_ITEMS.map((item) => (
+        {NAV_ITEMS.filter((item) => !item.permissao || pode(user?.role, item.permissao)).map((item) => (
           <NavLink
             key={item.to}
             to={item.to}

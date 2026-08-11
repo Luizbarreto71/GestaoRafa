@@ -2,6 +2,7 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { useAuth } from '@/contexts/AuthContext';
 import { Loader2 } from 'lucide-react';
 import { Suspense, lazy, type ReactNode } from 'react';
+import { pode, telaInicial, type Permissao } from '@/lib/permissoes';
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { LoginPage } from './pages/LoginPage';
 
@@ -13,6 +14,8 @@ const StockMovementPage = lazy(() => import('./pages/StockMovementPage'));
 const CustomersPage = lazy(() => import('./pages/CustomersPage'));
 const ReportsPage = lazy(() => import('./pages/ReportsPage'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
+const CaixaPage = lazy(() => import('./pages/CaixaPage'));
+const PreSalePage = lazy(() => import('./pages/PreSalePage'));
 
 function FullScreenLoader() {
   return (
@@ -29,6 +32,35 @@ function ProtectedRoute({ children }: { children: ReactNode }) {
   if (loading) return <FullScreenLoader />;
   if (!isAuthenticated) return <Navigate to="/login" state={{ from: location }} replace />;
   return <>{children}</>;
+}
+
+/**
+ * Envolve a página numa checagem de permissão.
+ *
+ * Quem não pode ver é levado para a sua tela inicial em vez de topar com
+ * um erro — o vendedor, por exemplo, cai nas pré-vendas.
+ */
+function Tela({ permissao, children }: { permissao?: Permissao; children: ReactNode }) {
+  const { user } = useAuth();
+
+  if (permissao && !pode(user?.role, permissao)) {
+    return <Navigate to={telaInicial(user?.role)} replace />;
+  }
+  return <Suspense fallback={<FullScreenLoader />}>{children}</Suspense>;
+}
+
+/** A raiz depende do perfil: admin vê o painel, caixa cai no caixa. */
+function Inicio() {
+  const { user } = useAuth();
+
+  if (pode(user?.role, 'dashboard')) {
+    return (
+      <Suspense fallback={<FullScreenLoader />}>
+        <DashboardPage />
+      </Suspense>
+    );
+  }
+  return <Navigate to={telaInicial(user?.role)} replace />;
 }
 
 export function App() {
@@ -48,68 +80,77 @@ export function App() {
           </ProtectedRoute>
         }
       >
+        <Route index element={<Inicio />} />
         <Route
-          index
+          path="/caixa"
           element={
-            <Suspense fallback={<FullScreenLoader />}>
-              <DashboardPage />
-            </Suspense>
+            <Tela permissao="pdv">
+              <CaixaPage />
+            </Tela>
+          }
+        />
+        <Route
+          path="/pre-vendas"
+          element={
+            <Tela permissao="prevenda.criar">
+              <PreSalePage />
+            </Tela>
           }
         />
         <Route
           path="/estoque"
           element={
-            <Suspense fallback={<FullScreenLoader />}>
+            <Tela permissao="produtos.ver">
               <StockPage />
-            </Suspense>
+            </Tela>
           }
         />
         <Route
           path="/vendas"
           element={
-            <Suspense fallback={<FullScreenLoader />}>
+            <Tela permissao="prevenda.verTodas">
               <SalesPage />
-            </Suspense>
+            </Tela>
           }
         />
         <Route
           path="/movimentacao"
           element={
-            <Suspense fallback={<FullScreenLoader />}>
+            <Tela permissao="estoque.movimentar">
               <StockMovementPage />
-            </Suspense>
+            </Tela>
           }
         />
         <Route
           path="/movimentacoes"
           element={
-            <Suspense fallback={<FullScreenLoader />}>
+            <Tela permissao="estoque.ver">
               <MovementsPage />
-            </Suspense>
+            </Tela>
           }
         />
         <Route
           path="/clientes"
           element={
-            <Suspense fallback={<FullScreenLoader />}>
+            <Tela permissao="prevenda.verTodas">
               <CustomersPage />
-            </Suspense>
+            </Tela>
           }
         />
         <Route
           path="/relatorios"
           element={
-            <Suspense fallback={<FullScreenLoader />}>
+            <Tela permissao="relatorios">
               <ReportsPage />
-            </Suspense>
+            </Tela>
           }
         />
         <Route
           path="/configuracoes"
           element={
-            <Suspense fallback={<FullScreenLoader />}>
+            <Tela permissao="configuracoes">
               <SettingsPage />
-            </Suspense>
+            </Tela>
           }
         />
       </Route>

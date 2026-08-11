@@ -224,13 +224,13 @@ export default function DashboardPage() {
                     {sale.customerName ?? 'Cliente não informado'}
                   </p>
                   <p className="truncate text-xs text-slate-500 dark:text-slate-400">
-                    {sale.quantity}× {sale.product?.name}
+                    {sale.items?.reduce((n, i) => n + i.quantity, 0)}× {sale.items?.[0]?.productName}
                     {sale.unit ? ` · ${sale.unit.name}` : ''} · {formatDateTime(sale.saleDate)}
                   </p>
                 </div>
 
                 <div className="shrink-0 text-right">
-                  <p className="text-sm font-bold text-success">{formatCurrency(sale.totalPrice)}</p>
+                  <p className="text-sm font-bold text-success">{formatCurrency(sale.totalAmount)}</p>
                   <PaymentBadge method={sale.paymentMethod} />
                 </div>
               </div>

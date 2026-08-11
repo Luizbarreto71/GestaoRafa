@@ -141,28 +141,37 @@ async function main() {
   const cliente = await db.customer.create({
     data: { name: 'Maria Silva', phone: '(11) 98123-4567' },
   });
+  // Venda de demonstração no formato novo: cabeçalho + itens.
   const iphone = await db.product.findFirst({ where: { name: 'iPhone 15 Pro Max' } });
 
-  if (iphone) {
+  if (iphone && matriz && admin) {
     const venda = await db.sale.create({
       data: {
-        productId: iphone.id,
-        unitId: sede.id,
+        code: 'VD-000001',
+        totalAmount: iphone.salePrice,
+        costAmount: iphone.costPrice,
+        paymentMethod: 'PIX',
+        unitId: matriz.id,
         customerId: cliente.id,
         customerName: cliente.name,
         customerPhone: cliente.phone,
-        quantity: 1,
-        unitPrice: iphone.salePrice,
-        totalPrice: iphone.salePrice,
-        costAtSale: iphone.costPrice,
-        paymentMethod: 'PIX',
-        userId: admin?.id ?? null,
+        sellerId: admin.id,
+        cashierId: admin.id,
         notes: 'Venda de demonstração',
+        items: {
+          create: {
+            productId: iphone.id,
+            productName: iphone.name,
+            quantity: 1,
+            unitPrice: iphone.salePrice,
+            costPrice: iphone.costPrice,
+          },
+        },
       },
     });
 
     const linha = await db.stock.update({
-      where: { productId_unitId: { productId: iphone.id, unitId: sede.id } },
+      where: { productId_unitId: { productId: iphone.id, unitId: matriz.id } },
       data: { quantity: { decrement: 1 } },
     });
 
@@ -173,15 +182,14 @@ async function main() {
         quantity: 1,
         previousQuantity: linha.quantity + 1,
         newQuantity: linha.quantity,
-        notes: 'Venda para Maria Silva',
         productId: iphone.id,
         productName: iphone.name,
-        unitId: sede.id,
+        unitId: matriz.id,
         saleId: venda.id,
-        userId: admin?.id ?? null,
+        userId: admin.id,
       },
     });
-    console.log('✅ 1 venda de demonstração (na Sede)');
+    console.log('✅ 1 venda de demonstração');
   }
 
   console.log('🎉 Pronto!');

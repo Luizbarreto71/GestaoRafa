@@ -279,7 +279,7 @@ rotasClientes.get(
         sales: {
           orderBy: { saleDate: 'desc' },
           take: 20,
-          include: { product: { select: { name: true, model: true } } },
+          include: { items: { select: { productName: true, quantity: true } } },
         },
       },
     });
@@ -339,7 +339,7 @@ const usuarioSchema = z.object({
   name: z.string().trim().min(2, 'Informe o nome').max(120),
   email: z.string().trim().toLowerCase().email('E-mail inválido'),
   password: z.string().trim().min(6, 'A senha deve ter ao menos 6 caracteres'),
-  role: z.enum(['ADMIN', 'GERENTE', 'VENDEDOR']).default('VENDEDOR'),
+  role: z.enum(['ADMIN', 'GERENTE', 'CAIXA', 'VENDEDOR']).default('VENDEDOR'),
   /** Gerente e Vendedor precisam de unidade; Administrador vê todas. */
   unitId: z.string().uuid().optional().nullable(),
   active: z.boolean().default(true),
