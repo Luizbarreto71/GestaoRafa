@@ -1,4 +1,5 @@
 import { ProductFormModal } from '@/components/products/ProductFormModal';
+import { ListaAtacadoModal } from '@/components/products/ListaAtacadoModal';
 import { TabelaDePrecosModal } from '@/components/products/TabelaDePrecosModal';
 import { SaleModal } from '@/components/sales/SaleModal';
 import { Badge, StatusBadge, StockBadge } from '@/components/ui/Badge';
@@ -33,6 +34,7 @@ import {
   Package,
   Pencil,
   Plus,
+  MessageCircle,
   Printer,
   Search,
   ShoppingCart,
@@ -66,6 +68,7 @@ export default function StockPage() {
 
   const [formOpen, setFormOpen] = useState(false);
   const [tabelaAberta, setTabelaAberta] = useState(false);
+  const [listaAberta, setListaAberta] = useState(false);
   const [editing, setEditing] = useState<Product | null>(null);
   const [saleProduct, setSaleProduct] = useState<Product | null>(null);
   const [deleting, setDeleting] = useState<Product | null>(null);
@@ -408,6 +411,14 @@ export default function StockPage() {
             </details>
           </div>
 
+          <Button
+            variant="outline"
+            icon={<MessageCircle className="h-4 w-4" />}
+            onClick={() => setListaAberta(true)}
+          >
+            Lista do atacado
+          </Button>
+
           {podeVerCusto && (
             <Button
               variant="outline"
@@ -609,6 +620,8 @@ export default function StockPage() {
 
       {/* Modais */}
       <TabelaDePrecosModal aberto={tabelaAberta} aoFechar={() => setTabelaAberta(false)} />
+
+      <ListaAtacadoModal aberto={listaAberta} aoFechar={() => setListaAberta(false)} />
 
       <ProductFormModal
         open={formOpen}

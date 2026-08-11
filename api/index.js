@@ -3263,6 +3263,107 @@ rotasRelatorios.get(
     });
   })
 );
+var chaveDaMarca = (marca) => (marca ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toUpperCase();
+rotasRelatorios.get(
+  "/whatsapp-list",
+  rota(async (req, res) => {
+    const q = validar(
+      z6.object({
+        /** De onde sai o preço mostrado. */
+        preco: z6.enum(["atacado", "varejo", "custo"]).default("atacado"),
+        /** Acréscimo, quando o preço parte do custo. */
+        markup: z6.coerce.number().min(0).max(999999).default(100),
+        categoryId: z6.string().uuid().optional(),
+        condicao: z6.string().trim().optional(),
+        unitId: z6.string().uuid().optional(),
+        agruparPor: z6.enum(["marca", "categoria"]).default("marca"),
+        mostrarQuantidade: z6.enum(["true", "false"]).default("true"),
+        mostrarCondicao: z6.enum(["true", "false"]).default("true"),
+        titulo: z6.string().trim().max(60).optional()
+      }),
+      semVazios(req.query)
+    );
+    if (q.preco === "custo" && !podeFazer(req.usuario?.papel, "financeiro")) {
+      throw new AppError("S\xF3 o administrador pode montar a lista a partir do pre\xE7o de compra", 403);
+    }
+    const unidade = unidadePermitida(req.usuario, q.unitId);
+    const produtos = await db.product.findMany({
+      where: {
+        ...q.categoryId ? { categoryId: q.categoryId } : {},
+        ...q.condicao ? { condicao: q.condicao } : {},
+        // Só o que existe: ninguém oferece no grupo o que já acabou.
+        stock: { some: { quantity: { gt: 0 }, ...unidade ? { unitId: unidade } : {} } }
+      },
+      include: {
+        category: true,
+        stock: unidade ? { where: { unitId: unidade } } : true
+      },
+      orderBy: { name: "asc" }
+    });
+    const precoDe = (p) => {
+      if (q.preco === "custo") return numero(p.costPrice) + q.markup;
+      if (q.preco === "varejo") return numero(p.salePrice) || numero(p.wholesalePrice);
+      return numero(p.wholesalePrice) || numero(p.salePrice);
+    };
+    const grupos = /* @__PURE__ */ new Map();
+    for (const p of produtos) {
+      const bruto = q.agruparPor === "categoria" ? p.category.name : p.brand;
+      const chave = chaveDaMarca(bruto) || "OUTROS";
+      if (!grupos.has(chave)) {
+        grupos.set(chave, { titulo: (bruto ?? "").trim() || "OUTROS", itens: [] });
+      }
+      grupos.get(chave).itens.push(p);
+    }
+    const ordenados = [...grupos.entries()].sort(([a], [b]) => {
+      if (a === "OUTROS") return 1;
+      if (b === "OUTROS") return -1;
+      return a.localeCompare(b, "pt-BR");
+    });
+    const dinheiro2 = (v) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL", minimumFractionDigits: 0 });
+    const linhas = [];
+    linhas.push(`*${(q.titulo ?? "RAFA MULTIMARCAS").toUpperCase()}*`);
+    linhas.push(`_Lista atualizada em ${dataBR(/* @__PURE__ */ new Date())}_`);
+    linhas.push("");
+    let totalPecas = 0;
+    for (const [, grupo] of ordenados) {
+      linhas.push(`*${grupo.titulo.toUpperCase()}*`);
+      for (const p of grupo.itens) {
+        const quantidade = p.stock.reduce((s, l) => s + l.quantity, 0);
+        totalPecas += quantidade;
+        const partes = [p.name];
+        if (q.mostrarCondicao === "true" && p.condicao) partes.push(p.condicao);
+        if (q.mostrarQuantidade === "true") partes.push(`${quantidade}un`);
+        linhas.push(`${partes.join(" \xB7 ")} \u2014 *${dinheiro2(precoDe(p))}*`);
+      }
+      linhas.push("");
+    }
+    linhas.push("\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501");
+    linhas.push(`${produtos.length} modelos \xB7 ${totalPecas} pe\xE7as`);
+    linhas.push("_Valores sujeitos a altera\xE7\xE3o._");
+    const texto3 = linhas.join("\n");
+    const parecidas = [];
+    const chaves = [...grupos.keys()].filter((c) => c !== "OUTROS");
+    for (let i = 0; i < chaves.length; i += 1) {
+      for (let j = i + 1; j < chaves.length; j += 1) {
+        const [a, b] = [chaves[i], chaves[j]];
+        if (Math.abs(a.length - b.length) <= 1 && (a.includes(b.slice(0, 4)) || b.includes(a.slice(0, 4)))) {
+          parecidas.push(`${a} / ${b}`);
+        }
+      }
+    }
+    res.json({
+      texto: texto3,
+      resumo: {
+        modelos: produtos.length,
+        pecas: totalPecas,
+        grupos: ordenados.length,
+        semMarca: grupos.get("OUTROS")?.itens.length ?? 0
+      },
+      // O sistema não decide por você qual grafia está certa.
+      marcasParecidas: [...new Set(parecidas)]
+    });
+  })
+);
 
 // server/sistema.ts
 import ExcelJS2 from "exceljs";

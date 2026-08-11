@@ -1,8 +1,10 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { autenticar } from './auth';
-import { dataBR, dataHoraBR, intervalo, numero, rota, validar, semVazios } from './core';
-import { exigir } from './permissoes';
+import {
+  AppError,
+  dataBR, dataHoraBR, intervalo, numero, rota, validar, semVazios } from './core';
+import { exigir, podeFazer } from './permissoes';
 import { db } from './db';
 import { decimal, exportar, reais, type Coluna } from './exportar';
 import { MOTIVO_LABEL, STATUS_PRODUTO_LABEL, TIPO_LABEL } from './estoque';
@@ -635,6 +637,156 @@ rotasRelatorios.get(
         { label: 'Peças em estoque', value: String(linhas.reduce((s, l) => s + l.quantity, 0)) },
         { label: 'Acréscimo aplicado', value: reais(q.markup) },
       ],
+    });
+  }),
+);
+
+// ------------------------------------------------ Lista para o WhatsApp
+
+/**
+ * Junta variações do mesmo nome de marca.
+ *
+ * "Xiaomi", "XIAOMI" e " xiaomi " são a mesma coisa e não podem virar três
+ * títulos na lista. Diferenças de letra de verdade (XIOMI × XIAOMI) ficam
+ * separadas de propósito: corrigir isso é decisão de quem cadastrou, não
+ * palpite do sistema.
+ */
+const chaveDaMarca = (marca: string | null): string =>
+  (marca ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toUpperCase();
+
+/**
+ * Lista de tudo em estoque, pronta para colar no grupo de atacado.
+ *
+ * Sai como texto com a formatação do WhatsApp (asterisco marca negrito),
+ * separada por marca. Não é PDF de propósito: no grupo o que serve é
+ * mensagem, não anexo.
+ */
+rotasRelatorios.get(
+  '/whatsapp-list',
+  rota(async (req, res) => {
+    const q = validar(
+      z.object({
+        /** De onde sai o preço mostrado. */
+        preco: z.enum(['atacado', 'varejo', 'custo']).default('atacado'),
+        /** Acréscimo, quando o preço parte do custo. */
+        markup: z.coerce.number().min(0).max(999_999).default(100),
+        categoryId: z.string().uuid().optional(),
+        condicao: z.string().trim().optional(),
+        unitId: z.string().uuid().optional(),
+        agruparPor: z.enum(['marca', 'categoria']).default('marca'),
+        mostrarQuantidade: z.enum(['true', 'false']).default('true'),
+        mostrarCondicao: z.enum(['true', 'false']).default('true'),
+        titulo: z.string().trim().max(60).optional(),
+      }),
+      semVazios(req.query),
+    );
+
+    // Preço a partir do custo expõe a margem: exige permissão de financeiro.
+    if (q.preco === 'custo' && !podeFazer(req.usuario?.papel, 'financeiro')) {
+      throw new AppError('Só o administrador pode montar a lista a partir do preço de compra', 403);
+    }
+
+    const unidade = unidadePermitida(req.usuario, q.unitId);
+
+    const produtos = await db.product.findMany({
+      where: {
+        ...(q.categoryId ? { categoryId: q.categoryId } : {}),
+        ...(q.condicao ? { condicao: q.condicao } : {}),
+        // Só o que existe: ninguém oferece no grupo o que já acabou.
+        stock: { some: { quantity: { gt: 0 }, ...(unidade ? { unitId: unidade } : {}) } },
+      },
+      include: {
+        category: true,
+        stock: unidade ? { where: { unitId: unidade } } : true,
+      },
+      orderBy: { name: 'asc' },
+    });
+
+    const precoDe = (p: (typeof produtos)[number]): number => {
+      if (q.preco === 'custo') return numero(p.costPrice) + q.markup;
+      if (q.preco === 'varejo') return numero(p.salePrice) || numero(p.wholesalePrice);
+      return numero(p.wholesalePrice) || numero(p.salePrice);
+    };
+
+    // Agrupa mantendo a grafia mais usada de cada marca.
+    const grupos = new Map<string, { titulo: string; itens: typeof produtos }>();
+
+    for (const p of produtos) {
+      const bruto = q.agruparPor === 'categoria' ? p.category.name : p.brand;
+      const chave = chaveDaMarca(bruto) || 'OUTROS';
+
+      if (!grupos.has(chave)) {
+        grupos.set(chave, { titulo: (bruto ?? '').trim() || 'OUTROS', itens: [] });
+      }
+      grupos.get(chave)!.itens.push(p);
+    }
+
+    const ordenados = [...grupos.entries()].sort(([a], [b]) => {
+      // "Outros" sempre por último; o resto em ordem alfabética.
+      if (a === 'OUTROS') return 1;
+      if (b === 'OUTROS') return -1;
+      return a.localeCompare(b, 'pt-BR');
+    });
+
+    const dinheiro = (v: number) =>
+      v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 0 });
+
+    const linhas: string[] = [];
+    linhas.push(`*${(q.titulo ?? 'RAFA MULTIMARCAS').toUpperCase()}*`);
+    linhas.push(`_Lista atualizada em ${dataBR(new Date())}_`);
+    linhas.push('');
+
+    let totalPecas = 0;
+
+    for (const [, grupo] of ordenados) {
+      linhas.push(`*${grupo.titulo.toUpperCase()}*`);
+
+      for (const p of grupo.itens) {
+        const quantidade = p.stock.reduce((s, l) => s + l.quantity, 0);
+        totalPecas += quantidade;
+
+        const partes = [p.name];
+        if (q.mostrarCondicao === 'true' && p.condicao) partes.push(p.condicao);
+        if (q.mostrarQuantidade === 'true') partes.push(`${quantidade}un`);
+
+        linhas.push(`${partes.join(' · ')} — *${dinheiro(precoDe(p))}*`);
+      }
+
+      linhas.push('');
+    }
+
+    linhas.push('━━━━━━━━━━━━━━━');
+    linhas.push(`${produtos.length} modelos · ${totalPecas} peças`);
+    linhas.push('_Valores sujeitos a alteração._');
+
+    const texto = linhas.join('\n');
+
+    // Marcas parecidas: avisa em vez de juntar por conta própria.
+    const parecidas: string[] = [];
+    const chaves = [...grupos.keys()].filter((c) => c !== 'OUTROS');
+    for (let i = 0; i < chaves.length; i += 1) {
+      for (let j = i + 1; j < chaves.length; j += 1) {
+        const [a, b] = [chaves[i], chaves[j]];
+        if (Math.abs(a.length - b.length) <= 1 && (a.includes(b.slice(0, 4)) || b.includes(a.slice(0, 4)))) {
+          parecidas.push(`${a} / ${b}`);
+        }
+      }
+    }
+
+    res.json({
+      texto,
+      resumo: {
+        modelos: produtos.length,
+        pecas: totalPecas,
+        grupos: ordenados.length,
+        semMarca: grupos.get('OUTROS')?.itens.length ?? 0,
+      },
+      // O sistema não decide por você qual grafia está certa.
+      marcasParecidas: [...new Set(parecidas)],
     });
   }),
 );
