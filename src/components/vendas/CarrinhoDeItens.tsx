@@ -50,6 +50,9 @@ export function CarrinhoDeItens({
         // Só para a tela: a API ignora, mas é o que deixa o carrinho
         // conferível de relance quando o cliente leva várias coisas.
         foto: produto.photos?.[0] ?? null,
+        // O piso da venda viaja com o item: avisar exige comparar a cada
+        // tecla, e buscar o produto de novo a cada tecla seria absurdo.
+        minimo: produto.wholesalePrice ?? null,
         detalhes: [
           produto.brand,
           produto.capacity,
@@ -190,6 +193,11 @@ export function CarrinhoDeItens({
                       {item.detalhes && (
                         <p className="truncate text-xs text-slate-500 dark:text-slate-400">
                           {item.detalhes}
+                        </p>
+                      )}
+                      {item.minimo != null && item.unitPrice < item.minimo && (
+                        <p className="text-xs font-semibold text-warning">
+                          Abaixo do atacado ({formatCurrency(item.minimo)}) — precisa da chave
                         </p>
                       )}
                       {item.disponivel != null && (

@@ -6,6 +6,7 @@ import { Modal } from '@/components/ui/Modal';
 import { StatCard } from '@/components/ui/StatCard';
 import { CarrinhoDeItens, totalDosItens } from '@/components/vendas/CarrinhoDeItens';
 import { useTaxasDeCartao } from '@/components/vendas/CalculadoraDeCartao';
+import { PedirChave, type AbaixoDoMinimo } from '@/components/vendas/PedirChave';
 import { ReciboDaVenda } from '@/components/vendas/ReciboDaVenda';
 import {
   TrocaNoBalcao,
@@ -601,6 +602,7 @@ function VendaDireta() {
   const taxas = useTaxasDeCartao();
 
   const [itens, setItens] = useState<ItemVenda[]>([]);
+  const [pedindoChave, setPedindoChave] = useState<AbaixoDoMinimo[] | null>(null);
   const [recibo, setRecibo] = useState<{ id: string; code: string; totalAmount: number } | null>(null);
   const [comTroca, setComTroca] = useState(false);
   const [troca, setTroca] = useState<TrocaDeBalcao>(trocaVazia);
@@ -687,11 +689,23 @@ function VendaDireta() {
   const usuarioDoNome = (nome: string) =>
     (usuarios?.data ?? []).find((u) => u.name.trim().toLowerCase() === nome.trim().toLowerCase());
 
-  async function enviar(evento: FormEvent) {
-    evento.preventDefault();
+  async function enviar(evento: FormEvent, chaveDeAcesso?: string) {
+    evento?.preventDefault?.();
     // Cliente é opcional no balcão: quem paga um cabo à vista não precisa
     // se identificar, e a fila anda.
     if (!itens.length) return toast.warning('Adicione ao menos um produto');
+
+    // Abaixo do atacado, o dono precisa autorizar. Conferido aqui só para
+    // pedir a chave sem ida ao servidor — quem decide é a API.
+    const baratos = itens.flatMap((i) =>
+      i.minimo != null && i.unitPrice < i.minimo
+        ? [{ nome: i.productName ?? 'Produto', cobrado: i.unitPrice, minimo: i.minimo }]
+        : [],
+    );
+    if (baratos.length && !chaveDeAcesso) {
+      setPedindoChave(baratos);
+      return;
+    }
 
     if (comTroca) {
       if (!troca.modelo.trim()) return toast.warning('Informe o modelo do aparelho da troca');
@@ -746,6 +760,7 @@ function VendaDireta() {
         paymentMethod: form.paymentMethod,
         installments: Number(form.installments) || 1,
         acrescimo: dividido ? undefined : acrescimo || undefined,
+        chaveDeAcesso,
         payments: dividido
           ? paraApi(true, formas)
           : (pagamentoNoCredito() ??
@@ -772,6 +787,7 @@ function VendaDireta() {
         notes: form.notes.trim() || null,
       });
 
+      setPedindoChave(null);
       toast.success('Venda registrada', 'Estoque atualizado e movimentação gerada.');
       // O comprovante aparece agora, que é quando o cliente ainda está aqui.
       if (venda?.id) {
@@ -918,6 +934,13 @@ function VendaDireta() {
             Finalizar venda · {formatCurrency(totalCobrado)}
           </Button>
         </form>
+
+        <PedirChave
+          itens={pedindoChave}
+          ocupado={criar.isPending}
+          aoFechar={() => setPedindoChave(null)}
+          aoConfirmar={(chave) => void enviar(new Event('submit') as never, chave)}
+        />
 
         <ReciboDaVenda venda={recibo} aoFechar={() => setRecibo(null)} />
       </CardBody>

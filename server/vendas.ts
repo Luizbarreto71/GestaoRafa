@@ -17,6 +17,7 @@ import {
   validar,
 } from './core';
 import { db, registrarLog } from './db';
+import { exigirChaveSeAbaixoDoMinimo } from './preco-minimo';
 import { enviarRecibo } from './recibo';
 import { lojaSalva } from './sistema';
 import {
@@ -191,6 +192,8 @@ const vendaSchema = z.object({
   customerId: z.string().uuid().optional().nullable(),
   /** Cobrado além do preço dos produtos — o repasse da taxa do cartão. */
   acrescimo: z.coerce.number().min(0).max(999_999).optional().nullable(),
+  /** Libera vender abaixo do preço de atacado. */
+  chaveDeAcesso: z.string().trim().max(60).optional().nullable(),
   /**
    * Aparelho que o cliente deixou como parte do pagamento.
    *
@@ -226,6 +229,7 @@ rotasVendas.post(
   exigir('pdv'),
   rota(async (req, res) => {
     const dados = validar(vendaSchema, req.body);
+    await exigirChaveSeAbaixoDoMinimo(dados.items, dados.chaveDeAcesso);
 
     // Quem leva a comissão.
     //

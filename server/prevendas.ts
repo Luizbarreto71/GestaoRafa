@@ -17,6 +17,7 @@ import {
 import { db, registrarLog } from './db';
 import { disponivel } from './estoque';
 import { notificar, notificarPerfil } from './notificacoes';
+import { exigirChaveSeAbaixoDoMinimo } from './preco-minimo';
 import { exigir, podeFazer } from './permissoes';
 import { proximoCodigo, registrarVenda } from './vendas-service';
 
@@ -98,6 +99,8 @@ const preVendaSchema = z.object({
   items: z.array(itemSchema).min(1, 'Inclua ao menos um produto'),
   /** Aparelho usado que o cliente está dando como parte do pagamento. */
   tradeInId: z.string().uuid().optional().nullable(),
+  /** Libera montar a pré-venda abaixo do preço de atacado. */
+  chaveDeAcesso: z.string().trim().max(60).optional().nullable(),
 });
 
 /** Vendedor enxerga só as próprias; caixa e admin enxergam todas. */
@@ -207,6 +210,7 @@ rotasPreVendas.post(
   exigir('prevenda.criar'),
   rota(async (req, res) => {
     const dados = validar(preVendaSchema, req.body);
+    await exigirChaveSeAbaixoDoMinimo(dados.items, dados.chaveDeAcesso);
 
     // Só confere se o produto existe. Estoque NÃO é reservado: a pré-venda
     // é intenção, e quem garante a peça é o caixa na finalização.
@@ -343,6 +347,8 @@ const finalizarSchema = z.object({
   notes: z.string().trim().max(1000).optional().nullable(),
   /** O caixa pode corrigir valor e identificadores antes de fechar. */
   items: z.array(itemSchema.extend({ id: z.string().uuid().optional() })).optional(),
+  /** Libera fechar abaixo do preço de atacado. */
+  chaveDeAcesso: z.string().trim().max(60).optional().nullable(),
 });
 
 /**
@@ -354,6 +360,7 @@ rotasPreVendas.post(
   exigir('venda.finalizar'),
   rota(async (req, res) => {
     const dados = validar(finalizarSchema, req.body);
+    if (dados.items) await exigirChaveSeAbaixoDoMinimo(dados.items, dados.chaveDeAcesso);
 
     const preVenda = await db.preSale.findUnique({
       where: { id: req.params.id },

@@ -1,3 +1,4 @@
+import bcrypt from 'bcryptjs';
 import ExcelJS from 'exceljs';
 import { Router } from 'express';
 import multer from 'multer';
@@ -608,5 +609,75 @@ rotasSistema.put(
 
     await registrarLog({ acao: 'CONTAS_PIX', entidade: 'Setting', id: CHAVE_PIX, req });
     res.json({ contas: limpas, message: `${limpas.length} conta(s) de Pix salvas.` });
+  }),
+);
+
+// ------------------------------------------------------- Chave de acesso
+
+const CHAVE_ACESSO = 'chave_de_acesso';
+
+/**
+ * Confere a chave que libera vender abaixo do atacado.
+ *
+ * Guardada com hash, como qualquer senha: quem tiver acesso ao banco não
+ * pode sair vendendo abaixo do mínimo em nome do dono.
+ */
+export async function conferirChaveDeAcesso(chave?: string | null): Promise<boolean> {
+  if (!chave?.trim()) return false;
+
+  const guardada = await db.setting.findUnique({ where: { key: CHAVE_ACESSO } });
+  if (!guardada) return false;
+
+  return bcrypt.compare(chave.trim(), guardada.value);
+}
+
+/** Existe chave definida? Sem ela, ninguém consegue liberar nada. */
+export async function temChaveDeAcesso(): Promise<boolean> {
+  return Boolean(await db.setting.findUnique({ where: { key: CHAVE_ACESSO } }));
+}
+
+rotasSistema.get(
+  '/chave-de-acesso',
+  rota(async (_req, res) => {
+    // Só se existe — a chave em si nunca sai do servidor.
+    res.json({ definida: await temChaveDeAcesso() });
+  }),
+);
+
+rotasSistema.put(
+  '/chave-de-acesso',
+  somenteAdmin,
+  rota(async (req, res) => {
+    const { chave } = validar(
+      z.object({
+        chave: z
+          .string()
+          .trim()
+          .min(4, 'A chave precisa de ao menos 4 caracteres')
+          .max(60),
+      }),
+      req.body,
+    );
+
+    await db.setting.upsert({
+      where: { key: CHAVE_ACESSO },
+      update: { value: await bcrypt.hash(chave, 10) },
+      create: { key: CHAVE_ACESSO, value: await bcrypt.hash(chave, 10) },
+    });
+
+    await registrarLog({ acao: 'CHAVE_DE_ACESSO', entidade: 'Setting', id: CHAVE_ACESSO, req });
+    res.json({ definida: true, message: 'Chave de acesso salva.' });
+  }),
+);
+
+rotasSistema.delete(
+  '/chave-de-acesso',
+  somenteAdmin,
+  rota(async (req, res) => {
+    await db.setting.deleteMany({ where: { key: CHAVE_ACESSO } });
+    await registrarLog({ acao: 'CHAVE_DE_ACESSO_REMOVIDA', entidade: 'Setting', id: CHAVE_ACESSO, req });
+
+    // Sem chave, ninguém libera nada: o mínimo passa a ser inegociável.
+    res.json({ definida: false, message: 'Chave removida. Vender abaixo do atacado fica bloqueado.' });
   }),
 );

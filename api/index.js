@@ -3231,6 +3231,7 @@ function normalizarTaxas(bruto) {
 }
 
 // server/sistema.ts
+import bcrypt3 from "bcryptjs";
 import ExcelJS2 from "exceljs";
 import { Router as Router7 } from "express";
 import multer from "multer";
@@ -3737,6 +3738,50 @@ rotasSistema.put(
     });
     await registrarLog({ acao: "CONTAS_PIX", entidade: "Setting", id: CHAVE_PIX, req });
     res.json({ contas: limpas, message: `${limpas.length} conta(s) de Pix salvas.` });
+  })
+);
+var CHAVE_ACESSO = "chave_de_acesso";
+async function conferirChaveDeAcesso(chave) {
+  if (!chave?.trim()) return false;
+  const guardada = await db.setting.findUnique({ where: { key: CHAVE_ACESSO } });
+  if (!guardada) return false;
+  return bcrypt3.compare(chave.trim(), guardada.value);
+}
+async function temChaveDeAcesso() {
+  return Boolean(await db.setting.findUnique({ where: { key: CHAVE_ACESSO } }));
+}
+rotasSistema.get(
+  "/chave-de-acesso",
+  rota(async (_req, res) => {
+    res.json({ definida: await temChaveDeAcesso() });
+  })
+);
+rotasSistema.put(
+  "/chave-de-acesso",
+  somenteAdmin,
+  rota(async (req, res) => {
+    const { chave } = validar(
+      z6.object({
+        chave: z6.string().trim().min(4, "A chave precisa de ao menos 4 caracteres").max(60)
+      }),
+      req.body
+    );
+    await db.setting.upsert({
+      where: { key: CHAVE_ACESSO },
+      update: { value: await bcrypt3.hash(chave, 10) },
+      create: { key: CHAVE_ACESSO, value: await bcrypt3.hash(chave, 10) }
+    });
+    await registrarLog({ acao: "CHAVE_DE_ACESSO", entidade: "Setting", id: CHAVE_ACESSO, req });
+    res.json({ definida: true, message: "Chave de acesso salva." });
+  })
+);
+rotasSistema.delete(
+  "/chave-de-acesso",
+  somenteAdmin,
+  rota(async (req, res) => {
+    await db.setting.deleteMany({ where: { key: CHAVE_ACESSO } });
+    await registrarLog({ acao: "CHAVE_DE_ACESSO_REMOVIDA", entidade: "Setting", id: CHAVE_ACESSO, req });
+    res.json({ definida: false, message: "Chave removida. Vender abaixo do atacado fica bloqueado." });
   })
 );
 
@@ -5091,6 +5136,37 @@ rotasCaixa.get(
 import { Prisma as Prisma4 } from "@prisma/client";
 import { Router as Router11 } from "express";
 import { z as z10 } from "zod";
+
+// server/preco-minimo.ts
+async function exigirChaveSeAbaixoDoMinimo(itens, chave) {
+  if (!itens.length) return;
+  const produtos = await db.product.findMany({
+    where: { id: { in: itens.map((i) => i.productId) } },
+    select: { id: true, name: true, wholesalePrice: true }
+  });
+  const abaixo = itens.flatMap((item) => {
+    const produto = produtos.find((p) => p.id === item.productId);
+    if (!produto?.wholesalePrice) return [];
+    const minimo = numero(produto.wholesalePrice);
+    if (item.unitPrice >= minimo) return [];
+    return [{ nome: produto.name, cobrado: item.unitPrice, minimo }];
+  });
+  if (!abaixo.length) return;
+  const lista = abaixo.map((a) => `${a.nome} por R$ ${a.cobrado.toFixed(2)} (m\xEDnimo R$ ${a.minimo.toFixed(2)})`).join("; ");
+  if (await conferirChaveDeAcesso(chave)) return;
+  if (!await temChaveDeAcesso()) {
+    throw new AppError(
+      `Abaixo do pre\xE7o de atacado: ${lista}. Nenhuma chave de acesso foi cadastrada \u2014 pe\xE7a ao administrador para criar uma em Configura\xE7\xF5es.`,
+      403
+    );
+  }
+  throw new AppError(
+    chave?.trim() ? `Chave de acesso incorreta. ${lista}.` : `Abaixo do pre\xE7o de atacado: ${lista}. Informe a chave de acesso do administrador.`,
+    403
+  );
+}
+
+// server/prevendas.ts
 var rotasPreVendas = Router11();
 rotasPreVendas.use(autenticar);
 var PAGAMENTOS = ["PIX", "DINHEIRO", "DEBITO", "CREDITO", "TRANSFERENCIA", "EM_ABERTO", "OUTRO"];
@@ -5155,7 +5231,9 @@ var preVendaSchema = z10.object({
   notes: z10.string().trim().max(1e3).optional().nullable(),
   items: z10.array(itemSchema).min(1, "Inclua ao menos um produto"),
   /** Aparelho usado que o cliente está dando como parte do pagamento. */
-  tradeInId: z10.string().uuid().optional().nullable()
+  tradeInId: z10.string().uuid().optional().nullable(),
+  /** Libera montar a pré-venda abaixo do preço de atacado. */
+  chaveDeAcesso: z10.string().trim().max(60).optional().nullable()
 });
 var podeVerTodas = (req) => podeFazer(req.usuario?.papel, "prevenda.verTodas");
 async function liberarTroca(preSaleId) {
@@ -5233,6 +5311,7 @@ rotasPreVendas.post(
   exigir("prevenda.criar"),
   rota(async (req, res) => {
     const dados = validar(preVendaSchema, req.body);
+    await exigirChaveSeAbaixoDoMinimo(dados.items, dados.chaveDeAcesso);
     const produtos = await db.product.findMany({
       where: { id: { in: dados.items.map((i) => i.productId) } },
       select: { id: true, name: true }
@@ -5340,13 +5419,16 @@ var finalizarSchema = z10.object({
   ).max(6, "No m\xE1ximo 6 formas na mesma venda").optional(),
   notes: z10.string().trim().max(1e3).optional().nullable(),
   /** O caixa pode corrigir valor e identificadores antes de fechar. */
-  items: z10.array(itemSchema.extend({ id: z10.string().uuid().optional() })).optional()
+  items: z10.array(itemSchema.extend({ id: z10.string().uuid().optional() })).optional(),
+  /** Libera fechar abaixo do preço de atacado. */
+  chaveDeAcesso: z10.string().trim().max(60).optional().nullable()
 });
 rotasPreVendas.post(
   "/:id/finalizar",
   exigir("venda.finalizar"),
   rota(async (req, res) => {
     const dados = validar(finalizarSchema, req.body);
+    if (dados.items) await exigirChaveSeAbaixoDoMinimo(dados.items, dados.chaveDeAcesso);
     const preVenda = await db.preSale.findUnique({
       where: { id: req.params.id },
       include: { items: true, seller: { select: { id: true, name: true } }, tradeIn: true }
@@ -6295,6 +6377,8 @@ var vendaSchema = z13.object({
   customerId: z13.string().uuid().optional().nullable(),
   /** Cobrado além do preço dos produtos — o repasse da taxa do cartão. */
   acrescimo: z13.coerce.number().min(0).max(999999).optional().nullable(),
+  /** Libera vender abaixo do preço de atacado. */
+  chaveDeAcesso: z13.string().trim().max(60).optional().nullable(),
   /**
    * Aparelho que o cliente deixou como parte do pagamento.
    *
@@ -6325,6 +6409,7 @@ rotasVendas.post(
   exigir("pdv"),
   rota(async (req, res) => {
     const dados = validar(vendaSchema, req.body);
+    await exigirChaveSeAbaixoDoMinimo(dados.items, dados.chaveDeAcesso);
     let vendedorId = dados.sellerId ?? req.usuario.id;
     if (dados.sellerName?.trim()) {
       const encontrado = await db.user.findFirst({

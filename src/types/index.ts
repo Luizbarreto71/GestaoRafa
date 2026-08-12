@@ -197,6 +197,8 @@ export interface ItemVenda {
   /** Só para a tela conferir de relance; a API não recebe nem devolve. */
   foto?: string | null;
   detalhes?: string;
+  /** Preço de atacado: o piso da venda. */
+  minimo?: number | null;
 }
 
 /** Intenção de venda montada pelo vendedor. Não mexe no estoque. */

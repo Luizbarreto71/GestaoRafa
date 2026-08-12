@@ -1,11 +1,12 @@
 import { CategoriesTab } from '@/components/settings/CategoriesTab';
+import { ChaveDeAcesso } from '@/components/settings/ChaveDeAcesso';
 import { LogsTab } from '@/components/settings/LogsTab';
 import { UnitsTab } from '@/components/settings/UnitsTab';
 import { SuppliersTab } from '@/components/settings/SuppliersTab';
 import { SystemTab } from '@/components/settings/SystemTab';
 import { UsersTab } from '@/components/settings/UsersTab';
 import { cn } from '@/lib/cn';
-import { Building2, History, LayoutList, Settings2, Truck, Users } from 'lucide-react';
+import { Building2, History, KeyRound, LayoutList, Settings2, Truck, Users } from 'lucide-react';
 import { useState } from 'react';
 
 const TABS = [
@@ -14,6 +15,7 @@ const TABS = [
   { key: 'categories', label: 'Categorias', icon: LayoutList, component: CategoriesTab },
   { key: 'suppliers', label: 'Fornecedores', icon: Truck, component: SuppliersTab },
   { key: 'users', label: 'Usuários', icon: Users, component: UsersTab },
+  { key: 'chave', label: 'Chave de acesso', icon: KeyRound, component: ChaveDeAcesso },
   { key: 'logs', label: 'Logs', icon: History, component: LogsTab },
 ] as const;
 
