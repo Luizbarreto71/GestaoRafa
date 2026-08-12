@@ -124,16 +124,25 @@ export default function StockPage() {
         // Categoria vazia e sem filhas não vira aba: só ocuparia espaço.
         if (total === 0) return [];
 
+        const comProdutos = filhas.filter((f) => quantos(f) > 0);
+
+        // A mãe só aparece quando ela mesma tem produtos ou não tem
+        // subcategoria. "Celulares" ao lado de Lacrado, Vitrine e Xiaomi
+        // Lacrado não leva a lugar nenhum que as filhas já não levem — e
+        // "Todos" continua ali para ver tudo junto. Se um dia sobrar
+        // produto direto na mãe, ela reaparece: senão ele ficaria
+        // inalcançável pelas abas.
+        const mostrarMae = comProdutos.length === 0 || quantos(mae) > 0;
+
         return [
-          { rotulo: mae.name, valor: mae.id, total, filha: false },
-          ...filhas
-            .filter((f) => quantos(f) > 0)
-            .map((f) => ({
-              rotulo: f.name.split('›').pop()!.trim(),
-              valor: f.id,
-              total: quantos(f),
-              filha: true,
-            })),
+          ...(mostrarMae ? [{ rotulo: mae.name, valor: mae.id, total, filha: false }] : []),
+          ...comProdutos.map((f) => ({
+            rotulo: f.name.split('›').pop()!.trim(),
+            valor: f.id,
+            total: quantos(f),
+            // Sem a mãe acima, o traço de ramificação não aponta para nada.
+            filha: mostrarMae,
+          })),
         ];
       }),
     ];
