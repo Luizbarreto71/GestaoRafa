@@ -6617,7 +6617,10 @@ rotasVendas.delete(
       req
     });
     res.json({
-      message: `Venda ${venda.code} cancelada. ${venda.items.length} item(ns) devolvidos ao estoque da ${venda.unit.name}.`
+      // Peças, não linhas: cancelar uma venda de duas unidades do mesmo
+      // aparelho dizia "1 item devolvido" e quem confere o estoque
+      // procurava a peça que faltava.
+      message: `Venda ${venda.code} cancelada. ${venda.items.reduce((s, i) => s + i.quantity, 0)} pe\xE7a(s) devolvida(s) ao estoque da ${venda.unit.name}.`
     });
   })
 );
