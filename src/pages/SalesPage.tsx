@@ -12,6 +12,7 @@ import { useCategories, useDeleteSale, useSales } from '@/hooks/queries';
 import { useDebounce } from '@/hooks/useDebounce';
 import { downloadFile } from '@/lib/api';
 import { formatCurrency, formatDateTime, formatPhone, PAYMENT_OPTIONS } from '@/lib/format';
+import { ReciboModal } from '@/components/vendas/ReciboModal';
 import type { Sale } from '@/types';
 import { Download, Package, Receipt, Search, Trash2, TrendingUp, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
@@ -27,6 +28,7 @@ export default function SalesPage() {
   const [sortBy, setSortBy] = useState('saleDate');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [deleting, setDeleting] = useState<Sale | null>(null);
+  const [recibo, setRecibo] = useState<Sale | null>(null);
 
   const [filters, setFilters] = useState({
     categoryId: '',
@@ -208,26 +210,43 @@ export default function SalesPage() {
         );
       },
     },
-    ...(isAdmin
-      ? [
-          {
-            key: 'actions',
-            header: 'Ações',
-            align: 'right' as const,
-            render: (sale: Sale) => (
-              <Button
-                size="icon"
-                variant="ghost"
-                className="text-danger hover:bg-danger-bg dark:hover:bg-danger/15"
-                onClick={() => setDeleting(sale)}
-                title="Cancelar venda e devolver ao estoque"
-              >
-                <Trash2 className="h-4 w-4" />
-              </Button>
-            ),
-          },
-        ]
-      : []),
+    {
+      key: 'actions',
+      header: 'Ações',
+      align: 'right' as const,
+      render: (sale: Sale) => (
+        <div className="flex items-center justify-end gap-1">
+          <Button
+            size="icon"
+            variant="ghost"
+            className="text-accent hover:bg-accent/10"
+            onClick={(e) => {
+              // Sem isto o clique sobe para a linha e abre duas vezes.
+              e.stopPropagation();
+              setRecibo(sale);
+            }}
+            title="Ver comprovante"
+          >
+            <Receipt className="h-4 w-4" />
+          </Button>
+
+          {isAdmin && (
+            <Button
+              size="icon"
+              variant="ghost"
+              className="text-danger hover:bg-danger-bg dark:hover:bg-danger/15"
+              onClick={(e) => {
+                e.stopPropagation();
+                setDeleting(sale);
+              }}
+              title="Cancelar venda e devolver ao estoque"
+            >
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          )}
+        </div>
+      ),
+    },
   ];
 
   return (
@@ -353,6 +372,7 @@ export default function SalesPage() {
           data={data?.data ?? []}
           loading={isLoading}
           rowKey={(sale) => sale.id}
+          onRowClick={(sale) => setRecibo(sale)}
           sortBy={sortBy}
           sortOrder={sortOrder}
           onSort={handleSort}
@@ -389,10 +409,24 @@ export default function SalesPage() {
                   ) : (
                     <PaymentBadge method={sale.paymentMethod} />
                   )}
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setRecibo(sale);
+                    }}
+                    className="rounded p-1 text-accent"
+                    aria-label="Ver comprovante"
+                  >
+                    <Receipt className="h-4 w-4" />
+                  </button>
                   {isAdmin && (
                     <button
                       type="button"
-                      onClick={() => setDeleting(sale)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setDeleting(sale);
+                      }}
                       className="rounded p-1 text-danger"
                       aria-label="Cancelar venda"
                     >
@@ -408,6 +442,8 @@ export default function SalesPage() {
         <Pagination meta={data?.meta} onPageChange={setPage} onPageSizeChange={setPageSize} />
       </Card>
 
+
+      <ReciboModal venda={recibo} aoFechar={() => setRecibo(null)} />
       <ConfirmDialog
         open={Boolean(deleting)}
         title="Cancelar venda"
