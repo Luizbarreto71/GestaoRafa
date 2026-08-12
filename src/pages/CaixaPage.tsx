@@ -727,47 +727,26 @@ function VendaDireta() {
       <CardHeader title="Nova venda no balcão" subtitle="Sem passar por pré-venda" />
       <CardBody>
         <form onSubmit={enviar} className="space-y-5">
-          <div>
-            <p className="label-base">
-              Cliente
-              <span className="ml-1.5 font-normal text-slate-400">
-                opcional — deixe em branco para agilizar
-              </span>
-            </p>
+          {/* A ordem segue o atendimento: primeiro o que ele leva, depois
+              como paga, e o cadastro por último — que é opcional. */}
+          <Secao numero={1} titulo="O que o cliente está levando">
+            <CarrinhoDeItens itens={itens} aoMudar={setItens} unidadeId={unidade} />
 
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <Input
-                label="Nome"
-                value={form.customerName}
-                onChange={(e) => setForm((f) => ({ ...f, customerName: e.target.value }))}
-                placeholder="Consumidor"
-              />
-              <Input
-                label="CPF"
-                value={form.customerDocument}
-                onChange={(e) => setForm((f) => ({ ...f, customerDocument: e.target.value }))}
-                placeholder="opcional"
-              />
-              <Input
-                label="Telefone"
-                value={form.customerPhone}
-                onChange={(e) => setForm((f) => ({ ...f, customerPhone: e.target.value }))}
-                placeholder="opcional"
-              />
-            </div>
-          </div>
+            <TrocaNoBalcao
+              ligada={comTroca}
+              aoLigar={setComTroca}
+              troca={troca}
+              aoMudar={setTroca}
+              totalDosProdutos={totalDosProdutos}
+            />
+          </Secao>
 
-          <CarrinhoDeItens itens={itens} aoMudar={setItens} unidadeId={unidade} />
-
-          <TrocaNoBalcao
-            ligada={comTroca}
-            aoLigar={setComTroca}
-            troca={troca}
-            aoMudar={setTroca}
-            totalDosProdutos={totalDosProdutos}
-          />
-
-          <FormasDePagamento
+          <Secao
+            numero={2}
+            titulo="Como vai pagar"
+            complemento={itens.length > 0 ? formatCurrency(total) : undefined}
+          >
+            <FormasDePagamento
             dividido={dividido}
             aoDividir={setDividido}
             formas={formas}
@@ -781,8 +760,10 @@ function VendaDireta() {
             formaDaEntrada={form.formaDaEntrada}
             aoMudarFormaDaEntrada={(v) => setForm((f) => ({ ...f, formaDaEntrada: v }))}
             total={total}
-          />
+            />
+          </Secao>
 
+          <Secao numero={3} titulo="Quem atendeu e de onde sai">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <Select
               label="Unidade de saída"
@@ -813,19 +794,48 @@ function VendaDireta() {
               </datalist>
             </div>
           </div>
+          </Secao>
 
-          <Textarea
-            label="Observação"
-            value={form.notes}
-            onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
-          />
+          <Secao numero={4} titulo="Cliente" opcional>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <Input
+                label="Nome"
+                value={form.customerName}
+                onChange={(e) => setForm((f) => ({ ...f, customerName: e.target.value }))}
+                placeholder="Consumidor"
+                required={form.paymentMethod === 'EM_ABERTO' && !dividido}
+              />
+              <Input
+                label="CPF"
+                value={form.customerDocument}
+                onChange={(e) => setForm((f) => ({ ...f, customerDocument: e.target.value }))}
+                placeholder="opcional"
+              />
+              <Input
+                label="Telefone"
+                value={form.customerPhone}
+                onChange={(e) => setForm((f) => ({ ...f, customerPhone: e.target.value }))}
+                placeholder="opcional"
+                required={form.paymentMethod === 'EM_ABERTO' && !dividido}
+              />
+            </div>
 
+            <Textarea
+              label="Observação"
+              value={form.notes}
+              onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
+              placeholder="Combinações, garantia, troca…"
+            />
+          </Secao>
+
+          {/* O botão carrega o valor: é a última conferência antes de fechar. */}
           <Button
             type="submit"
             variant="success"
             loading={criar.isPending}
             disabled={!itens.length}
             icon={<Check className="h-4 w-4" />}
+            className="w-full py-3 text-base"
           >
             Finalizar venda · {formatCurrency(total)}
           </Button>
@@ -834,6 +844,46 @@ function VendaDireta() {
         <ReciboDaVenda venda={recibo} aoFechar={() => setRecibo(null)} />
       </CardBody>
     </Card>
+  );
+}
+
+/**
+ * Um passo do atendimento.
+ *
+ * Numerar dá ao caixa uma ordem para seguir quando a loja está cheia — e
+ * separa visualmente o que é obrigatório do que é conferência.
+ */
+function Secao({
+  numero,
+  titulo,
+  complemento,
+  opcional,
+  children,
+}: {
+  numero: number;
+  titulo: string;
+  complemento?: string;
+  opcional?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="space-y-3">
+      <div className="flex items-center gap-2.5">
+        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-navy-900 text-xs font-bold text-white dark:bg-accent">
+          {numero}
+        </span>
+        <h3 className="text-sm font-bold text-navy-900 dark:text-slate-100">{titulo}</h3>
+        {opcional && (
+          <span className="text-xs font-normal text-slate-400">opcional</span>
+        )}
+        {complemento && (
+          <span className="ml-auto text-sm font-extrabold text-navy-900 dark:text-slate-100">
+            {complemento}
+          </span>
+        )}
+      </div>
+      {children}
+    </section>
   );
 }
 

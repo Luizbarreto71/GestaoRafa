@@ -40,17 +40,30 @@ export function CalculadoraDeCartao({
   taxas,
   aoUsar,
   valorSugerido,
+  parcelas: parcelasFora,
+  aoMudarParcelas,
 }: {
   taxas: TaxaDeCartao[];
   /** Leva o valor fechado para o campo do pagamento. */
   aoUsar?: (valor: number, parcelas: number, taxa: number) => void;
   /** Total do carrinho, que é o preço à vista. */
   valorSugerido?: number;
+  /**
+   * O parcelamento da venda.
+   *
+   * Quando vem de fora, este é o único campo de parcelas na tela — ter dois
+   * lugares para dizer "10x" faz a pessoa duvidar de qual vale.
+   */
+  parcelas?: string;
+  aoMudarParcelas?: (v: string) => void;
 }) {
   const [aVista, setAVista] = useState('');
-  const [parcelas, setParcelas] = useState('1');
+  const [parcelasLocal, setParcelasLocal] = useState('1');
   const [bandeira, setBandeira] = useState<Bandeira>('padrao');
   const [cobrado, setCobrado] = useState('');
+
+  const parcelas = parcelasFora ?? parcelasLocal;
+  const definirParcelas = aoMudarParcelas ?? setParcelasLocal;
 
   const base = aVista === '' ? (valorSugerido ?? 0) : Number(aVista) || 0;
   const nParcelas = Number(parcelas) || 1;
@@ -86,11 +99,17 @@ export function CalculadoraDeCartao({
           label="Parcelas"
           value={parcelas}
           onChange={(e) => {
-            setParcelas(e.target.value);
+            definirParcelas(e.target.value);
             // Trocar o parcelamento muda a taxa: a sugestão volta a valer.
             setCobrado('');
           }}
-          options={taxas.map((t) => ({ value: String(t.parcelas), label: `${t.parcelas}x` }))}
+          options={taxas.map((t) => ({
+            value: String(t.parcelas),
+            label:
+              t.parcelas === 1
+                ? 'À vista (1x)'
+                : `${t.parcelas}x de ${formatCurrency(sugerido / t.parcelas)}`,
+          }))}
         />
         <Select
           label="Bandeira"

@@ -1,8 +1,9 @@
 import { CalculadoraDeCartao, useTaxasDeCartao } from '@/components/vendas/CalculadoraDeCartao';
 import { Input, Select } from '@/components/ui/Field';
 import { cn } from '@/lib/cn';
-import { formatCurrency, PAYMENT_OPTIONS } from '@/lib/format';
-import { HandCoins, Plus, Split, Trash2 } from 'lucide-react';
+import { formatCurrency } from '@/lib/format';
+import { aceitaParcelas, FORMAS, infoDaForma } from '@/lib/pagamentos';
+import { Check, HandCoins, Plus, Split, Trash2 } from 'lucide-react';
 
 export type FormaDePagamento = {
   method: string;
@@ -24,13 +25,69 @@ export const formaVazia = (method = 'PIX'): FormaDePagamento => ({
 export const somaDasFormas = (formas: FormaDePagamento[]) =>
   formas.reduce((soma, f) => soma + (Number(f.amount) || 0), 0);
 
+/** Lista de parcelas com o valor de cada uma já calculado. */
+const opcoesDeParcela = (valor: number) =>
+  Array.from({ length: 24 }, (_, i) => ({
+    value: String(i + 1),
+    label: i === 0 ? 'À vista (1x)' : `${i + 1}x de ${formatCurrency(valor / (i + 1))}`,
+  }));
+
+/**
+ * Escolha da forma de pagamento, com ícone.
+ *
+ * Botões em vez de lista suspensa: no balcão a mão vai direto ao Pix sem
+ * abrir menu, e o ícone é reconhecido antes de a palavra ser lida.
+ */
+function EscolhaDaForma({ valor, aoEscolher }: { valor: string; aoEscolher: (v: string) => void }) {
+  return (
+    <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-7">
+      {FORMAS.map((forma) => {
+        const escolhida = valor === forma.valor;
+
+        return (
+          <button
+            key={forma.valor}
+            type="button"
+            onClick={() => aoEscolher(forma.valor)}
+            title={forma.rotulo}
+            className={cn(
+              'relative flex flex-col items-center justify-center gap-1.5 rounded-xl border-2 px-2 py-3 transition',
+              escolhida
+                ? 'border-accent bg-accent/10 shadow-sm'
+                : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50 dark:border-navy-700 dark:hover:bg-navy-800',
+            )}
+          >
+            {escolhida && (
+              <span className="absolute right-1.5 top-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-accent">
+                <Check className="h-2.5 w-2.5 text-white" strokeWidth={4} />
+              </span>
+            )}
+
+            <forma.icone
+              className={cn('h-6 w-6', escolhida ? 'text-accent' : forma.cor)}
+              strokeWidth={escolhida ? 2.4 : 1.8}
+            />
+            <span
+              className={cn(
+                'text-center text-xs font-semibold leading-tight',
+                escolhida ? 'text-accent' : 'text-slate-600 dark:text-slate-400',
+              )}
+            >
+              {forma.rotulo}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 /**
  * Monta o pagamento de uma venda, dividido ou não.
  *
- * O caso comum continua sendo um clique: forma única, valor implícito. A
- * divisão só aparece quando alguém pede, e aí o que sobra para distribuir
- * fica sempre à vista — no balcão, conferir de cabeça é o que gera erro de
- * caixa no fim do dia.
+ * Cada forma pergunta só o que precisa: Pix e dinheiro não têm parcela,
+ * crédito abre a calculadora da maquininha, fiado abre a conta do que vai
+ * ficar devendo. Mostrar tudo sempre é o que deixa o caixa lento.
  */
 export function FormasDePagamento({
   dividido,
@@ -70,6 +127,12 @@ export function FormasDePagamento({
   const alterar = (i: number, mudanca: Partial<FormaDePagamento>) =>
     aoMudarFormas(formas.map((f, indice) => (indice === i ? { ...f, ...mudanca } : f)));
 
+  function escolher(valor: string) {
+    aoMudarFormaUnica(valor);
+    // Forma sem parcelamento não pode carregar "6x" de uma escolha anterior.
+    if (!aceitaParcelas(valor)) aoMudarParcelas('1');
+  }
+
   function dividir() {
     aoDividir(true);
     // Primeira linha já com a forma escolhida e o total inteiro: quem só
@@ -88,39 +151,17 @@ export function FormasDePagamento({
   if (!dividido) {
     return (
       <div className="space-y-3">
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <Select
-            label="Forma de pagamento"
-            required
-            value={formaUnica}
-            onChange={(e) => aoMudarFormaUnica(e.target.value)}
-            options={PAYMENT_OPTIONS}
-          />
-          <Input
-            label="Parcelas"
-            type="number"
-            min={1}
-            max={24}
-            value={parcelas}
-            onChange={(e) => aoMudarParcelas(e.target.value)}
-          />
-          <div className="flex items-end">
-            <button
-              type="button"
-              onClick={dividir}
-              className="flex w-full items-center justify-center gap-2 rounded-lg border border-accent px-3 py-2.5 text-sm font-semibold text-accent transition hover:bg-accent/10"
-            >
-              <Split className="h-4 w-4" />
-              Dividir o pagamento
-            </button>
-          </div>
-        </div>
+        <EscolhaDaForma valor={formaUnica} aoEscolher={escolher} />
 
-        {/* Só no crédito: no Pix e no dinheiro não há taxa a repassar.
-            Sem botão de "usar": com forma única o pagamento é o total da
-            venda, então o valor fechado aqui vai no preço do produto. */}
+        {/* Parcelas vive dentro da calculadora: no crédito é lá que ela
+            muda a taxa, e dois campos iguais na tela geram dúvida. */}
         {formaUnica === 'CREDITO' && (
-          <CalculadoraDeCartao taxas={taxas} valorSugerido={total} />
+          <CalculadoraDeCartao
+            taxas={taxas}
+            valorSugerido={total}
+            parcelas={parcelas}
+            aoMudarParcelas={aoMudarParcelas}
+          />
         )}
 
         {formaUnica === 'EM_ABERTO' && aoMudarEntrada && (
@@ -132,13 +173,22 @@ export function FormasDePagamento({
             aoMudarFormaDaEntrada={aoMudarFormaDaEntrada ?? (() => {})}
           />
         )}
+
+        <button
+          type="button"
+          onClick={dividir}
+          className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-slate-300 px-3 py-2.5 text-sm font-semibold text-slate-500 transition hover:border-accent hover:bg-accent/5 hover:text-accent dark:border-navy-600 dark:text-slate-400"
+        >
+          <Split className="h-4 w-4" />
+          Dividir em mais de uma forma
+        </button>
       </div>
     );
   }
 
   return (
-    <div className="rounded-lg border border-accent/40 bg-accent/5 p-3">
-      <div className="mb-2 flex items-center justify-between">
+    <div className="rounded-xl border border-accent/40 bg-accent/5 p-3">
+      <div className="mb-3 flex items-center justify-between">
         <p className="flex items-center gap-1.5 text-sm font-bold text-navy-900 dark:text-slate-100">
           <Split className="h-4 w-4 text-accent" />
           Pagamento dividido
@@ -152,51 +202,68 @@ export function FormasDePagamento({
         </button>
       </div>
 
-      <div className="space-y-2">
-        {formas.map((f, i) => (
-          <div key={i} className="flex items-end gap-2">
-            <Select
-              label={i === 0 ? 'Forma' : undefined}
-              value={f.method}
-              onChange={(e) => alterar(i, { method: e.target.value })}
-              options={PAYMENT_OPTIONS}
-              wrapperClassName="flex-1"
-            />
-            <Input
-              label={i === 0 ? 'Valor' : undefined}
-              type="number"
-              min={0}
-              step="0.01"
-              placeholder="0,00"
-              value={f.amount}
-              onChange={(e) => alterar(i, { amount: e.target.value })}
-              wrapperClassName="w-32"
-            />
-            <Input
-              label={i === 0 ? 'Parc.' : undefined}
-              type="number"
-              min={1}
-              max={24}
-              value={f.installments}
-              onChange={(e) => alterar(i, { installments: e.target.value })}
-              wrapperClassName="w-20"
-            />
+      <div className="space-y-2.5">
+        {formas.map((f, i) => {
+          const info = infoDaForma(f.method);
 
-            <button
-              type="button"
-              onClick={() => aoMudarFormas(formas.filter((_, indice) => indice !== i))}
-              disabled={formas.length <= 2}
-              className="mb-1 rounded p-2 text-danger transition hover:bg-danger-bg disabled:opacity-30 dark:hover:bg-danger/15"
-              title={formas.length <= 2 ? 'Um pagamento dividido tem ao menos duas formas' : 'Remover'}
-              aria-label="Remover forma"
+          return (
+            <div
+              key={i}
+              className="rounded-lg border border-slate-200 bg-white p-2.5 dark:border-navy-700 dark:bg-navy-900"
             >
-              <Trash2 className="h-4 w-4" />
-            </button>
-          </div>
-        ))}
+              <div className="flex items-center gap-2">
+                <info.icone className={cn('h-5 w-5 shrink-0', info.cor)} />
+
+                <Select
+                  value={f.method}
+                  onChange={(e) => {
+                    const method = e.target.value;
+                    // Trocar para uma forma sem parcela zera o parcelamento.
+                    alterar(i, { method, ...(aceitaParcelas(method) ? {} : { installments: '1' }) });
+                  }}
+                  options={FORMAS.map((x) => ({ value: x.valor, label: x.rotulo }))}
+                  wrapperClassName="flex-1"
+                />
+
+                <Input
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  placeholder="0,00"
+                  value={f.amount}
+                  onChange={(e) => alterar(i, { amount: e.target.value })}
+                  wrapperClassName="w-32"
+                />
+
+                <button
+                  type="button"
+                  onClick={() => aoMudarFormas(formas.filter((_, indice) => indice !== i))}
+                  disabled={formas.length <= 2}
+                  className="rounded p-2 text-danger transition hover:bg-danger-bg disabled:opacity-30 dark:hover:bg-danger/15"
+                  title={formas.length <= 2 ? 'Um pagamento dividido tem ao menos duas formas' : 'Remover'}
+                  aria-label="Remover forma"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
+
+              {aceitaParcelas(f.method) && (
+                <div className="mt-2 pl-7">
+                  <Select
+                    label="Parcelas"
+                    value={f.installments}
+                    onChange={(e) => alterar(i, { installments: e.target.value })}
+                    options={opcoesDeParcela(Number(f.amount) || 0)}
+                    wrapperClassName="max-w-[17rem]"
+                  />
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
 
-      <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+      <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2">
         {formas.length < 6 && (
           <button
             type="button"
@@ -247,7 +314,7 @@ export function FormasDePagamento({
 
       <div
         className={cn(
-          'mt-2 flex items-center justify-between rounded-lg px-3 py-2 text-sm',
+          'mt-3 flex items-center justify-between rounded-lg px-3 py-2.5 text-sm',
           Math.abs(falta) < 0.01
             ? 'bg-success-bg text-success dark:bg-success/15'
             : 'bg-warning-bg text-warning dark:bg-warning/15',
@@ -294,19 +361,14 @@ function EntradaComSaldo({
   const passou = pago > total;
 
   return (
-    <div className="rounded-lg border border-warning/40 bg-warning-bg/40 p-3 dark:bg-warning/10">
-      <p className="mb-2 flex items-center gap-1.5 text-sm font-bold text-navy-900 dark:text-slate-100">
+    <div className="rounded-xl border border-warning/40 bg-warning-bg/40 p-3 dark:bg-warning/10">
+      <p className="mb-2.5 flex items-center gap-1.5 text-sm font-bold text-navy-900 dark:text-slate-100">
         <HandCoins className="h-4 w-4 text-warning" />
         Vai ficar devendo
       </p>
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <Input
-          label="Valor da venda"
-          value={formatCurrency(total)}
-          readOnly
-          hint="Soma dos produtos"
-        />
+        <Input label="Valor da venda" value={formatCurrency(total)} readOnly hint="Soma dos produtos" />
         <Input
           label="Paga agora"
           type="number"
@@ -315,13 +377,16 @@ function EntradaComSaldo({
           value={entrada}
           onChange={(e) => aoMudarEntrada(e.target.value)}
           placeholder="0,00"
-          hint="Deixe zero se levar tudo fiado"
+          hint="Zero se levar tudo fiado"
         />
         <Select
           label="Como paga a entrada"
           value={formaDaEntrada}
           onChange={(e) => aoMudarFormaDaEntrada(e.target.value)}
-          options={PAYMENT_OPTIONS.filter((o) => o.value !== 'EM_ABERTO')}
+          options={FORMAS.filter((f) => f.valor !== 'EM_ABERTO').map((f) => ({
+            value: f.valor,
+            label: f.rotulo,
+          }))}
           disabled={pago <= 0}
         />
       </div>
