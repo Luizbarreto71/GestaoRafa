@@ -22,6 +22,7 @@ import {
   TIPO_LABEL,
 } from './estoque';
 import { unidadePermitida } from './unidades';
+import { compararProdutos } from '../shared/ordenar';
 
 /** Os seis relatórios, todos exportáveis em PDF, Excel ou CSV. */
 
@@ -95,7 +96,14 @@ rotasRelatorios.get(
         unit: { select: { name: true } },
         product: { include: { category: true, supplier: true } },
       },
+      // A ordem final é feita em memória: "menor para o maior" depende de
+      // ler os números dentro do nome, e isso o banco não sabe fazer.
       orderBy: [{ unit: { name: 'asc' } }, { product: { name: 'asc' } }],
+    });
+
+    linhasDeEstoque.sort((a, b) => {
+      const porProduto = compararProdutos(a.product, b.product);
+      return porProduto !== 0 ? porProduto : a.unit.name.localeCompare(b.unit.name, 'pt-BR');
     });
 
     const linhas = linhasDeEstoque.map(({ product: p, unit, quantity }) => ({
@@ -615,6 +623,12 @@ rotasRelatorios.get(
       orderBy: [{ category: { name: 'asc' } }, { name: 'asc' }],
     });
 
+    // Dentro de cada categoria, do menor para o maior.
+    produtos.sort(
+      (a, b) =>
+        a.category.name.localeCompare(b.category.name, 'pt-BR') || compararProdutos(a, b),
+    );
+
     const linhas = produtos.map((p) => {
       const custo = numero(p.costPrice);
       const emEstoque = p.stock.reduce((soma, l) => soma + l.quantity, 0);
@@ -752,6 +766,9 @@ rotasRelatorios.get(
       },
       orderBy: { name: 'asc' },
     });
+
+    // Mesma ordem do relatório de estoque: é a mesma lista, noutro formato.
+    produtos.sort(compararProdutos);
 
     const precoDe = (p: (typeof produtos)[number]): number => {
       if (q.preco === 'custo') return numero(p.costPrice) + q.markup;

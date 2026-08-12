@@ -3086,6 +3086,42 @@ async function exportar(res, formato, r) {
 var reais = (v) => Number(v ?? 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 var decimal = (v) => Number(v ?? 0).toFixed(2).replace(".", ",");
 
+// shared/ordenar.ts
+var CAPACIDADE = /(\d+)\s*(GB|TB)\b|\b\d+\s*\/\s*(\d+)\b/i;
+function capacidadeEmGB(nome, campo) {
+  const alvo = campo?.trim() || nome;
+  const achou = alvo.match(CAPACIDADE);
+  if (!achou) return 0;
+  if (achou[3]) return Number(achou[3]);
+  const valor = Number(achou[1]);
+  return achou[2]?.toUpperCase() === "TB" ? valor * 1024 : valor;
+}
+var emGigas = (nome) => nome.replace(/(\d+)\s*TB\b/gi, (_, n) => `${Number(n) * 1024}GB`);
+function compararNatural(a, b) {
+  const limpar2 = (t) => t.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+  const pa = limpar2(a).match(/\d+|\D+/g) ?? [];
+  const pb = limpar2(b).match(/\d+|\D+/g) ?? [];
+  for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) {
+    const x = pa[i];
+    const y = pb[i];
+    if (x === void 0) return -1;
+    if (y === void 0) return 1;
+    if (/^\d/.test(x) && /^\d/.test(y)) {
+      const diff = Number(x) - Number(y);
+      if (diff !== 0) return diff;
+    } else {
+      if (x < y) return -1;
+      if (x > y) return 1;
+    }
+  }
+  return 0;
+}
+function compararProdutos(a, b) {
+  const porNome = compararNatural(emGigas(a.name), emGigas(b.name));
+  if (porNome !== 0) return porNome;
+  return capacidadeEmGB(a.name, a.capacity) - capacidadeEmGB(b.name, b.capacity);
+}
+
 // server/relatorios.ts
 var rotasRelatorios = Router7();
 rotasRelatorios.use(autenticar, exigir("relatorios"));
@@ -3137,7 +3173,13 @@ rotasRelatorios.get(
         unit: { select: { name: true } },
         product: { include: { category: true, supplier: true } }
       },
+      // A ordem final é feita em memória: "menor para o maior" depende de
+      // ler os números dentro do nome, e isso o banco não sabe fazer.
       orderBy: [{ unit: { name: "asc" } }, { product: { name: "asc" } }]
+    });
+    linhasDeEstoque.sort((a, b) => {
+      const porProduto = compararProdutos(a.product, b.product);
+      return porProduto !== 0 ? porProduto : a.unit.name.localeCompare(b.unit.name, "pt-BR");
     });
     const linhas = linhasDeEstoque.map(({ product: p, unit, quantity }) => ({
       unit: unit.name,
@@ -3585,6 +3627,9 @@ rotasRelatorios.get(
       },
       orderBy: [{ category: { name: "asc" } }, { name: "asc" }]
     });
+    produtos.sort(
+      (a, b) => a.category.name.localeCompare(b.category.name, "pt-BR") || compararProdutos(a, b)
+    );
     const linhas = produtos.map((p) => {
       const custo = numero(p.costPrice);
       const emEstoque = p.stock.reduce((soma, l) => soma + l.quantity, 0);
@@ -3677,6 +3722,7 @@ rotasRelatorios.get(
       },
       orderBy: { name: "asc" }
     });
+    produtos.sort(compararProdutos);
     const precoDe = (p) => {
       if (q.preco === "custo") return numero(p.costPrice) + q.markup;
       if (q.preco === "varejo") return numero(p.salePrice) || numero(p.wholesalePrice);
