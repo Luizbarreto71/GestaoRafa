@@ -404,6 +404,39 @@ import bcrypt2 from "bcryptjs";
 import { Router as Router2 } from "express";
 import { z as z2 } from "zod";
 
+// shared/cores.ts
+var PALETA_DE_CATEGORIAS = [
+  "#3B82F6",
+  // azul
+  "#22C55E",
+  // verde
+  "#F97316",
+  // laranja
+  "#8B5CF6",
+  // roxo
+  "#EAB308",
+  // âmbar
+  "#EC4899",
+  // rosa
+  "#14B8A6",
+  // turquesa
+  "#06B6D4",
+  // ciano
+  "#6366F1",
+  // índigo
+  "#EF4444",
+  // vermelho
+  "#84CC16",
+  // limão
+  "#A855F7"
+  // violeta
+];
+function proximaCor(jaUsadas) {
+  const usadas = new Set(jaUsadas.filter(Boolean).map((c) => c.toUpperCase()));
+  const livre = PALETA_DE_CATEGORIAS.find((c) => !usadas.has(c));
+  return livre ?? PALETA_DE_CATEGORIAS[usadas.size % PALETA_DE_CATEGORIAS.length];
+}
+
 // shared/campos.ts
 var CATALOGO = {
   nome: {
@@ -677,10 +710,12 @@ rotasCategorias.post(
     const dados = validar(categoriaSchema, req.body);
     await conferirMae(dados.parentId);
     const slug = apelido(dados.name);
+    const cor = dados.color ?? proximaCor((await db.category.findMany({ select: { color: true } })).map((c) => c.color));
     const categoria = await db.category.create({
       data: {
         ...dados,
         slug,
+        color: cor,
         campos: camposParaJson(normalizarCampos(dados.campos ?? PADROES[slug] ?? PADRAO_GENERICO, slug))
       }
     });

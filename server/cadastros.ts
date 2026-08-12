@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { autenticar, somenteAdmin } from './auth';
 import { AppError, contem, limpar, naoEncontrado, paginacao, paginado, rota, validar, semVazios } from './core';
 import { db, registrarLog } from './db';
+import { proximaCor } from '../shared/cores';
 import { camposParaJson, normalizarCampos, PADRAO_GENERICO, PADROES } from '../shared/campos';
 
 /** Categorias, fornecedores, clientes, usuários e o log de auditoria. */
@@ -136,10 +137,14 @@ rotasCategorias.post(
     const dados = validar(categoriaSchema, req.body);
     await conferirMae(dados.parentId);
     const slug = apelido(dados.name);
+
+    // Sem cor a bolinha sai cinza e a categoria some no meio das outras.
+    const cor = dados.color ?? proximaCor((await db.category.findMany({ select: { color: true } })).map((c) => c.color));
     const categoria = await db.category.create({
       data: {
         ...dados,
         slug,
+        color: cor,
         campos: camposParaJson(normalizarCampos(dados.campos ?? PADROES[slug] ?? PADRAO_GENERICO, slug)),
       },
     });

@@ -116,7 +116,7 @@ export default function StockPage() {
     const totalGeral = lista.reduce((soma, c) => soma + quantos(c), 0);
 
     return [
-      { rotulo: 'Todos', valor: '', total: totalGeral, filha: false },
+      { rotulo: 'Todos', valor: '', total: totalGeral, filha: false, cor: null as string | null },
       ...mães.flatMap((mae) => {
         const filhas = lista.filter((c) => c.parentId === mae.id);
         const total = quantos(mae) + filhas.reduce((soma, f) => soma + quantos(f), 0);
@@ -135,13 +135,16 @@ export default function StockPage() {
         const mostrarMae = comProdutos.length === 0 || quantos(mae) > 0;
 
         return [
-          ...(mostrarMae ? [{ rotulo: mae.name, valor: mae.id, total, filha: false }] : []),
+          ...(mostrarMae
+            ? [{ rotulo: mae.name, valor: mae.id, total, filha: false, cor: mae.color ?? null }]
+            : []),
           ...comProdutos.map((f) => ({
             rotulo: f.name.split('›').pop()!.trim(),
             valor: f.id,
             total: quantos(f),
             // Sem a mãe acima, o traço de ramificação não aponta para nada.
             filha: mostrarMae,
+            cor: f.color ?? null,
           })),
         ];
       }),
@@ -532,6 +535,14 @@ export default function StockPage() {
                 )}
               >
                 {aba.filha && <span className={cn('text-xs', ativa ? 'opacity-60' : 'text-slate-300')}>└</span>}
+                {/* A mesma cor da coluna Categoria e das Configurações:
+                    é o que liga a aba à linha sem precisar reler o nome. */}
+                {aba.cor && (
+                  <span
+                    className="h-2 w-2 shrink-0 rounded-full"
+                    style={{ backgroundColor: aba.cor }}
+                  />
+                )}
                 {aba.rotulo}
                 <span
                   className={cn(
