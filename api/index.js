@@ -1408,6 +1408,7 @@ async function movimentar(m) {
   return { antes, depois, id: registro.id };
 }
 async function enviarLinha(movimentoId, m, antes, depois, entra) {
+  if (!planilhaConfigurada()) return;
   try {
     const [produto, unidade, origem, destino] = await Promise.all([
       db.product.findUnique({

@@ -1,7 +1,7 @@
 import { MovementReason, MovementType, Prisma } from '@prisma/client';
 import { AppError } from './core';
 import { db } from './db';
-import { enviarParaPlanilha } from './planilha';
+import { enviarParaPlanilha, planilhaConfigurada } from './planilha';
 
 /**
  * Todo movimento de estoque passa por aqui.
@@ -282,6 +282,13 @@ async function enviarLinha(
   depois: number,
   entra: boolean,
 ): Promise<void> {
+  // Antes de qualquer consulta: sem integração configurada, montar a linha
+  // é trabalho jogado fora. E não é trabalho barato — são quatro idas ao
+  // banco por item vendido, disparadas enquanto a transação da venda ainda
+  // segura a única conexão que a Vercel permite. A venda inteira ficava
+  // esperando para escrever numa planilha que não existe.
+  if (!planilhaConfigurada()) return;
+
   try {
     const [produto, unidade, origem, destino] = await Promise.all([
       db.product.findUnique({
