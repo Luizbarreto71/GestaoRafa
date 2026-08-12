@@ -1,5 +1,7 @@
 import { PaymentMethod, Prisma } from '@prisma/client';
 import { AppError, naoEncontrado } from './core';
+import { taxaDe, type TaxaDeCartao } from '../shared/taxas';
+import { taxasDoCartao } from './sistema';
 import { db } from './db';
 import { disponivel, movimentar } from './estoque';
 import { notificar } from './notificacoes';
@@ -32,7 +34,14 @@ export interface DadosDaVenda {
    * Vazio = a venda inteira na forma acima. Quem chama não precisa montar
    * a lista para o caso comum.
    */
-  pagamentos?: { method: PaymentMethod; amount: number; installments?: number; notes?: string | null }[];
+  pagamentos?: {
+    method: PaymentMethod;
+    amount: number;
+    installments?: number;
+    notes?: string | null;
+    /** Taxa da maquininha, em %. Só faz sentido no crédito. */
+    feePercent?: number | null;
+  }[];
   /**
    * Aparelho recebido na troca, em reais.
    *
@@ -71,6 +80,30 @@ export interface DadosDaVenda {
 }
 
 /** Gera o próximo número visível (VD-000001, PV-000001). */
+/** A taxa que vale para a linha: a informada, ou a da tabela da loja. */
+function taxaDaLinha(
+  tabela: TaxaDeCartao[],
+  metodo: string,
+  parcelas: number,
+  informada: number | null | undefined,
+): Prisma.Decimal | null {
+  if (metodo !== 'CREDITO') return null;
+  const taxa = informada ?? taxaDe(tabela, parcelas, 'padrao');
+  return taxa != null ? new Prisma.Decimal(taxa) : null;
+}
+
+/** O que sobra depois do desconto da maquininha. */
+function liquidoDaLinha(
+  tabela: TaxaDeCartao[],
+  metodo: string,
+  valor: number,
+  parcelas: number,
+  informada: number | null | undefined,
+): Prisma.Decimal {
+  const taxa = taxaDaLinha(tabela, metodo, parcelas, informada);
+  return new Prisma.Decimal(taxa ? valor * (1 - Number(taxa) / 100) : valor);
+}
+
 export async function proximoCodigo(nome: string, prefixo: string, tx?: Prisma.TransactionClient): Promise<string> {
   const cliente = tx ?? db;
 
@@ -217,6 +250,10 @@ export async function registrarVenda(dados: DadosDaVenda) {
 
     // Toda venda guarda o rateio, mesmo com forma única: o fechamento soma
     // sempre da mesma tabela, sem caso especial.
+    // A taxa do crédito é buscada quando não vem da tela: assim o líquido
+    // fica certo mesmo na venda rápida, em que ninguém abre a calculadora.
+    const tabela = await taxasDoCartao();
+
     const daTroca = new Prisma.Decimal(dados.trocaNova?.valorAvaliado ?? dados.trocaValor ?? 0);
     // O que o cliente entrega em dinheiro: o resto vem no aparelho.
     const aReceber = total.minus(daTroca);
@@ -239,6 +276,14 @@ export async function registrarVenda(dados: DadosDaVenda) {
               amount: aReceber,
               installments: dados.installments ?? 1,
               notes: null as string | null,
+              feePercent: taxaDaLinha(tabela, dados.paymentMethod, dados.installments ?? 1, null),
+              netAmount: liquidoDaLinha(
+                tabela,
+                dados.paymentMethod,
+                Number(aReceber),
+                dados.installments ?? 1,
+                null,
+              ),
             },
           ]
         : [];
@@ -253,7 +298,17 @@ export async function registrarVenda(dados: DadosDaVenda) {
     }
 
     const rateio = daTroca.greaterThan(0)
-      ? [...emDinheiro, { method: 'TROCA' as PaymentMethod, amount: daTroca, installments: 1, notes: null }]
+      ? [
+          ...emDinheiro,
+          {
+            method: 'TROCA' as PaymentMethod,
+            amount: daTroca,
+            installments: 1,
+            notes: null,
+            feePercent: null,
+            netAmount: daTroca,
+          },
+        ]
       : emDinheiro;
 
     // A forma "principal" é a de maior valor entre as que são dinheiro: é

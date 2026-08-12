@@ -9,6 +9,8 @@ export type FormaDePagamento = {
   amount: string;
   installments: string;
   notes: string;
+  /** Taxa da maquininha desta linha, em %. Vem da calculadora. */
+  feePercent?: number | null;
 };
 
 export const formaVazia = (method = 'PIX'): FormaDePagamento => ({
@@ -105,7 +107,9 @@ export function FormasDePagamento({
           </div>
         </div>
 
-        {/* Só no crédito: no Pix e no dinheiro não há taxa a repassar. */}
+        {/* Só no crédito: no Pix e no dinheiro não há taxa a repassar.
+            Sem botão de "usar": com forma única o pagamento é o total da
+            venda, então o valor fechado aqui vai no preço do produto. */}
         {formaUnica === 'CREDITO' && (
           <CalculadoraDeCartao taxas={taxas} valorSugerido={total} />
         )}
@@ -206,12 +210,16 @@ export function FormasDePagamento({
           <CalculadoraDeCartao
             taxas={taxas}
             valorSugerido={total}
-            aoUsar={(valor, parcelasDoCartao) => {
+            aoUsar={(valor, parcelasDoCartao, taxa) => {
               // Preenche a última linha de crédito: é a que a pessoa
               // acabou de mexer na prática.
               const i = formas.map((f) => f.method).lastIndexOf('CREDITO');
               if (i >= 0) {
-                alterar(i, { amount: valor.toFixed(2), installments: String(parcelasDoCartao) });
+                alterar(i, {
+                  amount: valor.toFixed(2),
+                  installments: String(parcelasDoCartao),
+                  feePercent: taxa,
+                });
               }
             }}
           />
@@ -254,5 +262,7 @@ export function paraApi(dividido: boolean, formas: FormaDePagamento[]) {
       amount: Number(f.amount),
       installments: Number(f.installments) || 1,
       notes: f.notes.trim() || null,
+      // Só o crédito tem taxa; nas outras formas o líquido é o próprio valor.
+      feePercent: f.method === 'CREDITO' ? (f.feePercent ?? null) : null,
     }));
 }

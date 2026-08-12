@@ -23,6 +23,8 @@ import {
 } from './estoque';
 import { unidadePermitida } from './unidades';
 import { compararProdutos } from '../shared/ordenar';
+import { taxaDe } from '../shared/taxas';
+import { taxasDoCartao } from './sistema';
 
 /** Os seis relatórios, todos exportáveis em PDF, Excel ou CSV. */
 
@@ -890,8 +892,21 @@ rotasRelatorios.get(
           ...(unidade ? { unitId: unidade } : {}),
         },
       },
-      select: { method: true, amount: true, installments: true, saleId: true },
+      select: { method: true, amount: true, installments: true, saleId: true, feePercent: true, netAmount: true },
     });
+
+    // Venda antiga não tem taxa gravada. Em vez de mostrar zero — que
+    // contradiz a maquininha —, calcula pela tabela atual. O valor gravado
+    // sempre manda, para o passado não mudar quando a taxa mudar.
+    const tabela = await taxasDoCartao();
+
+    const liquidoDe = (p: (typeof pagamentos)[number]) => {
+      if (p.netAmount != null) return numero(p.netAmount);
+      if (p.method !== 'CREDITO') return numero(p.amount);
+
+      const taxa = taxaDe(tabela, p.installments, 'padrao');
+      return taxa != null ? numero(p.amount) * (1 - taxa / 100) : numero(p.amount);
+    };
 
     const total = pagamentos.reduce((s, p) => s + numero(p.amount), 0);
 
@@ -904,11 +919,15 @@ rotasRelatorios.get(
         const vendas = new Set(daForma.map((p) => p.saleId)).size;
         const parceladas = daForma.filter((p) => p.installments > 1);
 
+        const liquido = daForma.reduce((s, p) => s + liquidoDe(p), 0);
+
         return {
           payment: PAGAMENTO_LABEL[forma],
           sales: vendas,
           lancamentos: daForma.length,
           total: soma,
+          taxa: soma - liquido,
+          liquido,
           share: total > 0 ? (soma / total) * 100 : 0,
           ticket: vendas > 0 ? soma / vendas : 0,
           parcelado: parceladas.length
@@ -929,15 +948,19 @@ rotasRelatorios.get(
         { header: 'Forma de pagamento', key: 'payment', width: 22 },
         qtd('Vendas', 'sales', 10),
         qtd('Lançamentos', 'lancamentos', 12),
-        money('Total', 'total', 16),
-        { header: '% do total', key: 'share', width: 11, align: 'right', format: (v) => `${Number(v).toFixed(1)}%` },
-        money('Ticket médio', 'ticket', 14),
-        { header: 'Parcelados', key: 'parcelado', width: 14 },
+        money('Total', 'total', 15),
+        money('Taxa da maquininha', 'taxa', 15),
+        money('Líquido', 'liquido', 15),
+        { header: '% do total', key: 'share', width: 10, align: 'right', format: (v) => `${Number(v).toFixed(1)}%` },
+        money('Ticket médio', 'ticket', 13),
+        { header: 'Parcelados', key: 'parcelado', width: 13 },
       ],
       rows: linhas,
       summary: [
         { label: 'Formas usadas', value: String(linhas.length) },
-        { label: 'Total recebido', value: reais(emDinheiro.reduce((s, l) => s + l.total, 0)) },
+        { label: 'Vendido em dinheiro', value: reais(emDinheiro.reduce((s, l) => s + l.total, 0)) },
+        { label: 'Taxa da maquininha', value: reais(linhas.reduce((s, l) => s + l.taxa, 0)) },
+        { label: 'Cai na conta', value: reais(emDinheiro.reduce((s, l) => s + l.liquido, 0)) },
         { label: 'Movimentado', value: reais(total) },
       ],
     });

@@ -2766,8 +2766,8 @@ rotasFotos.get(
 );
 
 // server/relatorios.ts
-import { Router as Router7 } from "express";
-import { z as z6 } from "zod";
+import { Router as Router8 } from "express";
+import { z as z7 } from "zod";
 
 // server/exportar.ts
 import ExcelJS from "exceljs";
@@ -3158,18 +3158,505 @@ function compararProdutos(a, b) {
   return capacidadeEmGB(a.name, a.capacity) - capacidadeEmGB(b.name, b.capacity);
 }
 
+// shared/taxas.ts
+var TAXAS_PADRAO = [
+  { parcelas: 1, padrao: 5.5, elo: 6.5 },
+  { parcelas: 2, padrao: 6, elo: 7 },
+  { parcelas: 3, padrao: 6.5, elo: 7.5 },
+  { parcelas: 4, padrao: 7, elo: 8 },
+  { parcelas: 5, padrao: 7.5, elo: 8.5 },
+  { parcelas: 6, padrao: 7.5, elo: 8.5 },
+  { parcelas: 7, padrao: 8, elo: 9 },
+  { parcelas: 8, padrao: 8.5, elo: 9.5 },
+  { parcelas: 9, padrao: 9, elo: 10 },
+  { parcelas: 10, padrao: 9.5, elo: 10.5 },
+  { parcelas: 11, padrao: 10, elo: 11 },
+  { parcelas: 12, padrao: 10.5, elo: 11.5 },
+  { parcelas: 13, padrao: 14, elo: null },
+  { parcelas: 14, padrao: 14.5, elo: null },
+  { parcelas: 15, padrao: 15, elo: null },
+  { parcelas: 16, padrao: 15.5, elo: null },
+  { parcelas: 17, padrao: 16, elo: null },
+  { parcelas: 18, padrao: 16.5, elo: null }
+];
+function taxaDe(tabela, parcelas, bandeira) {
+  const linha = tabela.find((t) => t.parcelas === parcelas);
+  if (!linha) return null;
+  return bandeira === "elo" ? linha.elo ?? linha.padrao : linha.padrao;
+}
+function normalizarTaxas(bruto) {
+  if (!Array.isArray(bruto)) return TAXAS_PADRAO;
+  const limpas = bruto.map((linha) => {
+    if (!linha || typeof linha !== "object") return null;
+    const { parcelas, padrao, elo } = linha;
+    const p = Number(parcelas);
+    const t = Number(padrao);
+    if (!Number.isInteger(p) || p < 1 || p > 24) return null;
+    if (!Number.isFinite(t) || t < 0 || t >= 100) return null;
+    const e = elo === null || elo === void 0 || elo === "" ? null : Number(elo);
+    return {
+      parcelas: p,
+      padrao: t,
+      elo: e !== null && Number.isFinite(e) && e >= 0 && e < 100 ? e : null
+    };
+  }).filter((l) => l !== null).sort((a, b) => a.parcelas - b.parcelas);
+  return limpas.length ? limpas : TAXAS_PADRAO;
+}
+
+// server/sistema.ts
+import ExcelJS2 from "exceljs";
+import { Router as Router7 } from "express";
+import multer from "multer";
+import { Readable } from "stream";
+import { z as z6 } from "zod";
+
+// shared/loja.ts
+var LOJA_PADRAO = {
+  nome: "Rafa Multimarcas",
+  documento: "",
+  endereco: "",
+  bairro: "",
+  cidade: "",
+  uf: "",
+  cep: "",
+  telefone: "",
+  email: "",
+  rodape: ""
+};
+function normalizarLoja(bruto) {
+  if (!bruto || typeof bruto !== "object") return LOJA_PADRAO;
+  const dado = bruto;
+  const texto3 = (chave) => typeof dado[chave] === "string" ? dado[chave].trim() : LOJA_PADRAO[chave];
+  return {
+    nome: texto3("nome") || LOJA_PADRAO.nome,
+    documento: texto3("documento"),
+    endereco: texto3("endereco"),
+    bairro: texto3("bairro"),
+    cidade: texto3("cidade"),
+    uf: texto3("uf").toUpperCase().slice(0, 2),
+    cep: texto3("cep"),
+    telefone: texto3("telefone"),
+    email: texto3("email"),
+    rodape: texto3("rodape")
+  };
+}
+var linhaDeEndereco = (l) => [l.endereco, l.bairro].filter(Boolean).join(" - ");
+var linhaDeCidade = (l) => [[l.cidade, l.uf].filter(Boolean).join("/"), l.cep && `CEP: ${l.cep}`].filter(Boolean).join(" - ");
+
+// server/sistema.ts
+var rotasSistema = Router7();
+rotasSistema.use(autenticar, exigir("configuracoes"));
+rotasSistema.get(
+  "/sheets/status",
+  rota(async (_req, res) => {
+    res.json(statusPlanilha());
+  })
+);
+rotasSistema.post(
+  "/sheets/sync",
+  somenteAdmin,
+  rota(async (req, res) => {
+    if (!planilhaConfigurada()) {
+      throw new AppError("Integra\xE7\xE3o com Google Sheets n\xE3o configurada. Preencha as vari\xE1veis GOOGLE_* no .env.");
+    }
+    const [movimentos, unidades] = await Promise.all([
+      db.stockMovement.findMany({
+        orderBy: { createdAt: "asc" },
+        include: {
+          user: { select: { name: true } },
+          unit: { select: { name: true } },
+          product: { include: { category: true } }
+        }
+      }),
+      db.unit.findMany({ select: { id: true, name: true } })
+    ]);
+    const nome = (id) => unidades.find((u) => u.id === id)?.name ?? "";
+    const total = await reescreverPlanilha(
+      movimentos.map((m) => ({
+        data: m.createdAt,
+        produto: m.productName ?? m.product?.name ?? "\u2014",
+        categoria: m.product?.category.name ?? "\u2014",
+        unidade: m.unit?.name ?? "\u2014",
+        tipo: TIPO_LABEL[m.type],
+        quantidade: m.type === "ENTRADA" ? m.quantity : -m.quantity,
+        estoqueAnterior: m.previousQuantity ?? 0,
+        estoquePosterior: m.newQuantity ?? 0,
+        origem: nome(m.originUnitId),
+        destino: nome(m.destinationUnitId),
+        usuario: m.user?.name ?? "",
+        motivo: MOTIVO_LABEL[m.reason],
+        observacao: m.notes ?? "",
+        movimentoId: m.id
+      }))
+    );
+    await registrarLog({ acao: "SHEETS_SYNC", entidade: "Setting", req });
+    res.json({ message: `${total} movimenta\xE7\xE3o(\xF5es) sincronizadas com a planilha.`, synced: total });
+  })
+);
+rotasSistema.get(
+  "/backup",
+  somenteAdmin,
+  rota(async (req, res) => {
+    const [categorias, fornecedores, clientes, produtos, vendas, movimentos, usuarios] = await Promise.all([
+      db.category.findMany(),
+      db.supplier.findMany(),
+      db.customer.findMany(),
+      // As imagens ficam de fora: o backup viraria centenas de megabytes.
+      db.product.findMany(),
+      db.sale.findMany(),
+      db.stockMovement.findMany(),
+      db.user.findMany({ select: { id: true, name: true, email: true, role: true, active: true, createdAt: true } })
+    ]);
+    const backup = limpar({
+      generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+      system: "Controle Rafa Multimarcas",
+      counts: {
+        categories: categorias.length,
+        suppliers: fornecedores.length,
+        customers: clientes.length,
+        products: produtos.length,
+        sales: vendas.length,
+        movements: movimentos.length,
+        users: usuarios.length
+      },
+      data: {
+        categories: categorias,
+        suppliers: fornecedores,
+        customers: clientes,
+        products: produtos,
+        sales: vendas,
+        movements: movimentos,
+        users: usuarios
+      }
+    });
+    await registrarLog({ acao: "BACKUP", entidade: "Setting", req });
+    const carimbo = (/* @__PURE__ */ new Date()).toISOString().slice(0, 19).replace(/[:T]/g, "-");
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="backup-rafa-${carimbo}.json"`);
+    res.send(JSON.stringify(backup, null, 2));
+  })
+);
+var CABECALHOS = [
+  "Categoria",
+  "Nome",
+  "Marca",
+  "Modelo",
+  "Cor",
+  "Capacidade",
+  "Quantidade",
+  "Pre\xE7o de Custo",
+  "Pre\xE7o de Venda",
+  "Pre\xE7o de Atacado",
+  "Fornecedor",
+  "IMEI",
+  "N\xFAmero de S\xE9rie",
+  "Lote",
+  "Condi\xE7\xE3o",
+  "Observa\xE7\xF5es"
+];
+var DE_PARA = {
+  categoria: "category",
+  nome: "name",
+  produto: "name",
+  marca: "brand",
+  modelo: "model",
+  cor: "color",
+  capacidade: "capacity",
+  quantidade: "quantity",
+  qtd: "quantity",
+  "preco de custo": "costPrice",
+  "pre\xE7o de custo": "costPrice",
+  custo: "costPrice",
+  "preco de venda": "salePrice",
+  "pre\xE7o de venda": "salePrice",
+  venda: "salePrice",
+  atacado: "wholesalePrice",
+  "preco de atacado": "wholesalePrice",
+  "pre\xE7o de atacado": "wholesalePrice",
+  fornecedor: "supplier",
+  imei: "imei",
+  "numero de serie": "serialNumber",
+  "n\xFAmero de s\xE9rie": "serialNumber",
+  serie: "serialNumber",
+  lote: "lote",
+  "condicao": "condicao",
+  "condi\xE7\xE3o": "condicao",
+  estado: "condicao",
+  "lote da caixa": "lote",
+  "codigo de barras": "barcode",
+  "c\xF3digo de barras": "barcode",
+  observacoes: "notes",
+  observa\u00E7\u00F5es: "notes",
+  obs: "notes"
+};
+var semAcento = (v) => v.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
+function paraNumero(v) {
+  if (v === null || v === void 0 || v === "") return 0;
+  if (typeof v === "number") return v;
+  const n = Number(String(v).replace(/[R$\s]/g, "").replace(/\./g, "").replace(",", "."));
+  return Number.isFinite(n) ? n : 0;
+}
+function textoDaCelula(celula) {
+  const v = celula.value;
+  if (v === null || v === void 0) return "";
+  if (typeof v === "object" && "text" in v) return String(v.text ?? "").trim();
+  if (typeof v === "object" && "result" in v) return String(v.result ?? "").trim();
+  return String(v).trim();
+}
+var planilhaUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024, files: 1 },
+  fileFilter: (_req, arquivo, cb) => {
+    if (!/\.(xlsx|xls|csv)$/i.test(arquivo.originalname)) {
+      return cb(new AppError("Envie um arquivo .xlsx, .xls ou .csv"));
+    }
+    cb(null, true);
+  }
+});
+rotasSistema.get(
+  "/import/template",
+  rota(async (_req, res) => {
+    const arquivo = new ExcelJS2.Workbook();
+    const aba = arquivo.addWorksheet("Produtos");
+    aba.columns = CABECALHOS.map((h) => ({ header: h, key: h, width: 20 }));
+    aba.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
+    aba.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0F172A" } };
+    aba.addRow([
+      "Celulares",
+      "iPhone 13",
+      "Apple",
+      "13",
+      "Meia-noite",
+      "128GB",
+      2,
+      3200,
+      4199,
+      3950,
+      "Distribuidora Tech SP",
+      "356938035643809",
+      "",
+      "",
+      "Exemplo \u2014 apague esta linha"
+    ]);
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", 'attachment; filename="modelo-importacao-produtos.xlsx"');
+    await arquivo.xlsx.write(res);
+    res.end();
+  })
+);
+rotasSistema.post(
+  "/import/products",
+  somenteAdmin,
+  planilhaUpload.single("file"),
+  rota(async (req, res) => {
+    if (!req.file) throw new AppError('Envie a planilha no campo "file"');
+    const arquivo = new ExcelJS2.Workbook();
+    if (req.file.originalname.toLowerCase().endsWith(".csv")) {
+      await arquivo.csv.read(Readable.from(req.file.buffer.toString("utf8")));
+    } else {
+      await arquivo.xlsx.load(req.file.buffer);
+    }
+    const aba = arquivo.worksheets[0];
+    if (!aba) throw new AppError("A planilha est\xE1 vazia");
+    const colunas = /* @__PURE__ */ new Map();
+    aba.getRow(1).eachCell((celula, indice) => {
+      const campo = DE_PARA[textoDaCelula(celula).toLowerCase().replace(/\s+/g, " ")];
+      if (campo) colunas.set(indice, campo);
+    });
+    if (![...colunas.values()].includes("name")) {
+      throw new AppError('N\xE3o encontrei a coluna "Nome". Baixe o modelo e mantenha os cabe\xE7alhos.');
+    }
+    const [categorias, fornecedores] = await Promise.all([
+      db.category.findMany(),
+      db.supplier.findMany()
+    ]);
+    const porCategoria = new Map(categorias.map((c) => [semAcento(c.name), c]));
+    categorias.forEach((c) => porCategoria.set(semAcento(c.slug), c));
+    const porFornecedor = new Map(fornecedores.map((f) => [semAcento(f.name), f]));
+    const unidadeDaImportacao = req.usuario?.unidadeId ?? (await db.unit.findFirst({ where: { active: true }, orderBy: [{ type: "asc" }, { name: "asc" }] }))?.id ?? null;
+    const erros = [];
+    let importados = 0;
+    let processadas = 0;
+    for (let n = 2; n <= aba.rowCount; n += 1) {
+      const linha = aba.getRow(n);
+      const dados = {};
+      colunas.forEach((campo, indice) => {
+        dados[campo] = textoDaCelula(linha.getCell(indice));
+      });
+      if (!dados.name) continue;
+      processadas += 1;
+      const categoria = porCategoria.get(semAcento(dados.category ?? ""));
+      if (!categoria) {
+        erros.push({
+          row: n,
+          message: `Categoria "${dados.category || "(vazia)"}" n\xE3o encontrada. Use: ${categorias.map((c) => c.name).join(", ")}`
+        });
+        continue;
+      }
+      let fornecedorId = null;
+      if (dados.supplier) {
+        const chave = semAcento(dados.supplier);
+        let fornecedor = porFornecedor.get(chave);
+        if (!fornecedor) {
+          fornecedor = await db.supplier.create({ data: { name: dados.supplier.trim() } });
+          porFornecedor.set(chave, fornecedor);
+        }
+        fornecedorId = fornecedor.id;
+      }
+      const quantidade = Math.max(0, Math.trunc(paraNumero(dados.quantity)));
+      try {
+        const produto = await db.product.create({
+          data: {
+            name: dados.name,
+            brand: dados.brand || null,
+            model: dados.model || null,
+            color: dados.color || null,
+            capacity: dados.capacity || null,
+            costPrice: paraNumero(dados.costPrice),
+            salePrice: paraNumero(dados.salePrice),
+            wholesalePrice: dados.wholesalePrice ? paraNumero(dados.wholesalePrice) : null,
+            imei: dados.imei || null,
+            serialNumber: dados.serialNumber || null,
+            lote: dados.lote || null,
+            condicao: dados.condicao || null,
+            barcode: dados.barcode || null,
+            notes: dados.notes || null,
+            categoryId: categoria.id,
+            supplierId: fornecedorId
+          }
+        });
+        if (quantidade > 0 && unidadeDaImportacao) {
+          await movimentar({
+            produtoId: produto.id,
+            produtoNome: produto.name,
+            unidadeId: unidadeDaImportacao,
+            tipo: "ENTRADA",
+            motivo: "CADASTRO",
+            quantidade,
+            observacao: "Importa\xE7\xE3o de planilha",
+            usuarioId: req.usuario?.id,
+            usuarioNome: req.usuario?.nome
+          });
+        }
+        importados += 1;
+      } catch (erro) {
+        erros.push({ row: n, message: erro.message });
+      }
+    }
+    await registrarLog({
+      acao: "IMPORT",
+      entidade: "Product",
+      alteracoes: { importados, erros: erros.length },
+      req
+    });
+    res.json({
+      processed: processadas,
+      imported: importados,
+      errors: erros,
+      message: `${importados} produto(s) importados com sucesso.`
+    });
+  })
+);
+var CHAVE_TAXAS = "taxas_cartao";
+async function taxasDoCartao() {
+  const guardado = await db.setting.findUnique({ where: { key: CHAVE_TAXAS } });
+  if (!guardado) return TAXAS_PADRAO;
+  try {
+    return normalizarTaxas(JSON.parse(guardado.value));
+  } catch {
+    return TAXAS_PADRAO;
+  }
+}
+rotasSistema.get(
+  "/taxas-cartao",
+  rota(async (_req, res) => {
+    res.json({ taxas: await taxasDoCartao(), padrao: TAXAS_PADRAO });
+  })
+);
+rotasSistema.put(
+  "/taxas-cartao",
+  somenteAdmin,
+  rota(async (req, res) => {
+    const { taxas } = validar(
+      z6.object({
+        taxas: z6.array(
+          z6.object({
+            parcelas: z6.coerce.number().int().min(1).max(24),
+            padrao: z6.coerce.number().min(0).max(99.99),
+            elo: z6.coerce.number().min(0).max(99.99).optional().nullable()
+          })
+        ).min(1, "Informe ao menos uma linha").max(24)
+      }),
+      req.body
+    );
+    const limpas = normalizarTaxas(taxas);
+    await db.setting.upsert({
+      where: { key: CHAVE_TAXAS },
+      update: { value: JSON.stringify(limpas) },
+      create: { key: CHAVE_TAXAS, value: JSON.stringify(limpas) }
+    });
+    await registrarLog({ acao: "TAXAS_CARTAO", entidade: "Setting", id: CHAVE_TAXAS, req });
+    res.json({ taxas: limpas, message: `${limpas.length} faixa(s) de parcelamento salvas.` });
+  })
+);
+var CHAVE_LOJA = "dados_da_loja";
+async function lojaSalva() {
+  const guardado = await db.setting.findUnique({ where: { key: CHAVE_LOJA } });
+  if (!guardado) return LOJA_PADRAO;
+  try {
+    return normalizarLoja(JSON.parse(guardado.value));
+  } catch {
+    return LOJA_PADRAO;
+  }
+}
+rotasSistema.get(
+  "/loja",
+  rota(async (_req, res) => {
+    res.json(await lojaSalva());
+  })
+);
+rotasSistema.put(
+  "/loja",
+  somenteAdmin,
+  rota(async (req, res) => {
+    const dados = validar(
+      z6.object({
+        nome: z6.string().trim().min(2, "Informe o nome da loja").max(120),
+        documento: z6.string().trim().max(30).optional(),
+        endereco: z6.string().trim().max(160).optional(),
+        bairro: z6.string().trim().max(80).optional(),
+        cidade: z6.string().trim().max(80).optional(),
+        uf: z6.string().trim().max(2).optional(),
+        cep: z6.string().trim().max(12).optional(),
+        telefone: z6.string().trim().max(40).optional(),
+        email: z6.string().trim().max(120).optional(),
+        rodape: z6.string().trim().max(300).optional()
+      }),
+      req.body
+    );
+    const loja = normalizarLoja(dados);
+    await db.setting.upsert({
+      where: { key: CHAVE_LOJA },
+      update: { value: JSON.stringify(loja) },
+      create: { key: CHAVE_LOJA, value: JSON.stringify(loja) }
+    });
+    await registrarLog({ acao: "DADOS_DA_LOJA", entidade: "Setting", id: CHAVE_LOJA, req });
+    res.json({ ...loja, message: "Dados da loja salvos. J\xE1 valem no pr\xF3ximo comprovante." });
+  })
+);
+
 // server/relatorios.ts
-var rotasRelatorios = Router7();
+var rotasRelatorios = Router8();
 rotasRelatorios.use(autenticar, exigir("relatorios"));
-var base = z6.object({
-  format: z6.enum(["json", "pdf", "xlsx", "csv"]).default("json"),
-  startDate: z6.coerce.date().optional(),
-  endDate: z6.coerce.date().optional(),
-  categoryId: z6.string().uuid().optional(),
-  supplierId: z6.string().uuid().optional(),
-  status: z6.enum(["EM_ESTOQUE", "RESERVADO", "VENDIDO"]).optional(),
-  paymentMethod: z6.enum(["PIX", "DINHEIRO", "DEBITO", "CREDITO", "TRANSFERENCIA"]).optional(),
-  unitId: z6.string().uuid().optional()
+var base = z7.object({
+  format: z7.enum(["json", "pdf", "xlsx", "csv"]).default("json"),
+  startDate: z7.coerce.date().optional(),
+  endDate: z7.coerce.date().optional(),
+  categoryId: z7.string().uuid().optional(),
+  supplierId: z7.string().uuid().optional(),
+  status: z7.enum(["EM_ESTOQUE", "RESERVADO", "VENDIDO"]).optional(),
+  paymentMethod: z7.enum(["PIX", "DINHEIRO", "DEBITO", "CREDITO", "TRANSFERENCIA"]).optional(),
+  unitId: z7.string().uuid().optional()
 });
 var periodo = (q) => {
   if (!q.startDate && !q.endDate) return "Per\xEDodo: todos os registros";
@@ -3511,7 +3998,7 @@ rotasRelatorios.get(
 rotasRelatorios.get(
   "/by-period",
   rota(async (req, res) => {
-    const q = validar(base.extend({ groupBy: z6.enum(["day", "month"]).default("day") }), req.query);
+    const q = validar(base.extend({ groupBy: z7.enum(["day", "month"]).default("day") }), req.query);
     const quando = intervalo(q.startDate, q.endDate);
     const [vendas, movimentos] = await Promise.all([
       db.saleItem.findMany({
@@ -3577,7 +4064,7 @@ rotasRelatorios.get(
   "/movements",
   rota(async (req, res) => {
     const q = validar(
-      base.extend({ type: z6.enum(["ENTRADA", "SAIDA", "TRANSFERENCIA", "AJUSTE"]).optional() }),
+      base.extend({ type: z7.enum(["ENTRADA", "SAIDA", "TRANSFERENCIA", "AJUSTE"]).optional() }),
       req.query
     );
     const unidade = unidadePermitida(req.usuario, q.unitId);
@@ -3648,11 +4135,11 @@ rotasRelatorios.get(
     const q = validar(
       base.extend({
         /** Quanto somar ao preço de compra. */
-        markup: z6.coerce.number().min(0).max(999999).default(100),
+        markup: z7.coerce.number().min(0).max(999999).default(100),
         /** Mostrar o custo — só para conferência interna. */
-        incluirCusto: z6.enum(["true", "false"]).default("false"),
+        incluirCusto: z7.enum(["true", "false"]).default("false"),
         /** Deixar de fora o que está sem estoque. */
-        somenteComEstoque: z6.enum(["true", "false"]).default("true")
+        somenteComEstoque: z7.enum(["true", "false"]).default("true")
       }),
       semVazios(req.query)
     );
@@ -3735,17 +4222,17 @@ rotasRelatorios.get(
   "/whatsapp-list",
   rota(async (req, res) => {
     const q = validar(
-      z6.object({
+      z7.object({
         /** De onde sai o preço mostrado. */
-        preco: z6.enum(["atacado", "varejo", "custo"]).default("atacado"),
+        preco: z7.enum(["atacado", "varejo", "custo"]).default("atacado"),
         /** Acréscimo, quando o preço parte do custo. */
-        markup: z6.coerce.number().min(0).max(999999).default(100),
-        categoryId: z6.string().uuid().optional(),
-        unitId: z6.string().uuid().optional(),
-        agruparPor: z6.enum(["marca", "categoria"]).default("marca"),
-        mostrarQuantidade: z6.enum(["true", "false"]).default("true"),
-        mostrarCondicao: z6.enum(["true", "false"]).default("true"),
-        titulo: z6.string().trim().max(60).optional()
+        markup: z7.coerce.number().min(0).max(999999).default(100),
+        categoryId: z7.string().uuid().optional(),
+        unitId: z7.string().uuid().optional(),
+        agruparPor: z7.enum(["marca", "categoria"]).default("marca"),
+        mostrarQuantidade: z7.enum(["true", "false"]).default("true"),
+        mostrarCondicao: z7.enum(["true", "false"]).default("true"),
+        titulo: z7.string().trim().max(60).optional()
       }),
       semVazios(req.query)
     );
@@ -3845,19 +4332,29 @@ rotasRelatorios.get(
           ...unidade ? { unitId: unidade } : {}
         }
       },
-      select: { method: true, amount: true, installments: true, saleId: true }
+      select: { method: true, amount: true, installments: true, saleId: true, feePercent: true, netAmount: true }
     });
+    const tabela = await taxasDoCartao();
+    const liquidoDe = (p) => {
+      if (p.netAmount != null) return numero(p.netAmount);
+      if (p.method !== "CREDITO") return numero(p.amount);
+      const taxa = taxaDe(tabela, p.installments, "padrao");
+      return taxa != null ? numero(p.amount) * (1 - taxa / 100) : numero(p.amount);
+    };
     const total = pagamentos.reduce((s, p) => s + numero(p.amount), 0);
     const linhas = Object.keys(PAGAMENTO_LABEL).map((forma) => {
       const daForma = pagamentos.filter((p) => p.method === forma);
       const soma = daForma.reduce((s, p) => s + numero(p.amount), 0);
       const vendas = new Set(daForma.map((p) => p.saleId)).size;
       const parceladas = daForma.filter((p) => p.installments > 1);
+      const liquido = daForma.reduce((s, p) => s + liquidoDe(p), 0);
       return {
         payment: PAGAMENTO_LABEL[forma],
         sales: vendas,
         lancamentos: daForma.length,
         total: soma,
+        taxa: soma - liquido,
+        liquido,
         share: total > 0 ? soma / total * 100 : 0,
         ticket: vendas > 0 ? soma / vendas : 0,
         parcelado: parceladas.length ? `${parceladas.length} em at\xE9 ${Math.max(...parceladas.map((p) => p.installments))}x` : "\u2014"
@@ -3871,500 +4368,22 @@ rotasRelatorios.get(
         { header: "Forma de pagamento", key: "payment", width: 22 },
         qtd("Vendas", "sales", 10),
         qtd("Lan\xE7amentos", "lancamentos", 12),
-        money("Total", "total", 16),
-        { header: "% do total", key: "share", width: 11, align: "right", format: (v) => `${Number(v).toFixed(1)}%` },
-        money("Ticket m\xE9dio", "ticket", 14),
-        { header: "Parcelados", key: "parcelado", width: 14 }
+        money("Total", "total", 15),
+        money("Taxa da maquininha", "taxa", 15),
+        money("L\xEDquido", "liquido", 15),
+        { header: "% do total", key: "share", width: 10, align: "right", format: (v) => `${Number(v).toFixed(1)}%` },
+        money("Ticket m\xE9dio", "ticket", 13),
+        { header: "Parcelados", key: "parcelado", width: 13 }
       ],
       rows: linhas,
       summary: [
         { label: "Formas usadas", value: String(linhas.length) },
-        { label: "Total recebido", value: reais(emDinheiro.reduce((s, l) => s + l.total, 0)) },
+        { label: "Vendido em dinheiro", value: reais(emDinheiro.reduce((s, l) => s + l.total, 0)) },
+        { label: "Taxa da maquininha", value: reais(linhas.reduce((s, l) => s + l.taxa, 0)) },
+        { label: "Cai na conta", value: reais(emDinheiro.reduce((s, l) => s + l.liquido, 0)) },
         { label: "Movimentado", value: reais(total) }
       ]
     });
-  })
-);
-
-// server/sistema.ts
-import ExcelJS2 from "exceljs";
-import { Router as Router8 } from "express";
-import multer from "multer";
-import { Readable } from "stream";
-import { z as z7 } from "zod";
-
-// shared/taxas.ts
-var TAXAS_PADRAO = [
-  { parcelas: 1, padrao: 5.5, elo: 6.5 },
-  { parcelas: 2, padrao: 6, elo: 7 },
-  { parcelas: 3, padrao: 6.5, elo: 7.5 },
-  { parcelas: 4, padrao: 7, elo: 8 },
-  { parcelas: 5, padrao: 7.5, elo: 8.5 },
-  { parcelas: 6, padrao: 7.5, elo: 8.5 },
-  { parcelas: 7, padrao: 8, elo: 9 },
-  { parcelas: 8, padrao: 8.5, elo: 9.5 },
-  { parcelas: 9, padrao: 9, elo: 10 },
-  { parcelas: 10, padrao: 9.5, elo: 10.5 },
-  { parcelas: 11, padrao: 10, elo: 11 },
-  { parcelas: 12, padrao: 10.5, elo: 11.5 },
-  { parcelas: 13, padrao: 14, elo: null },
-  { parcelas: 14, padrao: 14.5, elo: null },
-  { parcelas: 15, padrao: 15, elo: null },
-  { parcelas: 16, padrao: 15.5, elo: null },
-  { parcelas: 17, padrao: 16, elo: null },
-  { parcelas: 18, padrao: 16.5, elo: null }
-];
-function normalizarTaxas(bruto) {
-  if (!Array.isArray(bruto)) return TAXAS_PADRAO;
-  const limpas = bruto.map((linha) => {
-    if (!linha || typeof linha !== "object") return null;
-    const { parcelas, padrao, elo } = linha;
-    const p = Number(parcelas);
-    const t = Number(padrao);
-    if (!Number.isInteger(p) || p < 1 || p > 24) return null;
-    if (!Number.isFinite(t) || t < 0 || t >= 100) return null;
-    const e = elo === null || elo === void 0 || elo === "" ? null : Number(elo);
-    return {
-      parcelas: p,
-      padrao: t,
-      elo: e !== null && Number.isFinite(e) && e >= 0 && e < 100 ? e : null
-    };
-  }).filter((l) => l !== null).sort((a, b) => a.parcelas - b.parcelas);
-  return limpas.length ? limpas : TAXAS_PADRAO;
-}
-
-// shared/loja.ts
-var LOJA_PADRAO = {
-  nome: "Rafa Multimarcas",
-  documento: "",
-  endereco: "",
-  bairro: "",
-  cidade: "",
-  uf: "",
-  cep: "",
-  telefone: "",
-  email: "",
-  rodape: ""
-};
-function normalizarLoja(bruto) {
-  if (!bruto || typeof bruto !== "object") return LOJA_PADRAO;
-  const dado = bruto;
-  const texto3 = (chave) => typeof dado[chave] === "string" ? dado[chave].trim() : LOJA_PADRAO[chave];
-  return {
-    nome: texto3("nome") || LOJA_PADRAO.nome,
-    documento: texto3("documento"),
-    endereco: texto3("endereco"),
-    bairro: texto3("bairro"),
-    cidade: texto3("cidade"),
-    uf: texto3("uf").toUpperCase().slice(0, 2),
-    cep: texto3("cep"),
-    telefone: texto3("telefone"),
-    email: texto3("email"),
-    rodape: texto3("rodape")
-  };
-}
-var linhaDeEndereco = (l) => [l.endereco, l.bairro].filter(Boolean).join(" - ");
-var linhaDeCidade = (l) => [[l.cidade, l.uf].filter(Boolean).join("/"), l.cep && `CEP: ${l.cep}`].filter(Boolean).join(" - ");
-
-// server/sistema.ts
-var rotasSistema = Router8();
-rotasSistema.use(autenticar, exigir("configuracoes"));
-rotasSistema.get(
-  "/sheets/status",
-  rota(async (_req, res) => {
-    res.json(statusPlanilha());
-  })
-);
-rotasSistema.post(
-  "/sheets/sync",
-  somenteAdmin,
-  rota(async (req, res) => {
-    if (!planilhaConfigurada()) {
-      throw new AppError("Integra\xE7\xE3o com Google Sheets n\xE3o configurada. Preencha as vari\xE1veis GOOGLE_* no .env.");
-    }
-    const [movimentos, unidades] = await Promise.all([
-      db.stockMovement.findMany({
-        orderBy: { createdAt: "asc" },
-        include: {
-          user: { select: { name: true } },
-          unit: { select: { name: true } },
-          product: { include: { category: true } }
-        }
-      }),
-      db.unit.findMany({ select: { id: true, name: true } })
-    ]);
-    const nome = (id) => unidades.find((u) => u.id === id)?.name ?? "";
-    const total = await reescreverPlanilha(
-      movimentos.map((m) => ({
-        data: m.createdAt,
-        produto: m.productName ?? m.product?.name ?? "\u2014",
-        categoria: m.product?.category.name ?? "\u2014",
-        unidade: m.unit?.name ?? "\u2014",
-        tipo: TIPO_LABEL[m.type],
-        quantidade: m.type === "ENTRADA" ? m.quantity : -m.quantity,
-        estoqueAnterior: m.previousQuantity ?? 0,
-        estoquePosterior: m.newQuantity ?? 0,
-        origem: nome(m.originUnitId),
-        destino: nome(m.destinationUnitId),
-        usuario: m.user?.name ?? "",
-        motivo: MOTIVO_LABEL[m.reason],
-        observacao: m.notes ?? "",
-        movimentoId: m.id
-      }))
-    );
-    await registrarLog({ acao: "SHEETS_SYNC", entidade: "Setting", req });
-    res.json({ message: `${total} movimenta\xE7\xE3o(\xF5es) sincronizadas com a planilha.`, synced: total });
-  })
-);
-rotasSistema.get(
-  "/backup",
-  somenteAdmin,
-  rota(async (req, res) => {
-    const [categorias, fornecedores, clientes, produtos, vendas, movimentos, usuarios] = await Promise.all([
-      db.category.findMany(),
-      db.supplier.findMany(),
-      db.customer.findMany(),
-      // As imagens ficam de fora: o backup viraria centenas de megabytes.
-      db.product.findMany(),
-      db.sale.findMany(),
-      db.stockMovement.findMany(),
-      db.user.findMany({ select: { id: true, name: true, email: true, role: true, active: true, createdAt: true } })
-    ]);
-    const backup = limpar({
-      generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
-      system: "Controle Rafa Multimarcas",
-      counts: {
-        categories: categorias.length,
-        suppliers: fornecedores.length,
-        customers: clientes.length,
-        products: produtos.length,
-        sales: vendas.length,
-        movements: movimentos.length,
-        users: usuarios.length
-      },
-      data: {
-        categories: categorias,
-        suppliers: fornecedores,
-        customers: clientes,
-        products: produtos,
-        sales: vendas,
-        movements: movimentos,
-        users: usuarios
-      }
-    });
-    await registrarLog({ acao: "BACKUP", entidade: "Setting", req });
-    const carimbo = (/* @__PURE__ */ new Date()).toISOString().slice(0, 19).replace(/[:T]/g, "-");
-    res.setHeader("Content-Type", "application/json; charset=utf-8");
-    res.setHeader("Content-Disposition", `attachment; filename="backup-rafa-${carimbo}.json"`);
-    res.send(JSON.stringify(backup, null, 2));
-  })
-);
-var CABECALHOS = [
-  "Categoria",
-  "Nome",
-  "Marca",
-  "Modelo",
-  "Cor",
-  "Capacidade",
-  "Quantidade",
-  "Pre\xE7o de Custo",
-  "Pre\xE7o de Venda",
-  "Pre\xE7o de Atacado",
-  "Fornecedor",
-  "IMEI",
-  "N\xFAmero de S\xE9rie",
-  "Lote",
-  "Condi\xE7\xE3o",
-  "Observa\xE7\xF5es"
-];
-var DE_PARA = {
-  categoria: "category",
-  nome: "name",
-  produto: "name",
-  marca: "brand",
-  modelo: "model",
-  cor: "color",
-  capacidade: "capacity",
-  quantidade: "quantity",
-  qtd: "quantity",
-  "preco de custo": "costPrice",
-  "pre\xE7o de custo": "costPrice",
-  custo: "costPrice",
-  "preco de venda": "salePrice",
-  "pre\xE7o de venda": "salePrice",
-  venda: "salePrice",
-  atacado: "wholesalePrice",
-  "preco de atacado": "wholesalePrice",
-  "pre\xE7o de atacado": "wholesalePrice",
-  fornecedor: "supplier",
-  imei: "imei",
-  "numero de serie": "serialNumber",
-  "n\xFAmero de s\xE9rie": "serialNumber",
-  serie: "serialNumber",
-  lote: "lote",
-  "condicao": "condicao",
-  "condi\xE7\xE3o": "condicao",
-  estado: "condicao",
-  "lote da caixa": "lote",
-  "codigo de barras": "barcode",
-  "c\xF3digo de barras": "barcode",
-  observacoes: "notes",
-  observa\u00E7\u00F5es: "notes",
-  obs: "notes"
-};
-var semAcento = (v) => v.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
-function paraNumero(v) {
-  if (v === null || v === void 0 || v === "") return 0;
-  if (typeof v === "number") return v;
-  const n = Number(String(v).replace(/[R$\s]/g, "").replace(/\./g, "").replace(",", "."));
-  return Number.isFinite(n) ? n : 0;
-}
-function textoDaCelula(celula) {
-  const v = celula.value;
-  if (v === null || v === void 0) return "";
-  if (typeof v === "object" && "text" in v) return String(v.text ?? "").trim();
-  if (typeof v === "object" && "result" in v) return String(v.result ?? "").trim();
-  return String(v).trim();
-}
-var planilhaUpload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 20 * 1024 * 1024, files: 1 },
-  fileFilter: (_req, arquivo, cb) => {
-    if (!/\.(xlsx|xls|csv)$/i.test(arquivo.originalname)) {
-      return cb(new AppError("Envie um arquivo .xlsx, .xls ou .csv"));
-    }
-    cb(null, true);
-  }
-});
-rotasSistema.get(
-  "/import/template",
-  rota(async (_req, res) => {
-    const arquivo = new ExcelJS2.Workbook();
-    const aba = arquivo.addWorksheet("Produtos");
-    aba.columns = CABECALHOS.map((h) => ({ header: h, key: h, width: 20 }));
-    aba.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
-    aba.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0F172A" } };
-    aba.addRow([
-      "Celulares",
-      "iPhone 13",
-      "Apple",
-      "13",
-      "Meia-noite",
-      "128GB",
-      2,
-      3200,
-      4199,
-      3950,
-      "Distribuidora Tech SP",
-      "356938035643809",
-      "",
-      "",
-      "Exemplo \u2014 apague esta linha"
-    ]);
-    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    res.setHeader("Content-Disposition", 'attachment; filename="modelo-importacao-produtos.xlsx"');
-    await arquivo.xlsx.write(res);
-    res.end();
-  })
-);
-rotasSistema.post(
-  "/import/products",
-  somenteAdmin,
-  planilhaUpload.single("file"),
-  rota(async (req, res) => {
-    if (!req.file) throw new AppError('Envie a planilha no campo "file"');
-    const arquivo = new ExcelJS2.Workbook();
-    if (req.file.originalname.toLowerCase().endsWith(".csv")) {
-      await arquivo.csv.read(Readable.from(req.file.buffer.toString("utf8")));
-    } else {
-      await arquivo.xlsx.load(req.file.buffer);
-    }
-    const aba = arquivo.worksheets[0];
-    if (!aba) throw new AppError("A planilha est\xE1 vazia");
-    const colunas = /* @__PURE__ */ new Map();
-    aba.getRow(1).eachCell((celula, indice) => {
-      const campo = DE_PARA[textoDaCelula(celula).toLowerCase().replace(/\s+/g, " ")];
-      if (campo) colunas.set(indice, campo);
-    });
-    if (![...colunas.values()].includes("name")) {
-      throw new AppError('N\xE3o encontrei a coluna "Nome". Baixe o modelo e mantenha os cabe\xE7alhos.');
-    }
-    const [categorias, fornecedores] = await Promise.all([
-      db.category.findMany(),
-      db.supplier.findMany()
-    ]);
-    const porCategoria = new Map(categorias.map((c) => [semAcento(c.name), c]));
-    categorias.forEach((c) => porCategoria.set(semAcento(c.slug), c));
-    const porFornecedor = new Map(fornecedores.map((f) => [semAcento(f.name), f]));
-    const unidadeDaImportacao = req.usuario?.unidadeId ?? (await db.unit.findFirst({ where: { active: true }, orderBy: [{ type: "asc" }, { name: "asc" }] }))?.id ?? null;
-    const erros = [];
-    let importados = 0;
-    let processadas = 0;
-    for (let n = 2; n <= aba.rowCount; n += 1) {
-      const linha = aba.getRow(n);
-      const dados = {};
-      colunas.forEach((campo, indice) => {
-        dados[campo] = textoDaCelula(linha.getCell(indice));
-      });
-      if (!dados.name) continue;
-      processadas += 1;
-      const categoria = porCategoria.get(semAcento(dados.category ?? ""));
-      if (!categoria) {
-        erros.push({
-          row: n,
-          message: `Categoria "${dados.category || "(vazia)"}" n\xE3o encontrada. Use: ${categorias.map((c) => c.name).join(", ")}`
-        });
-        continue;
-      }
-      let fornecedorId = null;
-      if (dados.supplier) {
-        const chave = semAcento(dados.supplier);
-        let fornecedor = porFornecedor.get(chave);
-        if (!fornecedor) {
-          fornecedor = await db.supplier.create({ data: { name: dados.supplier.trim() } });
-          porFornecedor.set(chave, fornecedor);
-        }
-        fornecedorId = fornecedor.id;
-      }
-      const quantidade = Math.max(0, Math.trunc(paraNumero(dados.quantity)));
-      try {
-        const produto = await db.product.create({
-          data: {
-            name: dados.name,
-            brand: dados.brand || null,
-            model: dados.model || null,
-            color: dados.color || null,
-            capacity: dados.capacity || null,
-            costPrice: paraNumero(dados.costPrice),
-            salePrice: paraNumero(dados.salePrice),
-            wholesalePrice: dados.wholesalePrice ? paraNumero(dados.wholesalePrice) : null,
-            imei: dados.imei || null,
-            serialNumber: dados.serialNumber || null,
-            lote: dados.lote || null,
-            condicao: dados.condicao || null,
-            barcode: dados.barcode || null,
-            notes: dados.notes || null,
-            categoryId: categoria.id,
-            supplierId: fornecedorId
-          }
-        });
-        if (quantidade > 0 && unidadeDaImportacao) {
-          await movimentar({
-            produtoId: produto.id,
-            produtoNome: produto.name,
-            unidadeId: unidadeDaImportacao,
-            tipo: "ENTRADA",
-            motivo: "CADASTRO",
-            quantidade,
-            observacao: "Importa\xE7\xE3o de planilha",
-            usuarioId: req.usuario?.id,
-            usuarioNome: req.usuario?.nome
-          });
-        }
-        importados += 1;
-      } catch (erro) {
-        erros.push({ row: n, message: erro.message });
-      }
-    }
-    await registrarLog({
-      acao: "IMPORT",
-      entidade: "Product",
-      alteracoes: { importados, erros: erros.length },
-      req
-    });
-    res.json({
-      processed: processadas,
-      imported: importados,
-      errors: erros,
-      message: `${importados} produto(s) importados com sucesso.`
-    });
-  })
-);
-var CHAVE_TAXAS = "taxas_cartao";
-async function taxasSalvas() {
-  const guardado = await db.setting.findUnique({ where: { key: CHAVE_TAXAS } });
-  if (!guardado) return TAXAS_PADRAO;
-  try {
-    return normalizarTaxas(JSON.parse(guardado.value));
-  } catch {
-    return TAXAS_PADRAO;
-  }
-}
-rotasSistema.get(
-  "/taxas-cartao",
-  rota(async (_req, res) => {
-    res.json({ taxas: await taxasSalvas(), padrao: TAXAS_PADRAO });
-  })
-);
-rotasSistema.put(
-  "/taxas-cartao",
-  somenteAdmin,
-  rota(async (req, res) => {
-    const { taxas } = validar(
-      z7.object({
-        taxas: z7.array(
-          z7.object({
-            parcelas: z7.coerce.number().int().min(1).max(24),
-            padrao: z7.coerce.number().min(0).max(99.99),
-            elo: z7.coerce.number().min(0).max(99.99).optional().nullable()
-          })
-        ).min(1, "Informe ao menos uma linha").max(24)
-      }),
-      req.body
-    );
-    const limpas = normalizarTaxas(taxas);
-    await db.setting.upsert({
-      where: { key: CHAVE_TAXAS },
-      update: { value: JSON.stringify(limpas) },
-      create: { key: CHAVE_TAXAS, value: JSON.stringify(limpas) }
-    });
-    await registrarLog({ acao: "TAXAS_CARTAO", entidade: "Setting", id: CHAVE_TAXAS, req });
-    res.json({ taxas: limpas, message: `${limpas.length} faixa(s) de parcelamento salvas.` });
-  })
-);
-var CHAVE_LOJA = "dados_da_loja";
-async function lojaSalva() {
-  const guardado = await db.setting.findUnique({ where: { key: CHAVE_LOJA } });
-  if (!guardado) return LOJA_PADRAO;
-  try {
-    return normalizarLoja(JSON.parse(guardado.value));
-  } catch {
-    return LOJA_PADRAO;
-  }
-}
-rotasSistema.get(
-  "/loja",
-  rota(async (_req, res) => {
-    res.json(await lojaSalva());
-  })
-);
-rotasSistema.put(
-  "/loja",
-  somenteAdmin,
-  rota(async (req, res) => {
-    const dados = validar(
-      z7.object({
-        nome: z7.string().trim().min(2, "Informe o nome da loja").max(120),
-        documento: z7.string().trim().max(30).optional(),
-        endereco: z7.string().trim().max(160).optional(),
-        bairro: z7.string().trim().max(80).optional(),
-        cidade: z7.string().trim().max(80).optional(),
-        uf: z7.string().trim().max(2).optional(),
-        cep: z7.string().trim().max(12).optional(),
-        telefone: z7.string().trim().max(40).optional(),
-        email: z7.string().trim().max(120).optional(),
-        rodape: z7.string().trim().max(300).optional()
-      }),
-      req.body
-    );
-    const loja = normalizarLoja(dados);
-    await db.setting.upsert({
-      where: { key: CHAVE_LOJA },
-      update: { value: JSON.stringify(loja) },
-      create: { key: CHAVE_LOJA, value: JSON.stringify(loja) }
-    });
-    await registrarLog({ acao: "DADOS_DA_LOJA", entidade: "Setting", id: CHAVE_LOJA, req });
-    res.json({ ...loja, message: "Dados da loja salvos. J\xE1 valem no pr\xF3ximo comprovante." });
   })
 );
 
@@ -4438,6 +4457,15 @@ rotasNotificacoes.post(
 );
 
 // server/vendas-service.ts
+function taxaDaLinha(tabela, metodo, parcelas, informada) {
+  if (metodo !== "CREDITO") return null;
+  const taxa = informada ?? taxaDe(tabela, parcelas, "padrao");
+  return taxa != null ? new Prisma3.Decimal(taxa) : null;
+}
+function liquidoDaLinha(tabela, metodo, valor, parcelas, informada) {
+  const taxa = taxaDaLinha(tabela, metodo, parcelas, informada);
+  return new Prisma3.Decimal(taxa ? valor * (1 - Number(taxa) / 100) : valor);
+}
 async function proximoCodigo(nome, prefixo, tx) {
   const cliente3 = tx ?? db;
   const contador = await cliente3.sequence.upsert({
@@ -4523,6 +4551,7 @@ async function registrarVenda(dados) {
       (soma, i) => soma.add(i.costPrice.mul(i.quantity)),
       new Prisma3.Decimal(0)
     );
+    const tabela = await taxasDoCartao();
     const daTroca = new Prisma3.Decimal(dados.trocaNova?.valorAvaliado ?? dados.trocaValor ?? 0);
     const aReceber = total.minus(daTroca);
     const emDinheiro = dados.pagamentos?.length ? dados.pagamentos.map((p) => ({
@@ -4539,7 +4568,15 @@ async function registrarVenda(dados) {
         method: dados.paymentMethod,
         amount: aReceber,
         installments: dados.installments ?? 1,
-        notes: null
+        notes: null,
+        feePercent: taxaDaLinha(tabela, dados.paymentMethod, dados.installments ?? 1, null),
+        netAmount: liquidoDaLinha(
+          tabela,
+          dados.paymentMethod,
+          Number(aReceber),
+          dados.installments ?? 1,
+          null
+        )
       }
     ] : [];
     const somaEmDinheiro = emDinheiro.reduce((s, p) => s.add(p.amount), new Prisma3.Decimal(0));
@@ -4548,7 +4585,17 @@ async function registrarVenda(dados) {
         `As formas de pagamento somam R$ ${somaEmDinheiro.toFixed(2)}, mas o cliente tem a pagar R$ ${aReceber.toFixed(2)}.`
       );
     }
-    const rateio = daTroca.greaterThan(0) ? [...emDinheiro, { method: "TROCA", amount: daTroca, installments: 1, notes: null }] : emDinheiro;
+    const rateio = daTroca.greaterThan(0) ? [
+      ...emDinheiro,
+      {
+        method: "TROCA",
+        amount: daTroca,
+        installments: 1,
+        notes: null,
+        feePercent: null,
+        netAmount: daTroca
+      }
+    ] : emDinheiro;
     const formaPrincipal = emDinheiro.reduce(
       (maior, p) => !maior || p.amount.greaterThan(maior.amount) ? p : maior,
       null
@@ -5126,7 +5173,9 @@ var finalizarSchema = z10.object({
       method: z10.enum(PAGAMENTOS),
       amount: z10.coerce.number().min(0.01, "Informe o valor desta forma"),
       installments: z10.coerce.number().int().min(1).max(24).default(1),
-      notes: z10.string().trim().max(120).optional().nullable()
+      notes: z10.string().trim().max(120).optional().nullable(),
+      /** Taxa da maquininha, em %. Guardada com a venda. */
+      feePercent: z10.coerce.number().min(0).max(99.99).optional().nullable()
     })
   ).max(6, "No m\xE1ximo 6 formas na mesma venda").optional(),
   notes: z10.string().trim().max(1e3).optional().nullable(),
@@ -5915,7 +5964,9 @@ var vendaSchema = z12.object({
       method: z12.enum(PAGAMENTOS2),
       amount: z12.coerce.number().min(0.01, "Informe o valor desta forma"),
       installments: z12.coerce.number().int().min(1).max(24).default(1),
-      notes: z12.string().trim().max(120).optional().nullable()
+      notes: z12.string().trim().max(120).optional().nullable(),
+      /** Taxa da maquininha, em %. Guardada com a venda. */
+      feePercent: z12.coerce.number().min(0).max(99.99).optional().nullable()
     })
   ).max(6, "No m\xE1ximo 6 formas na mesma venda").optional(),
   /**

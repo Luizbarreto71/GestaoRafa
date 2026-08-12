@@ -394,7 +394,7 @@ rotasSistema.post(
 const CHAVE_TAXAS = 'taxas_cartao';
 
 /** A tabela salva, ou a padrão da loja quando ninguém mexeu ainda. */
-async function taxasSalvas(): Promise<TaxaDeCartao[]> {
+export async function taxasDoCartao(): Promise<TaxaDeCartao[]> {
   const guardado = await db.setting.findUnique({ where: { key: CHAVE_TAXAS } });
   if (!guardado) return TAXAS_PADRAO;
 
@@ -415,7 +415,7 @@ async function taxasSalvas(): Promise<TaxaDeCartao[]> {
 rotasSistema.get(
   '/taxas-cartao',
   rota(async (_req, res) => {
-    res.json({ taxas: await taxasSalvas(), padrao: TAXAS_PADRAO });
+    res.json({ taxas: await taxasDoCartao(), padrao: TAXAS_PADRAO });
   }),
 );
 
