@@ -601,9 +601,31 @@ function VendaDireta() {
     unitId: '',
     paymentMethod: 'PIX',
     installments: '1',
+    entrada: '',
+    formaDaEntrada: 'PIX',
     vendedor: '',
     notes: '',
   });
+
+  /**
+   * Entrada mais saldo devedor, quando a venda sai fiada.
+   *
+   * Vira duas linhas: o que o cliente adiantou na forma escolhida e o
+   * resto em aberto. Sem entrada, uma linha só.
+   */
+  function pagamentoEmAberto() {
+    if (form.paymentMethod !== 'EM_ABERTO') return undefined;
+
+    const pago = Number(form.entrada) || 0;
+    const resto = Math.max(0, total - pago);
+
+    return [
+      ...(pago > 0
+        ? [{ method: form.formaDaEntrada, amount: pago, installments: 1, notes: null }]
+        : []),
+      ...(resto > 0 ? [{ method: 'EM_ABERTO', amount: resto, installments: 1, notes: null }] : []),
+    ];
+  }
 
   const unidade = form.unitId || unidades[0]?.id || '';
   const totalDosProdutos = totalDosItens(itens);
@@ -635,6 +657,19 @@ function VendaDireta() {
       }
     }
 
+    if (form.paymentMethod === 'EM_ABERTO' && !dividido) {
+      const pago = Number(form.entrada) || 0;
+      if (pago > total) {
+        return toast.warning('A entrada passou do valor da venda', 'Ajuste o quanto ele paga agora.');
+      }
+      if (!form.customerName.trim() || !form.customerPhone.trim()) {
+        return toast.warning(
+          'Falta quem vai pagar',
+          'Valor em aberto precisa do nome e do telefone do cliente.',
+        );
+      }
+    }
+
     if (dividido && Math.abs(somaDasFormas(formas) - total) >= 0.01) {
       return toast.warning(
         'As formas não fecham com o total',
@@ -654,7 +689,7 @@ function VendaDireta() {
         unitId: unidade,
         paymentMethod: form.paymentMethod,
         installments: Number(form.installments) || 1,
-        payments: paraApi(dividido, formas),
+        payments: dividido ? paraApi(true, formas) : pagamentoEmAberto(),
         tradeIn: trocaParaApi(comTroca, troca),
         customerName: form.customerName.trim() || null,
         customerPhone: form.customerPhone.trim() || null,
@@ -674,6 +709,7 @@ function VendaDireta() {
       setForm((f) => ({ ...f, customerName: '', customerPhone: '', customerDocument: '', notes: '' }));
       setDividido(false);
       setFormas([]);
+      setForm((f) => ({ ...f, paymentMethod: 'PIX', entrada: '', formaDaEntrada: 'PIX' }));
       setComTroca(false);
       setTroca(trocaVazia());
     } catch (erro) {
@@ -740,6 +776,10 @@ function VendaDireta() {
             aoMudarFormaUnica={(v) => setForm((f) => ({ ...f, paymentMethod: v }))}
             parcelas={form.installments}
             aoMudarParcelas={(v) => setForm((f) => ({ ...f, installments: v }))}
+            entrada={form.entrada}
+            aoMudarEntrada={(v) => setForm((f) => ({ ...f, entrada: v }))}
+            formaDaEntrada={form.formaDaEntrada}
+            aoMudarFormaDaEntrada={(v) => setForm((f) => ({ ...f, formaDaEntrada: v }))}
             total={total}
           />
 
