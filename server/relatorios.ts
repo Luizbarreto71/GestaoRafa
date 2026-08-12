@@ -88,6 +88,10 @@ rotasRelatorios.get(
     // cada peça, em vez de um total que não diz nada.
     const linhasDeEstoque = await db.stock.findMany({
       where: {
+        // Zerado não é estoque. A linha continua no banco depois que a
+        // última peça sai, e listá-la faz o relatório da Hermes mostrar
+        // mercadoria que só existe em outra unidade.
+        quantity: { gt: 0 },
         ...(unidade ? { unitId: unidade } : {}),
         product: {
           ...(q.categoryId ? { categoryId: { in: await comAsFilhas(q.categoryId) } } : {}),
