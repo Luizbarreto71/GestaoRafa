@@ -4678,10 +4678,12 @@ async function registrarVenda(dados) {
         costPrice: new Prisma3.Decimal(produto.costPrice)
       };
     });
-    const total = itensComCusto.reduce(
+    const somaDosItens = itensComCusto.reduce(
       (soma, i) => soma.add(new Prisma3.Decimal(i.unitPrice).mul(i.quantity)),
       new Prisma3.Decimal(0)
     );
+    const acrescimo = new Prisma3.Decimal(dados.acrescimo ?? 0);
+    const total = somaDosItens.add(acrescimo);
     const custo = itensComCusto.reduce(
       (soma, i) => soma.add(i.costPrice.mul(i.quantity)),
       new Prisma3.Decimal(0)
@@ -4753,6 +4755,7 @@ async function registrarVenda(dados) {
         code: await proximoCodigo("venda", "VD", tx),
         totalAmount: total,
         costAmount: custo,
+        surcharge: acrescimo,
         // A forma "principal" continua na venda para as telas simples: é a
         // de maior valor quando o pagamento foi dividido.
         paymentMethod: formaPrincipal,
@@ -6290,6 +6293,8 @@ var vendaSchema = z13.object({
   customerPhone: z13.string().trim().max(30).optional().nullable(),
   customerDocument: z13.string().trim().max(30).optional().nullable(),
   customerId: z13.string().uuid().optional().nullable(),
+  /** Cobrado além do preço dos produtos — o repasse da taxa do cartão. */
+  acrescimo: z13.coerce.number().min(0).max(999999).optional().nullable(),
   /**
    * Aparelho que o cliente deixou como parte do pagamento.
    *
@@ -6334,6 +6339,7 @@ rotasVendas.post(
       paymentMethod: dados.paymentMethod,
       installments: dados.installments,
       pagamentos: dados.payments,
+      acrescimo: dados.acrescimo,
       trocaNova: dados.tradeIn,
       customerName: dados.customerName,
       sellerName: dados.sellerName,

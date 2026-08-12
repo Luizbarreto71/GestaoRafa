@@ -5,6 +5,7 @@ import { Input, Textarea } from '@/components/ui/Field';
 import { Modal } from '@/components/ui/Modal';
 import { StatCard } from '@/components/ui/StatCard';
 import { CarrinhoDeItens, totalDosItens } from '@/components/vendas/CarrinhoDeItens';
+import { useTaxasDeCartao } from '@/components/vendas/CalculadoraDeCartao';
 import { ReciboDaVenda } from '@/components/vendas/ReciboDaVenda';
 import {
   TrocaNoBalcao,
@@ -39,6 +40,7 @@ import { cn } from '@/lib/cn';
 import { DEFEITO_ROTULO, SITUACAO_IMEI_ROTULO } from '@shared/trocas';
 import { caixaService } from '@/services';
 import { formatCurrency, formatDateTime, PRE_SALE_LABEL } from '@/lib/format';
+import { taxaDe } from '@shared/taxas';
 import type { ItemVenda, PreSale } from '@/types';
 import {
   Ban,
@@ -596,6 +598,7 @@ function VendaDireta() {
   const { data: usuarios } = useUsers({ pageSize: 100 }, true);
   const { data: unidadeDeVenda } = useUnidadeDeVenda();
   const contasPix = useContasDePix();
+  const taxas = useTaxasDeCartao();
 
   const [itens, setItens] = useState<ItemVenda[]>([]);
   const [recibo, setRecibo] = useState<{ id: string; code: string; totalAmount: number } | null>(null);
@@ -611,6 +614,7 @@ function VendaDireta() {
     paymentMethod: 'PIX',
     destino: '',
     installments: '1',
+    cobrado: '',
     entrada: '',
     formaDaEntrada: 'PIX',
     vendedor: '',
@@ -623,6 +627,20 @@ function VendaDireta() {
    * Vira duas linhas: o que o cliente adiantou na forma escolhida e o
    * resto em aberto. Sem entrada, uma linha só.
    */
+  function pagamentoNoCredito() {
+    if (form.paymentMethod !== 'CREDITO' || !cobradoNoCartao) return undefined;
+
+    const t = taxaDe(taxas, Number(form.installments) || 1, 'padrao');
+    return [
+      {
+        method: 'CREDITO',
+        amount: cobradoNoCartao,
+        installments: Number(form.installments) || 1,
+        feePercent: t,
+      },
+    ];
+  }
+
   function pagamentoEmAberto() {
     if (form.paymentMethod !== 'EM_ABERTO') return undefined;
 
@@ -647,6 +665,20 @@ function VendaDireta() {
   // O aparelho do cliente é forma de pagamento: o que sobra é o que ele paga.
   const daTroca = comTroca ? Number(troca.valorAvaliado) || 0 : 0;
   const total = Math.max(0, totalDosProdutos - daTroca);
+
+  /**
+   * Quanto foi cobrado além do preço de tabela, no crédito.
+   *
+   * O vendedor fecha em R$ 1.200 um aparelho de R$ 1.000: a diferença não é
+   * preço do produto, é o repasse da taxa. Vai separada para o relatório
+   * não confundir uma coisa com a outra.
+   */
+  const cobradoNoCartao =
+    form.paymentMethod === 'CREDITO' && form.cobrado !== '' ? Number(form.cobrado) || 0 : 0;
+  const acrescimo = cobradoNoCartao > total ? cobradoNoCartao - total : 0;
+
+  /** O que o cliente vai pagar de fato — com o repasse, quando há. */
+  const totalCobrado = total + acrescimo;
   // Sugestão, não restrição: quem vende no salão muitas vezes não tem login,
   // e filtrar por perfil deixava a lista praticamente vazia.
   const sugestoes = (usuarios?.data ?? []).map((u) => u.name).sort((a, b) => a.localeCompare(b, 'pt-BR'));
@@ -713,9 +745,11 @@ function VendaDireta() {
         unitId: unidade,
         paymentMethod: form.paymentMethod,
         installments: Number(form.installments) || 1,
+        acrescimo: dividido ? undefined : acrescimo || undefined,
         payments: dividido
           ? paraApi(true, formas)
-          : (pagamentoEmAberto() ??
+          : (pagamentoNoCredito() ??
+            pagamentoEmAberto() ??
             // Só para carregar a conta que recebeu; sem destino a venda
             // continua sem rateio, como antes.
             (form.destino
@@ -747,7 +781,7 @@ function VendaDireta() {
       setForm((f) => ({ ...f, customerName: '', customerPhone: '', customerDocument: '', notes: '' }));
       setDividido(false);
       setFormas([]);
-      setForm((f) => ({ ...f, paymentMethod: 'PIX', destino: '', entrada: '', formaDaEntrada: 'PIX' }));
+      setForm((f) => ({ ...f, paymentMethod: 'PIX', destino: '', cobrado: '', entrada: '', formaDaEntrada: 'PIX' }));
       setComTroca(false);
       setTroca(trocaVazia());
     } catch (erro) {
@@ -782,7 +816,7 @@ function VendaDireta() {
           <Secao
             numero={2}
             titulo="Como vai pagar"
-            complemento={itens.length > 0 ? formatCurrency(total) : undefined}
+            complemento={itens.length > 0 ? formatCurrency(totalCobrado) : undefined}
           >
             <FormasDePagamento
             dividido={dividido}
@@ -795,6 +829,8 @@ function VendaDireta() {
             aoMudarDestino={(v) => setForm((f) => ({ ...f, destino: v }))}
             parcelas={form.installments}
             aoMudarParcelas={(v) => setForm((f) => ({ ...f, installments: v }))}
+            cobrado={form.cobrado}
+            aoMudarCobrado={(v) => setForm((f) => ({ ...f, cobrado: v }))}
             entrada={form.entrada}
             aoMudarEntrada={(v) => setForm((f) => ({ ...f, entrada: v }))}
             formaDaEntrada={form.formaDaEntrada}
@@ -879,7 +915,7 @@ function VendaDireta() {
             icon={<Check className="h-4 w-4" />}
             className="w-full py-3 text-base"
           >
-            Finalizar venda · {formatCurrency(total)}
+            Finalizar venda · {formatCurrency(totalCobrado)}
           </Button>
         </form>
 

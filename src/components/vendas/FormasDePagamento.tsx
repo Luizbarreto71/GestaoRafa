@@ -121,6 +121,8 @@ export function FormasDePagamento({
   aoMudarDestino,
   parcelas,
   aoMudarParcelas,
+  cobrado = '',
+  aoMudarCobrado,
   entrada = '',
   aoMudarEntrada,
   formaDaEntrada = 'PIX',
@@ -138,6 +140,9 @@ export function FormasDePagamento({
   aoMudarDestino?: (v: string) => void;
   parcelas: string;
   aoMudarParcelas: (v: string) => void;
+  /** O valor combinado no crédito, já com a taxa. */
+  cobrado?: string;
+  aoMudarCobrado?: (v: string) => void;
   /** Quanto o cliente adianta quando o resto fica em aberto. */
   entrada?: string;
   aoMudarEntrada?: (v: string) => void;
@@ -195,6 +200,8 @@ export function FormasDePagamento({
             valorSugerido={total}
             parcelas={parcelas}
             aoMudarParcelas={aoMudarParcelas}
+            cobrado={cobrado}
+            aoMudarCobrado={aoMudarCobrado}
           />
         )}
 

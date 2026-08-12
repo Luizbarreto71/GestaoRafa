@@ -51,6 +51,14 @@ export interface DadosDaVenda {
    * dinheiro faria a gaveta não bater; tirar do total faria a venda parecer
    * prejuízo diante do custo do produto.
    */
+  /**
+   * Quanto foi cobrado acima do preço dos produtos.
+   *
+   * É o repasse da taxa do cartão: o vendedor fecha em R$ 1.200 um aparelho
+   * de R$ 1.000, e a diferença não é preço nem lucro — é a taxa que a loja
+   * vai pagar, com o que sobrar dela.
+   */
+  acrescimo?: number | null;
   trocaValor?: number | null;
   /**
    * Aparelho anotado na hora, no balcão.
@@ -256,10 +264,12 @@ export async function registrarVenda(dados: DadosDaVenda) {
       };
     });
 
-    const total = itensComCusto.reduce(
+    const somaDosItens = itensComCusto.reduce(
       (soma, i) => soma.add(new Prisma.Decimal(i.unitPrice).mul(i.quantity)),
       new Prisma.Decimal(0),
     );
+    const acrescimo = new Prisma.Decimal(dados.acrescimo ?? 0);
+    const total = somaDosItens.add(acrescimo);
     const custo = itensComCusto.reduce(
       (soma, i) => soma.add(i.costPrice.mul(i.quantity)),
       new Prisma.Decimal(0),
@@ -358,6 +368,7 @@ export async function registrarVenda(dados: DadosDaVenda) {
         code: await proximoCodigo('venda', 'VD', tx),
         totalAmount: total,
         costAmount: custo,
+        surcharge: acrescimo,
         // A forma "principal" continua na venda para as telas simples: é a
         // de maior valor quando o pagamento foi dividido.
         paymentMethod: formaPrincipal,

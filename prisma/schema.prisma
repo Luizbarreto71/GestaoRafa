@@ -414,6 +414,9 @@ model Sale {
   /// recalcular a cada consulta.
   totalAmount Decimal @db.Decimal(12, 2)
   costAmount  Decimal @default(0) @db.Decimal(12, 2)
+  /// Quanto foi cobrado além do preço dos produtos — o repasse da taxa do
+  /// cartão. Fica separado para o relatório não confundir preço com taxa.
+  surcharge   Decimal @default(0) @db.Decimal(12, 2)
 
   paymentMethod PaymentMethod
   /// 1 = à vista.

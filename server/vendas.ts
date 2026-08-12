@@ -189,6 +189,8 @@ const vendaSchema = z.object({
   customerPhone: z.string().trim().max(30).optional().nullable(),
   customerDocument: z.string().trim().max(30).optional().nullable(),
   customerId: z.string().uuid().optional().nullable(),
+  /** Cobrado além do preço dos produtos — o repasse da taxa do cartão. */
+  acrescimo: z.coerce.number().min(0).max(999_999).optional().nullable(),
   /**
    * Aparelho que o cliente deixou como parte do pagamento.
    *
@@ -247,6 +249,7 @@ rotasVendas.post(
       paymentMethod: dados.paymentMethod as never,
       installments: dados.installments,
       pagamentos: dados.payments,
+      acrescimo: dados.acrescimo,
       trocaNova: dados.tradeIn,
       customerName: dados.customerName,
       sellerName: dados.sellerName,
