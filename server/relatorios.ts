@@ -108,13 +108,22 @@ rotasRelatorios.get(
       return porProduto !== 0 ? porProduto : a.unit.name.localeCompare(b.unit.name, 'pt-BR');
     });
 
-    const linhas = linhasDeEstoque.map(({ product: p, unit, quantity }) => ({
-      unit: unit.name,
+    // Sem filtro de unidade, o produto aparece uma vez com o total somado.
+    // Repetir a mesma peça uma linha por prateleira obriga quem lê a somar
+    // de cabeça para saber quanto a loja tem.
+    const agrupadas = new Map<string, { product: (typeof linhasDeEstoque)[number]['product']; quantity: number }>();
+
+    for (const linha of linhasDeEstoque) {
+      const chave = linha.productId;
+      const atual = agrupadas.get(chave);
+      if (atual) atual.quantity += linha.quantity;
+      else agrupadas.set(chave, { product: linha.product, quantity: linha.quantity });
+    }
+
+    const linhas = [...agrupadas.values()].map(({ product: p, quantity }) => ({
       name: p.name,
       category: p.category.name,
       brand: p.brand ?? '—',
-      model: p.model ?? '—',
-      lote: p.lote ?? '—',
       quantity,
       costPrice: numero(p.costPrice),
       salePrice: numero(p.salePrice),
@@ -129,9 +138,15 @@ rotasRelatorios.get(
     const custo = linhas.reduce((s, l) => s + l.totalCost, 0);
     const venda = linhas.reduce((s, l) => s + l.totalSale, 0);
 
+    const nomeDaUnidade = unidade
+      ? ((await db.unit.findUnique({ where: { id: unidade }, select: { name: true } }))?.name ?? null)
+      : null;
+
     await exportar(res, q.format, {
       title: 'Relatório de Estoque',
-      subtitle: periodo(q),
+      // A unidade sai do rodapé de cada linha e vai para o cabeçalho: ela é
+      // a mesma no relatório inteiro.
+      subtitle: `${nomeDaUnidade ?? 'Todas as unidades'} · ${periodo(q)}`,
       // Separado por condição: lacrado e vitrine são mercadorias
       // diferentes, com preço diferente, e misturá-las esconde o que a
       // loja tem de cada uma.
@@ -139,13 +154,10 @@ rotasRelatorios.get(
       // "Celulares › Vitrine" é um bloco, "Celulares › Lacrado" é outro.
       group: { key: 'category', totals: ['quantity', 'totalCost', 'totalSale'] },
       columns: [
-        { header: 'Unidade', key: 'unit', width: 12 },
-        { header: 'Produto', key: 'name', width: 24 },
-        { header: 'Categoria', key: 'category', width: 13 },
-        { header: 'Marca', key: 'brand', width: 11 },
-        { header: 'Modelo', key: 'model', width: 13 },
-        { header: 'Lote', key: 'lote', width: 11 },
-        qtd('Qtd', 'quantity', 6),
+        { header: 'Produto', key: 'name', width: 26 },
+        { header: 'Categoria', key: 'category', width: 14 },
+        { header: 'Marca', key: 'brand', width: 12 },
+        qtd('Qtd', 'quantity', 7),
         money('Custo', 'costPrice', 10),
         money('Venda', 'salePrice', 10),
         { header: 'Atacado', key: 'wholesalePrice', width: 10, align: 'right' as const,
