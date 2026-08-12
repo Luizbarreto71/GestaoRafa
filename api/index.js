@@ -2882,7 +2882,8 @@ async function enviarExcel(res, r) {
 }
 var PADDING = 5;
 var ALTURA_MINIMA = 17;
-function enviarPdf(res, r) {
+function enviarPdf(res, entrada) {
+  const r = entrada.group ? { ...entrada, columns: entrada.columns.filter((c) => c.key !== entrada.group.key) } : entrada;
   const doc = new PDFDocument({
     margin: 30,
     size: "A4",

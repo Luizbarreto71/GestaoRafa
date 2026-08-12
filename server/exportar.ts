@@ -250,7 +250,15 @@ const ALTURA_MINIMA = 17;
  * nome de produto que ocupava duas linhas invadia a linha seguinte — texto
  * por cima de texto, exatamente onde se precisa conferir número.
  */
-function enviarPdf(res: Response, r: Relatorio): void {
+function enviarPdf(res: Response, entrada: Relatorio): void {
+  // A coluna que virou título de bloco sai da tabela: repetir "Celulares ›
+  // Lacrado" em cada linha de um bloco chamado "CELULARES › LACRADO" gasta
+  // largura sem dizer nada. Precisa acontecer antes do cálculo das
+  // larguras, senão as colunas saem deslocadas uma casa.
+  const r: Relatorio = entrada.group
+    ? { ...entrada, columns: entrada.columns.filter((c) => c.key !== entrada.group!.key) }
+    : entrada;
+
   const doc = new PDFDocument({
     margin: 30,
     size: 'A4',
