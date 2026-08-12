@@ -25,7 +25,7 @@ const UNIDADES = [
 
 const CATEGORIAS = [
   { name: 'Celulares', slug: 'celulares', color: '#3B82F6' },
-  { name: 'TG (Tirzepatida)', slug: 'tg', color: '#8B5CF6' },
+  { name: 'GoPro', slug: 'gopro', color: '#8B5CF6' },
   { name: 'JBL', slug: 'jbl', color: '#F97316' },
   { name: 'Notebooks', slug: 'notebooks', color: '#14B8A6' },
   { name: 'Video Games', slug: 'video-games', color: '#EC4899' },
@@ -101,7 +101,7 @@ async function main() {
   const produtos = [
     { dados: { name: 'iPhone 15 Pro Max', brand: 'Apple', model: '15 Pro Max', color: 'Titânio Natural', capacity: '256GB', minQuantity: 2, costPrice: 6200, salePrice: 7899, imei: '356938035643809', categoryId: id('celulares'), supplierId: fornecedores[0].id }, matriz: 5, sede: 2 },
     { dados: { name: 'Samsung Galaxy S24 Ultra', brand: 'Samsung', model: 'S24 Ultra', color: 'Preto', capacity: '512GB', minQuantity: 2, costPrice: 5100, salePrice: 6499, imei: '351756051523999', categoryId: id('celulares'), supplierId: fornecedores[1].id }, matriz: 2, sede: 1 },
-    { dados: { name: 'Tirzepatida 5mg', brand: 'Mounjaro', model: '5mg', lote: 'LT-2026-04', minQuantity: 5, costPrice: 890, salePrice: 1450, categoryId: id('tg'), supplierId: fornecedores[2].id }, matriz: 8, sede: 4 },
+    { dados: { name: 'GoPro 5mg', model: '5mg', lote: 'LT-2026-04', minQuantity: 5, costPrice: 890, salePrice: 1450, categoryId: id('gopro'), supplierId: fornecedores[2].id }, matriz: 8, sede: 4 },
     { dados: { name: 'JBL Boombox 3', brand: 'JBL', model: 'Boombox 3', color: 'Preto', minQuantity: 2, costPrice: 1900, salePrice: 2799, serialNumber: 'JBLBB3-99201', categoryId: id('jbl'), supplierId: fornecedores[0].id }, matriz: 1, sede: 0 },
     { dados: { name: 'Notebook Dell Inspiron 15', brand: 'Dell', model: 'Inspiron 15 3520', capacity: '512GB SSD / 16GB RAM', minQuantity: 2, costPrice: 2700, salePrice: 3699, serialNumber: 'DL15-2024-4412', categoryId: id('notebooks'), supplierId: fornecedores[0].id }, matriz: 3, sede: 1 },
     { dados: { name: 'PlayStation 5 Slim', brand: 'Sony', model: 'PS5 Slim', color: 'Branco', capacity: '1TB', minQuantity: 1, costPrice: 3100, salePrice: 3999, serialNumber: 'PS5S-77120', categoryId: id('video-games'), supplierId: fornecedores[1].id }, matriz: 2, sede: 0 },

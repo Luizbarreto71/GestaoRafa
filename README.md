@@ -4,7 +4,7 @@ Sistema de controle de estoque da loja Rafa Multimarcas. Cadastro de produtos, v
 automática de estoque, histórico completo de movimentações, relatórios em PDF/Excel/CSV e
 sincronização opcional com o Google Sheets.
 
-Categorias: 📱 Celulares · 💉 TG (Tirzepatida) · 🔊 JBL · 💻 Notebooks · 🎮 Video Games
+Categorias: 📱 Celulares · 📦 GoPro · 🔊 JBL · 💻 Notebooks · 🎮 Video Games
 
 > **Uma variável de ambiente. Um projeto. Um deploy.**
 > Só a `DATABASE_URL` do Supabase é obrigatória — o resto o sistema resolve sozinho.

@@ -67,7 +67,7 @@ export function LoginPage() {
             sob controle.
           </h1>
           <p className="mt-4 max-w-md text-sm leading-relaxed text-slate-300">
-            Celulares, TG, JBL, notebooks e video games em um só lugar. Cada venda baixa o estoque
+            Celulares, GoPro, JBL, notebooks e video games em um só lugar. Cada venda baixa o estoque
             automaticamente e vai para a planilha.
           </p>
 

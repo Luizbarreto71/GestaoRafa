@@ -64,7 +64,7 @@ const REPORTS: ReportDefinition[] = [
     key: 'by-category',
     endpoint: '/reports/by-category',
     title: 'Relatório por categoria',
-    description: 'Comparativo de estoque e faturamento entre celulares, TG, JBL, notebooks e games.',
+    description: 'Comparativo de estoque e faturamento entre celulares, GoPro, JBL, notebooks e games.',
     icon: BarChart3,
     tone: 'bg-purple-500/10 text-purple-600 dark:text-purple-300',
     fields: ['period'],

@@ -541,8 +541,9 @@ var PADROES = {
     { campo: "fotos" },
     { campo: "observacoes" }
   ],
-  // Vendido por caixa: some marca, modelo, cor, capacidade e IMEI.
-  tg: [
+  // Vendido por caixa: some marca, modelo, cor, capacidade e IMEI. A
+  // chave acompanha o apelido da categoria — o produto é o mesmo.
+  gopro: [
     { campo: "nome", rotulo: "Nome / dosagem" },
     { campo: "lote", rotulo: "Lote da caixa" },
     { campo: "quantidade", rotulo: "Quantidade de caixas" },
