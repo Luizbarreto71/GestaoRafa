@@ -112,12 +112,23 @@ export default function DashboardPage() {
           loading={isLoading}
           onClick={() => navigate('/estoque?status=EM_ESTOQUE')}
         />
+        {/* O número que se acompanha durante o dia fica sozinho num
+            cartão: espremido como legenda de outro, ninguém enxerga. */}
+        <StatCard
+          label={ehHoje ? 'Faturamento de hoje' : `Faturamento de ${diaPorExtenso}`}
+          value={formatCurrency(cards?.revenueToday ?? 0)}
+          hint={`Lucro: ${formatCurrency(cards?.profitToday ?? 0)}`}
+          icon={TrendingUp}
+          tone="success"
+          loading={isLoading}
+          onClick={() => navigate(`/vendas?startDate=${data?.date ?? ''}&endDate=${data?.date ?? ''}`)}
+        />
         <StatCard
           label={ehHoje ? 'Vendidos hoje' : `Vendidos em ${diaPorExtenso}`}
           value={formatNumber(cards?.soldToday ?? 0)}
-          hint={`${cards?.salesCountToday ?? 0} venda(s) · ${formatCurrency(cards?.revenueToday ?? 0)}`}
+          hint={`${cards?.salesCountToday ?? 0} venda(s)`}
           icon={ShoppingCart}
-          tone="success"
+          tone="accent"
           loading={isLoading}
           onClick={() => navigate(`/vendas?startDate=${data?.date ?? ''}&endDate=${data?.date ?? ''}`)}
         />

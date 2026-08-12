@@ -53,6 +53,16 @@ export const useDashboard = (days = 14, unitId?: string | null, date?: string) =
     queryKey: [...queryKeys.dashboard(days), unitId ?? 'todas', date ?? 'hoje'],
     queryFn: () => dashboardService.overview(days, unitId ?? undefined, date),
     staleTime: 30_000,
+    /**
+     * O painel do dia se atualiza sozinho enquanto a loja vende.
+     *
+     * Só quando está mostrando hoje: dia passado não muda mais, e ficar
+     * buscando de novo seria gastar internet à toa. E só com a aba à
+     * frente — ninguém precisa do painel de uma aba que está escondida.
+     */
+    refetchInterval: date ? false : 60_000,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: true,
   });
 
 export const useAlerts = (enabled = true, unitId?: string | null) =>
