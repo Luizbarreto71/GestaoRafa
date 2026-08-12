@@ -16,6 +16,7 @@ import {
   type CampoDaCategoria,
   type ChaveCampo,
 } from '@shared/campos';
+import { PALETA_DE_CATEGORIAS } from '@shared/cores';
 import { ChevronDown, GripVertical, RotateCcw, Save, ShieldCheck } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
@@ -55,6 +56,7 @@ export function CategoriesTab() {
         <EditorDeCategoria
           key={categoria.id}
           categoria={categoria}
+          outras={(categorias ?? []).filter((c) => c.id !== categoria.id)}
           aberta={aberta === categoria.id}
           onAlternar={() => setAberta(aberta === categoria.id ? null : categoria.id)}
           onSalvo={() => toast.success('Formulário salvo', `${categoria.name} atualizada.`)}
@@ -67,24 +69,30 @@ export function CategoriesTab() {
 
 interface EditorProps {
   categoria: Category;
+  /** As outras, para avisar quando uma cor já está em uso. */
+  outras: Category[];
   aberta: boolean;
   onAlternar: () => void;
   onSalvo: () => void;
   onErro: (mensagem: string) => void;
 }
 
-function EditorDeCategoria({ categoria, aberta, onAlternar, onSalvo, onErro }: EditorProps) {
+function EditorDeCategoria({ categoria, outras, aberta, onAlternar, onSalvo, onErro }: EditorProps) {
   const [campos, setCampos] = useState<CampoDaCategoria[]>(() =>
     normalizarCampos(categoria.campos, categoria.slug),
   );
 
+  const [cor, setCor] = useState(categoria.color ?? PALETA_DE_CATEGORIAS[0]);
+
   // Recarrega quando a categoria muda no servidor.
   useEffect(() => {
     setCampos(normalizarCampos(categoria.campos, categoria.slug));
+    setCor(categoria.color ?? PALETA_DE_CATEGORIAS[0]);
   }, [categoria]);
 
   const salvar = useCrudMutation(
-    (lista: CampoDaCategoria[]) => categoryService.update(categoria.id, { campos: lista }),
+    (dados: { campos: CampoDaCategoria[]; color: string }) =>
+      categoryService.update(categoria.id, dados),
     'categories',
   );
 
@@ -121,7 +129,7 @@ function EditorDeCategoria({ categoria, aberta, onAlternar, onSalvo, onErro }: E
 
   async function confirmar() {
     try {
-      await salvar.mutateAsync(campos);
+      await salvar.mutateAsync({ campos, color: cor });
       onSalvo();
     } catch (erro) {
       onErro(erro instanceof Error ? erro.message : 'Erro desconhecido');
@@ -137,7 +145,7 @@ function EditorDeCategoria({ categoria, aberta, onAlternar, onSalvo, onErro }: E
       >
         <span
           className="h-3 w-3 shrink-0 rounded-full"
-          style={{ backgroundColor: categoria.color ?? '#64748B' }}
+          style={{ backgroundColor: cor }}
         />
         <span className="min-w-0 flex-1">
           <span className="block font-bold text-navy-900 dark:text-slate-100">{categoria.name}</span>
@@ -151,6 +159,43 @@ function EditorDeCategoria({ categoria, aberta, onAlternar, onSalvo, onErro }: E
 
       {aberta && (
         <CardBody className="space-y-5 border-t border-slate-200 dark:border-navy-700">
+          {/* A cor identifica a categoria na lista de estoque e nas abas. */}
+          <div>
+            <p className="label-base">Cor da categoria</p>
+            <div className="flex flex-wrap gap-2">
+              {PALETA_DE_CATEGORIAS.map((c) => {
+                // Cor já usada por outra categoria: dá para escolher, mas
+                // avisa — duas bolinhas iguais não separam nada.
+                const deOutra = outras.find((x) => x.color?.toUpperCase() === c);
+
+                return (
+                  <button
+                    key={c}
+                    type="button"
+                    onClick={() => setCor(c)}
+                    title={deOutra ? `Já usada por ${deOutra.name}` : c}
+                    className={cn(
+                      'relative h-8 w-8 rounded-full transition',
+                      cor === c
+                        ? 'ring-2 ring-navy-900 ring-offset-2 dark:ring-slate-200 dark:ring-offset-navy-900'
+                        : 'hover:scale-110',
+                    )}
+                    style={{ backgroundColor: c }}
+                    aria-label={`Cor ${c}`}
+                  >
+                    {deOutra && cor !== c && (
+                      <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 border-white bg-slate-400 dark:border-navy-900" />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="mt-1.5 text-xs text-slate-500 dark:text-slate-400">
+              É a bolinha que aparece no estoque, nas abas e aqui. O ponto cinza marca as cores já
+              usadas por outra categoria.
+            </p>
+          </div>
+
           {/* Campos escolhidos, na ordem em que aparecem no cadastro */}
           <div>
             <p className="label-base">Campos do formulário — na ordem em que aparecem</p>
