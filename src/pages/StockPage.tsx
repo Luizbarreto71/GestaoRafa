@@ -26,8 +26,7 @@ import { useDebounce } from '@/hooks/useDebounce';
 import { downloadFile } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import { formatCurrency, STATUS_OPTIONS } from '@/lib/format';
-import type { Product } from '@/types';
-import { CAMPOS } from '@shared/campos';
+import type { Category, Product } from '@/types';
 import {
   Download,
   Filter,
@@ -104,28 +103,38 @@ export default function StockPage() {
   const { data, isLoading, isFetching } = useProducts(query);
 
   /**
-   * As abas de condição, com quantos produtos existem em cada uma.
+   * As abas do estoque: as categorias e as suas subcategorias.
    *
-   * A contagem vem do servidor já respeitando os outros filtros — busca,
-   * categoria, unidade —, então trocar de aba não muda o significado do
-   * que está na tela.
+   * Escolher a mãe traz as filhas junto, então "Celulares" mostra tudo e
+   * "Vitrine" mostra só o que está na vitrine.
    */
-  const abasDeCondicao = (() => {
-    const contagem = new Map<string, number>();
-    for (const c of data?.condicoes ?? []) {
-      contagem.set(c.condicao ?? '', (contagem.get(c.condicao ?? '') ?? 0) + c.produtos);
-    }
-
-    const total = [...contagem.values()].reduce((a, b) => a + b, 0);
-    const semCondicao = contagem.get('') ?? 0;
+  const abas = (() => {
+    const lista = categories ?? [];
+    const quantos = (c: Category) => c._count?.products ?? 0;
+    const mães = lista.filter((c) => !c.ehSubcategoria);
+    const totalGeral = lista.reduce((soma, c) => soma + quantos(c), 0);
 
     return [
-      { rotulo: 'Todos', valor: '', total },
-      // Segue a ordem do cadastro; some a que não tem nenhum produto.
-      ...(CAMPOS.condicao.opcoes ?? [])
-        .filter((o) => (contagem.get(o) ?? 0) > 0)
-        .map((o) => ({ rotulo: o, valor: o, total: contagem.get(o) ?? 0 })),
-      ...(semCondicao > 0 ? [{ rotulo: 'Sem condição', valor: '__sem__', total: semCondicao }] : []),
+      { rotulo: 'Todos', valor: '', total: totalGeral, filha: false },
+      ...mães.flatMap((mae) => {
+        const filhas = lista.filter((c) => c.parentId === mae.id);
+        const total = quantos(mae) + filhas.reduce((soma, f) => soma + quantos(f), 0);
+
+        // Categoria vazia e sem filhas não vira aba: só ocuparia espaço.
+        if (total === 0) return [];
+
+        return [
+          { rotulo: mae.name, valor: mae.id, total, filha: false },
+          ...filhas
+            .filter((f) => quantos(f) > 0)
+            .map((f) => ({
+              rotulo: f.name.split('›').pop()!.trim(),
+              valor: f.id,
+              total: quantos(f),
+              filha: true,
+            })),
+        ];
+      }),
     ];
   })();
   const deleteProduct = useDeleteProduct();
@@ -245,25 +254,33 @@ export default function StockPage() {
       ),
     },
     {
-      key: 'condicao',
-      header: 'Condição',
-      render: (product) =>
-        product.condicao ? <CondicaoBadge condicao={product.condicao} /> : <span className="text-slate-400">—</span>,
-    },
-    {
       key: 'category',
       header: 'Categoria',
       sortKey: 'category.name',
-      hideOnMobile: true,
-      render: (product) => (
-        <span className="inline-flex items-center gap-1.5 text-sm">
-          <span
-            className="h-2 w-2 rounded-full"
-            style={{ backgroundColor: product.category?.color ?? '#64748B' }}
-          />
-          {product.category?.name}
-        </span>
-      ),
+      render: (product) => {
+        // "Celulares › Vitrine": a mãe em cinza, a subcategoria em
+        // destaque, que é o que a pessoa procura na estante.
+        const [mae, sub] = partesDaCategoria(product);
+
+        return (
+          <span className="inline-flex items-center gap-1.5 text-sm">
+            <span
+              className="h-2 w-2 shrink-0 rounded-full"
+              style={{ backgroundColor: product.category?.color ?? '#64748B' }}
+            />
+            <span className="min-w-0">
+              {sub ? (
+                <>
+                  <span className="block text-[11px] text-slate-400">{mae}</span>
+                  <span className="block font-semibold text-navy-900 dark:text-slate-200">{sub}</span>
+                </>
+              ) : (
+                <span className="text-navy-900 dark:text-slate-200">{mae}</span>
+              )}
+            </span>
+          </span>
+        );
+      },
     },
     {
       key: 'model',
@@ -499,21 +516,23 @@ export default function StockPage() {
             margem e cliente mudam. Aqui a condição navega como categoria,
             sem deixar de ser condição no cadastro. */}
         <div className="flex flex-wrap gap-1.5 border-b border-slate-200 p-3 dark:border-navy-700">
-          {abasDeCondicao.map((aba) => {
-            const ativa = filters.condicao === aba.valor;
+          {abas.map((aba) => {
+            const ativa = filters.categoryId === aba.valor;
 
             return (
               <button
-                key={aba.rotulo}
+                key={aba.valor || 'todos'}
                 type="button"
-                onClick={() => setFilters((f) => ({ ...f, condicao: aba.valor }))}
+                onClick={() => setFilters((f) => ({ ...f, categoryId: aba.valor }))}
                 className={cn(
-                  'flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-semibold transition',
+                  'flex items-center gap-2 rounded-lg py-1.5 text-sm transition',
+                  aba.filha ? 'ml-1 px-2.5 font-medium' : 'px-3 font-semibold',
                   ativa
                     ? 'bg-navy-900 text-white dark:bg-accent'
                     : 'text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-navy-800',
                 )}
               >
+                {aba.filha && <span className={cn('text-xs', ativa ? 'opacity-60' : 'text-slate-300')}>└</span>}
                 {aba.rotulo}
                 <span
                   className={cn(
@@ -587,13 +606,6 @@ export default function StockPage() {
               placeholder="Todas"
             />
             <Select
-              label="Condição"
-              value={filters.condicao}
-              onChange={(e) => setFilters((f) => ({ ...f, condicao: e.target.value }))}
-              options={(CAMPOS.condicao.opcoes ?? []).map((o) => ({ value: o, label: o }))}
-              placeholder="Todas"
-            />
-            <Select
               label="Modelo"
               value={filters.model}
               onChange={(e) => setFilters((f) => ({ ...f, model: e.target.value }))}
@@ -653,11 +665,6 @@ export default function StockPage() {
                 <p className="truncate text-xs text-slate-500 dark:text-slate-400">
                   {[product.category?.name, product.model].filter(Boolean).join(' · ')}
                 </p>
-                {product.condicao && (
-                  <div className="mt-1">
-                    <CondicaoBadge condicao={product.condicao} />
-                  </div>
-                )}
                 {!unidadeId && product.stock?.length > 0 && (
                   <p className="truncate text-xs text-slate-500 dark:text-slate-400">
                     {product.stock.map((s) => `${s.unitName}: ${s.quantity}`).join(' · ')}
@@ -820,13 +827,15 @@ export default function StockPage() {
  * Qualquer coisa "lacrada" (inclusive "Xiaomi Lacrado") entra em verde:
  * o que importa na estante é distinguir lacrado de vitrine e de seminovo.
  */
-function CondicaoBadge({ condicao }: { condicao: string }) {
-  const texto = condicao.toLowerCase();
-  const tom = texto.includes('lacrado')
-    ? 'success'
-    : texto.includes('vitrine')
-      ? 'warning'
-      : 'info';
-
-  return <Badge tone={tom}>{condicao}</Badge>;
+/**
+ * Separa "Celulares › Vitrine" em mãe e subcategoria.
+ *
+ * O caminho vem pronto do servidor; aqui só se decide o que fica grande e
+ * o que fica pequeno.
+ */
+function partesDaCategoria(product: Product): [string, string | null] {
+  const nome = product.category?.name ?? '—';
+  const partes = nome.split('›').map((p) => p.trim());
+  return partes.length > 1 ? [partes[0], partes.slice(1).join(' › ')] : [nome, null];
 }
+

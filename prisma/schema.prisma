@@ -182,14 +182,25 @@ model Category {
   slug   String  @unique
   color  String?
   /// Quais campos aparecem no formulário desta categoria.
-  /// Editável em Configurações → Categorias.
+  /// Editável em Configurações → Categorias. A subcategoria herda os do
+  /// pai quando não define os seus.
   campos Json?
+
+  /// Subcategoria: "Celulares › Vitrine". Um nível só — dois já viram
+  /// labirinto para quem cadastra com o cliente esperando.
+  parentId String?
+  parent   Category?  @relation("subcategorias", fields: [parentId], references: [id], onDelete: Restrict)
+  children Category[] @relation("subcategorias")
+
+  /// Ordem de exibição entre irmãs. Menor primeiro.
+  ordem Int @default(0)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   products Product[]
 
+  @@index([parentId])
   @@map("categories")
 }
 

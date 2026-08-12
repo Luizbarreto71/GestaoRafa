@@ -5,9 +5,9 @@ import { useToast } from '@/contexts/ToastContext';
 import { useCategories } from '@/hooks/queries';
 import { useUnit } from '@/contexts/UnitContext';
 import { downloadFile } from '@/lib/api';
+import { opcoesDeCategoria } from '@/lib/categorias';
 import { cn } from '@/lib/cn';
 import { formatCurrency } from '@/lib/format';
-import { CAMPOS } from '@shared/campos';
 import { FileSpreadsheet, FileText, Loader2, Table } from 'lucide-react';
 import { useState } from 'react';
 
@@ -21,7 +21,6 @@ import { useState } from 'react';
 export function TabelaDePrecosModal({ aberto, aoFechar }: { aberto: boolean; aoFechar: () => void }) {
   const [acrescimo, setAcrescimo] = useState('100');
   const [categoryId, setCategoryId] = useState('');
-  const [condicao, setCondicao] = useState('');
   const [unitId, setUnitId] = useState('');
   const [incluirCusto, setIncluirCusto] = useState(false);
   const [somenteComEstoque, setSomenteComEstoque] = useState(true);
@@ -42,7 +41,6 @@ export function TabelaDePrecosModal({ aberto, aoFechar }: { aberto: boolean; aoF
           format: formato,
           markup: valor,
           categoryId,
-          condicao,
           unitId,
           incluirCusto: incluirCusto ? 'true' : 'false',
           somenteComEstoque: somenteComEstoque ? 'true' : 'false',
@@ -114,14 +112,7 @@ export function TabelaDePrecosModal({ aberto, aoFechar }: { aberto: boolean; aoF
             label="Categoria"
             value={categoryId}
             onChange={(e) => setCategoryId(e.target.value)}
-            options={(categorias ?? []).map((c) => ({ value: c.id, label: c.name }))}
-            placeholder="Todas"
-          />
-          <Select
-            label="Condição"
-            value={condicao}
-            onChange={(e) => setCondicao(e.target.value)}
-            options={(CAMPOS.condicao.opcoes ?? []).map((o) => ({ value: o, label: o }))}
+            options={opcoesDeCategoria(categorias)}
             placeholder="Todas"
           />
           <Select

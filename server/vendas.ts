@@ -18,7 +18,10 @@ import {
 } from './core';
 import { db, registrarLog } from './db';
 import { enviarRecibo } from './recibo';
-import { movimentar } from './estoque';
+import {
+  comAsFilhas,
+  movimentar,
+} from './estoque';
 import { exigir } from './permissoes';
 import { unidadePermitida } from './unidades';
 import { registrarVenda } from './vendas-service';
@@ -58,7 +61,7 @@ const filtrosSchema = z.object({
 
 export type FiltrosVenda = z.infer<typeof filtrosSchema>;
 
-export function filtrarVendas(q: FiltrosVenda, unidadeId?: string): Prisma.SaleWhereInput {
+export async function filtrarVendas(q: FiltrosVenda, unidadeId?: string): Promise<Prisma.SaleWhereInput> {
   const cond: Prisma.SaleWhereInput[] = [{ status: 'FINALIZADA' }];
 
   if (q.search) {
@@ -77,7 +80,9 @@ export function filtrarVendas(q: FiltrosVenda, unidadeId?: string): Prisma.SaleW
   }
 
   if (q.productId) cond.push({ items: { some: { productId: q.productId } } });
-  if (q.categoryId) cond.push({ items: { some: { product: { categoryId: q.categoryId } } } });
+  if (q.categoryId) {
+    cond.push({ items: { some: { product: { categoryId: { in: await comAsFilhas(q.categoryId) } } } } });
+  }
   if (q.paymentMethod) cond.push({ paymentMethod: q.paymentMethod });
   if (q.sellerId) cond.push({ sellerId: q.sellerId });
   if (q.cashierId) cond.push({ cashierId: q.cashierId });
@@ -95,7 +100,7 @@ rotasVendas.get(
     const q = validar(filtrosSchema, semVazios(req.query));
     const unidade = unidadePermitida(req.usuario, q.unitId);
     const p = paginacao(q as Record<string, unknown>);
-    const where = filtrarVendas(q, unidade);
+    const where = await filtrarVendas(q, unidade);
 
     const [lista, total, somas, itens] = await Promise.all([
       db.sale.findMany({

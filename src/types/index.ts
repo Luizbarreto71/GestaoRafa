@@ -83,6 +83,14 @@ export interface Category {
   icon?: string | null;
   color?: string | null;
   _count?: { products: number };
+
+  /** Categoria mãe. Vazio = categoria principal. */
+  parentId?: string | null;
+  parent?: { id: string; name: string } | null;
+  ordem?: number;
+  /** "Celulares › Vitrine" — pronto para mostrar na tela. */
+  caminho?: string;
+  ehSubcategoria?: boolean;
 }
 
 export interface Supplier {

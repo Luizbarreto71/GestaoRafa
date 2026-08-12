@@ -2,6 +2,7 @@ import { Badge } from '@/components/ui/Badge';
 import { Input } from '@/components/ui/Field';
 import { useProducts } from '@/hooks/queries';
 import { useDebounce } from '@/hooks/useDebounce';
+import { nomeCurtoDaCategoria } from '@/lib/categorias';
 import { cn } from '@/lib/cn';
 import { formatCurrency } from '@/lib/format';
 import type { ItemVenda, Product } from '@/types';
@@ -49,7 +50,12 @@ export function CarrinhoDeItens({
         // Só para a tela: a API ignora, mas é o que deixa o carrinho
         // conferível de relance quando o cliente leva várias coisas.
         foto: produto.photos?.[0] ?? null,
-        detalhes: [produto.brand, produto.capacity, produto.color, produto.condicao]
+        detalhes: [
+          produto.brand,
+          produto.capacity,
+          produto.color,
+          nomeCurtoDaCategoria(produto.category?.name),
+        ]
           .filter(Boolean)
           .join(' · '),
         product: { id: produto.id, name: produto.name, model: produto.model },
@@ -94,7 +100,10 @@ export function CarrinhoDeItens({
                   .reduce((n, i) => n + i.quantity, 0);
 
                 // O que diferencia um modelo do outro na prateleira.
-                const detalhes = [p.brand, p.capacity, p.color, p.condicao].filter(Boolean).join(' · ');
+                // A condição virou subcategoria: é dela que sai o "Vitrine".
+                const detalhes = [p.brand, p.capacity, p.color, nomeCurtoDaCategoria(p.category?.name)]
+                  .filter(Boolean)
+                  .join(' · ');
 
                 return (
                   <button

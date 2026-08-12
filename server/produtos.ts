@@ -5,7 +5,7 @@ import { autenticar, somenteAdmin } from './auth';
 import { AppError, contem, limpar, naoEncontrado, ordenar, paginacao, paginado, rota, validar, semVazios } from './core';
 import { db, registrarLog } from './db';
 import { exigir } from './permissoes';
-import { estoqueBaixo, movimentar, saldosDoProduto } from './estoque';
+import { comAsFilhas, estoqueBaixo, movimentar, saldosDoProduto } from './estoque';
 import { exigirAcessoNaUnidade, unidadePermitida } from './unidades';
 
 /** Cadastro, busca, edição, ajuste de estoque e exclusão de produtos. */
@@ -158,7 +158,9 @@ export async function filtrarProdutos(
     });
   }
 
-  if (q.categoryId) cond.push({ categoryId: q.categoryId });
+  // Escolher a mãe traz as filhas junto: quem pede "Celulares" quer todos
+  // os celulares, não os poucos que ficaram fora das subcategorias.
+  if (q.categoryId) cond.push({ categoryId: { in: await comAsFilhas(q.categoryId) } });
   if (q.supplierId) cond.push({ supplierId: q.supplierId });
   if (q.status) cond.push({ status: q.status });
   if (q.brand) cond.push({ brand: contem(q.brand) });

@@ -49,14 +49,19 @@ const CATALOGO = {
   cor: { rotulo: 'Cor', tipo: 'texto', coluna: 'color', exemplo: 'Titânio' },
   capacidade: { rotulo: 'Capacidade', tipo: 'texto', coluna: 'capacity', exemplo: '256GB' },
   lote: { rotulo: 'Lote', tipo: 'texto', coluna: 'lote', exemplo: 'AB1234' },
+  /**
+   * Estado do aparelho.
+   *
+   * Não aparece mais no formulário: virou subcategoria ("Celulares ›
+   * Vitrine"). A definição fica porque a coluna do banco segue preenchida
+   * nos produtos antigos, e os rótulos ainda servem para lê-los.
+   */
   condicao: {
     rotulo: 'Condição',
     tipo: 'selecao',
     coluna: 'condicao',
     opcoes: ['Lacrado', 'Xiaomi Lacrado', 'Vitrine', 'Seminovo'],
-    ajuda: 'Estado do aparelho — muda bastante o preço',
-    // Obrigatória por categoria (ver PADROES), não no sistema todo: em
-    // caixa de medicamento, por exemplo, o campo não faz sentido.
+    ajuda: 'Substituída pelas subcategorias',
   },
   imei: { rotulo: 'IMEI', tipo: 'texto', coluna: 'imei', exemplo: '356938035643809' },
   serie: { rotulo: 'Número de série', tipo: 'texto', coluna: 'serialNumber', exemplo: 'SN-000123' },
@@ -137,7 +142,6 @@ export const PADROES: Record<string, CampoDaCategoria[]> = {
     { campo: 'modelo' },
     { campo: 'cor' },
     { campo: 'capacidade' },
-    { campo: 'condicao', obrigatorio: true },
     { campo: 'imei' },
     { campo: 'quantidade' },
     { campo: 'custo' },
@@ -196,7 +200,6 @@ export const PADROES: Record<string, CampoDaCategoria[]> = {
     { campo: 'marca' },
     { campo: 'modelo' },
     { campo: 'capacidade', rotulo: 'Tamanho (polegadas)' },
-    { campo: 'condicao', obrigatorio: true },
     { campo: 'serie' },
     { campo: 'quantidade' },
     { campo: 'custo' },
@@ -241,6 +244,15 @@ export const PADRAO_GENERICO: CampoDaCategoria[] = [
  * Lê a configuração vinda do banco, descartando o que estiver inválido e
  * garantindo que os campos essenciais estejam presentes.
  */
+/**
+ * Campos que saíram do formulário mas continuam existindo no banco.
+ *
+ * A condição virou subcategoria. Sem esta lista, as categorias que já
+ * tinham o campo salvo continuariam mostrando — e voltaríamos a ter duas
+ * formas de dizer a mesma coisa.
+ */
+const APOSENTADOS = new Set<string>(['condicao']);
+
 export function normalizarCampos(bruto: unknown, slug?: string): CampoDaCategoria[] {
   const padrao = (slug && PADROES[slug]) || PADRAO_GENERICO;
 
@@ -263,13 +275,13 @@ export function normalizarCampos(bruto: unknown, slug?: string): CampoDaCategori
         .filter((c): c is CampoDaCategoria => c !== null)
     : padrao;
 
-  const escolhidos = lista.length ? lista : padrao;
+  const escolhidos = (lista.length ? lista : padrao).filter((c) => !APOSENTADOS.has(c.campo));
 
   // Sem os essenciais o produto não pode ser salvo — entram de volta no fim.
   const presentes = new Set(escolhidos.map((c) => c.campo));
-  const faltando = TODAS_AS_CHAVES.filter((k) => CAMPOS[k].essencial && !presentes.has(k)).map(
-    (campo) => ({ campo }),
-  );
+  const faltando = TODAS_AS_CHAVES.filter(
+    (k) => CAMPOS[k].essencial && !presentes.has(k) && !APOSENTADOS.has(k),
+  ).map((campo) => ({ campo }));
 
   return [...escolhidos, ...faltando];
 }

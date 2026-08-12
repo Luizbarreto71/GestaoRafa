@@ -37,6 +37,22 @@ const buscaSimples = z.object({
 // --------------------------------------------------------------- Categorias
 
 export const rotasCategorias = Router();
+
+/**
+ * A mãe existe e é mesmo uma categoria principal.
+ *
+ * Um nível só: neta viraria "Celulares › Apple › Vitrine", e quem cadastra
+ * com o cliente esperando não navega três níveis.
+ */
+async function conferirMae(parentId: string | null | undefined) {
+  if (!parentId) return;
+
+  const mae = await db.category.findUnique({ where: { id: parentId } });
+  if (!mae) throw naoEncontrado('Categoria');
+  if (mae.parentId) {
+    throw new AppError(`${mae.name} já é uma subcategoria. Só há um nível de subcategoria.`);
+  }
+}
 rotasCategorias.use(autenticar);
 
 const apelido = (v: string) =>
@@ -67,19 +83,48 @@ const categoriaSchema = z.object({
       }),
     )
     .optional(),
+  /** Categoria mãe. Vazio = categoria principal. */
+  parentId: z.string().uuid().optional().nullable(),
+  ordem: z.coerce.number().int().min(0).max(999).optional(),
 });
 
+/**
+ * Lista as categorias já na ordem de árvore: mãe, depois as filhas.
+ *
+ * Vem plana, e não aninhada, porque toda tela que usa isso é um select —
+ * e select entende recuo, não estrutura.
+ */
 rotasCategorias.get(
   '/',
   rota(async (_req, res) => {
     const categorias = await db.category.findMany({
-      orderBy: { name: 'asc' },
-      include: { _count: { select: { products: true } } },
+      orderBy: [{ ordem: 'asc' }, { name: 'asc' }],
+      include: { _count: { select: { products: true } }, parent: { select: { id: true, name: true } } },
     });
 
-    // Categoria sem configuração salva cai no padrão — nunca vem vazia.
+    const mães = categorias.filter((c) => !c.parentId);
+    const emOrdem = mães.flatMap((mae) => [
+      mae,
+      ...categorias.filter((c) => c.parentId === mae.id),
+    ]);
+
+    // Categoria órfã (a mãe sumiu) não pode desaparecer da lista.
+    const soltas = categorias.filter((c) => !emOrdem.includes(c));
+
     res.json(
-      limpar(categorias.map((c) => ({ ...c, campos: normalizarCampos(c.campos, c.slug) }))),
+      limpar(
+        [...emOrdem, ...soltas].map((c) => {
+          const mae = c.parentId ? categorias.find((x) => x.id === c.parentId) : null;
+          return {
+            ...c,
+            // A subcategoria herda o formulário da mãe quando não tem o seu.
+            campos: normalizarCampos(c.campos ?? mae?.campos ?? null, mae?.slug ?? c.slug),
+            /** "Celulares › Vitrine" — é assim que aparece na tela. */
+            caminho: mae ? `${mae.name} › ${c.name}` : c.name,
+            ehSubcategoria: Boolean(c.parentId),
+          };
+        }),
+      ),
     );
   }),
 );
@@ -89,6 +134,7 @@ rotasCategorias.post(
   somenteAdmin,
   rota(async (req, res) => {
     const dados = validar(categoriaSchema, req.body);
+    await conferirMae(dados.parentId);
     const slug = apelido(dados.name);
     const categoria = await db.category.create({
       data: {
@@ -110,6 +156,20 @@ rotasCategorias.put(
     const atual = await db.category.findUnique({ where: { id: req.params.id } });
     if (!atual) throw naoEncontrado('Categoria');
 
+    if (dados.parentId !== undefined) {
+      if (dados.parentId === req.params.id) {
+        throw new AppError('Uma categoria não pode ser subcategoria dela mesma.');
+      }
+      await conferirMae(dados.parentId);
+
+      const temFilhas = await db.category.count({ where: { parentId: req.params.id } });
+      if (dados.parentId && temFilhas > 0) {
+        throw new AppError(
+          `Esta categoria tem ${temFilhas} subcategoria(s). Mova-as antes de torná-la subcategoria.`,
+        );
+      }
+    }
+
     const categoria = await db.category.update({
       where: { id: req.params.id },
       data: {
@@ -127,6 +187,14 @@ rotasCategorias.delete(
   '/:id',
   somenteAdmin,
   rota(async (req, res) => {
+    const filhas = await db.category.count({ where: { parentId: req.params.id } });
+    if (filhas > 0) {
+      throw new AppError(
+        `Esta categoria tem ${filhas} subcategoria(s). Exclua ou mova as subcategorias primeiro.`,
+        409,
+      );
+    }
+
     const usados = await db.product.count({ where: { categoryId: req.params.id } });
     if (usados > 0) {
       throw new AppError(

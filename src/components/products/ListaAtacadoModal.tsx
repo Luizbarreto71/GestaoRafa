@@ -5,8 +5,8 @@ import { useToast } from '@/contexts/ToastContext';
 import { useUnit } from '@/contexts/UnitContext';
 import { useCategories } from '@/hooks/queries';
 import { api } from '@/lib/api';
+import { opcoesDeCategoria } from '@/lib/categorias';
 import { cn } from '@/lib/cn';
-import { CAMPOS } from '@shared/campos';
 import { useQuery } from '@tanstack/react-query';
 import { AlertTriangle, Check, Copy, Download, Loader2, MessageCircle, RefreshCw } from 'lucide-react';
 import { useState } from 'react';
@@ -29,7 +29,6 @@ export function ListaAtacadoModal({ aberto, aoFechar }: { aberto: boolean; aoFec
   const [markup, setMarkup] = useState('100');
   const [agruparPor, setAgruparPor] = useState<'marca' | 'categoria'>('marca');
   const [categoryId, setCategoryId] = useState('');
-  const [condicao, setCondicao] = useState('');
   const [unitId, setUnitId] = useState('');
   const [mostrarQuantidade, setMostrarQuantidade] = useState(true);
   const [mostrarCondicao, setMostrarCondicao] = useState(true);
@@ -45,7 +44,6 @@ export function ListaAtacadoModal({ aberto, aoFechar }: { aberto: boolean; aoFec
     markup: Number(markup) || 0,
     agruparPor,
     categoryId,
-    condicao,
     unitId,
     mostrarQuantidade: String(mostrarQuantidade),
     mostrarCondicao: String(mostrarCondicao),
@@ -148,14 +146,7 @@ export function ListaAtacadoModal({ aberto, aoFechar }: { aberto: boolean; aoFec
             label="Categoria"
             value={categoryId}
             onChange={(e) => setCategoryId(e.target.value)}
-            options={(categorias ?? []).map((c) => ({ value: c.id, label: c.name }))}
-            placeholder="Todas"
-          />
-          <Select
-            label="Condição"
-            value={condicao}
-            onChange={(e) => setCondicao(e.target.value)}
-            options={(CAMPOS.condicao.opcoes ?? []).map((o) => ({ value: o, label: o }))}
+            options={opcoesDeCategoria(categorias)}
             placeholder="Todas"
           />
           <Select

@@ -20,6 +20,7 @@ import { db, registrarLog } from './db';
 import { custoMedio } from '../shared/custo';
 import {
   cancelarTransferencia,
+  comAsFilhas,
   disponivel,
   movimentar,
   saldoTotal,
@@ -520,10 +521,10 @@ const filtros = z.object({
 
 export type FiltrosMovimento = z.infer<typeof filtros>;
 
-export function filtrarMovimentacoes(
+export async function filtrarMovimentacoes(
   q: FiltrosMovimento,
   unidade?: string,
-): Prisma.StockMovementWhereInput {
+): Promise<Prisma.StockMovementWhereInput> {
   const cond: Prisma.StockMovementWhereInput[] = [];
 
   if (q.search) {
@@ -540,7 +541,7 @@ export function filtrarMovimentacoes(
   if (q.reason) cond.push({ reason: q.reason });
   if (q.productId) cond.push({ productId: q.productId });
   if (q.userId) cond.push({ userId: q.userId });
-  if (q.categoryId) cond.push({ product: { categoryId: q.categoryId } });
+  if (q.categoryId) cond.push({ product: { categoryId: { in: await comAsFilhas(q.categoryId) } } });
   if (unidade) cond.push({ unitId: unidade });
 
   const periodo = intervalo(q.startDate, q.endDate);
@@ -555,7 +556,7 @@ rotasMovimentacoes.get(
     const q = validar(filtros, semVazios(req.query));
     const p = paginacao(q as Record<string, unknown>);
     const unidade = unidadePermitida(req.usuario, q.unitId);
-    const where = filtrarMovimentacoes(q, unidade);
+    const where = await filtrarMovimentacoes(q, unidade);
 
     const [lista, total, agrupado] = await Promise.all([
       db.stockMovement.findMany({

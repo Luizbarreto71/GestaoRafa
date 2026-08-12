@@ -99,6 +99,17 @@ export async function disponivel(produtoId: string, unidadeId: string, tx?: Clie
  * O custo médio é do produto, não da prateleira: um aparelho não fica mais
  * caro por estar na Sede em vez da Matriz.
  */
+/**
+ * A categoria pedida e as suas subcategorias.
+ *
+ * Vive aqui porque relatórios, vendas e movimentações precisam da mesma
+ * regra: pedir "Celulares" tem de trazer "Celulares › Vitrine" junto.
+ */
+export async function comAsFilhas(categoryId: string): Promise<string[]> {
+  const filhas = await db.category.findMany({ where: { parentId: categoryId }, select: { id: true } });
+  return [categoryId, ...filhas.map((f) => f.id)];
+}
+
 export async function saldoTotal(produtoId: string, tx?: Cliente): Promise<number> {
   const soma = await (tx ?? db).stock.aggregate({
     where: { productId: produtoId },

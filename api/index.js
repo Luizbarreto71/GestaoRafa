@@ -419,14 +419,19 @@ var CATALOGO = {
   cor: { rotulo: "Cor", tipo: "texto", coluna: "color", exemplo: "Tit\xE2nio" },
   capacidade: { rotulo: "Capacidade", tipo: "texto", coluna: "capacity", exemplo: "256GB" },
   lote: { rotulo: "Lote", tipo: "texto", coluna: "lote", exemplo: "AB1234" },
+  /**
+   * Estado do aparelho.
+   *
+   * Não aparece mais no formulário: virou subcategoria ("Celulares ›
+   * Vitrine"). A definição fica porque a coluna do banco segue preenchida
+   * nos produtos antigos, e os rótulos ainda servem para lê-los.
+   */
   condicao: {
     rotulo: "Condi\xE7\xE3o",
     tipo: "selecao",
     coluna: "condicao",
     opcoes: ["Lacrado", "Xiaomi Lacrado", "Vitrine", "Seminovo"],
-    ajuda: "Estado do aparelho \u2014 muda bastante o pre\xE7o"
-    // Obrigatória por categoria (ver PADROES), não no sistema todo: em
-    // caixa de medicamento, por exemplo, o campo não faz sentido.
+    ajuda: "Substitu\xEDda pelas subcategorias"
   },
   imei: { rotulo: "IMEI", tipo: "texto", coluna: "imei", exemplo: "356938035643809" },
   serie: { rotulo: "N\xFAmero de s\xE9rie", tipo: "texto", coluna: "serialNumber", exemplo: "SN-000123" },
@@ -481,7 +486,6 @@ var PADROES = {
     { campo: "modelo" },
     { campo: "cor" },
     { campo: "capacidade" },
-    { campo: "condicao", obrigatorio: true },
     { campo: "imei" },
     { campo: "quantidade" },
     { campo: "custo" },
@@ -536,7 +540,6 @@ var PADROES = {
     { campo: "marca" },
     { campo: "modelo" },
     { campo: "capacidade", rotulo: "Tamanho (polegadas)" },
-    { campo: "condicao", obrigatorio: true },
     { campo: "serie" },
     { campo: "quantidade" },
     { campo: "custo" },
@@ -573,6 +576,7 @@ var PADRAO_GENERICO = [
   { campo: "fotos" },
   { campo: "observacoes" }
 ];
+var APOSENTADOS = /* @__PURE__ */ new Set(["condicao"]);
 function normalizarCampos(bruto, slug) {
   const padrao = slug && PADROES[slug] || PADRAO_GENERICO;
   const lista = Array.isArray(bruto) ? bruto.map((item) => {
@@ -589,11 +593,11 @@ function normalizarCampos(bruto, slug) {
     }
     return null;
   }).filter((c) => c !== null) : padrao;
-  const escolhidos = lista.length ? lista : padrao;
+  const escolhidos = (lista.length ? lista : padrao).filter((c) => !APOSENTADOS.has(c.campo));
   const presentes = new Set(escolhidos.map((c) => c.campo));
-  const faltando = TODAS_AS_CHAVES.filter((k) => CAMPOS[k].essencial && !presentes.has(k)).map(
-    (campo) => ({ campo })
-  );
+  const faltando = TODAS_AS_CHAVES.filter(
+    (k) => CAMPOS[k].essencial && !presentes.has(k) && !APOSENTADOS.has(k)
+  ).map((campo) => ({ campo }));
   return [...escolhidos, ...faltando];
 }
 var camposParaJson = (campos2) => JSON.parse(JSON.stringify(campos2));
@@ -608,6 +612,14 @@ var buscaSimples = z2.object({
   all: z2.enum(["true", "false"]).optional()
 });
 var rotasCategorias = Router2();
+async function conferirMae(parentId) {
+  if (!parentId) return;
+  const mae = await db.category.findUnique({ where: { id: parentId } });
+  if (!mae) throw naoEncontrado("Categoria");
+  if (mae.parentId) {
+    throw new AppError(`${mae.name} j\xE1 \xE9 uma subcategoria. S\xF3 h\xE1 um n\xEDvel de subcategoria.`);
+  }
+}
 rotasCategorias.use(autenticar);
 var apelido = (v) => v.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
 var categoriaSchema = z2.object({
@@ -623,17 +635,38 @@ var categoriaSchema = z2.object({
       rotulo: z2.string().trim().max(60).optional(),
       obrigatorio: z2.boolean().optional()
     })
-  ).optional()
+  ).optional(),
+  /** Categoria mãe. Vazio = categoria principal. */
+  parentId: z2.string().uuid().optional().nullable(),
+  ordem: z2.coerce.number().int().min(0).max(999).optional()
 });
 rotasCategorias.get(
   "/",
   rota(async (_req, res) => {
     const categorias = await db.category.findMany({
-      orderBy: { name: "asc" },
-      include: { _count: { select: { products: true } } }
+      orderBy: [{ ordem: "asc" }, { name: "asc" }],
+      include: { _count: { select: { products: true } }, parent: { select: { id: true, name: true } } }
     });
+    const m\u00E3es = categorias.filter((c) => !c.parentId);
+    const emOrdem = m\u00E3es.flatMap((mae) => [
+      mae,
+      ...categorias.filter((c) => c.parentId === mae.id)
+    ]);
+    const soltas = categorias.filter((c) => !emOrdem.includes(c));
     res.json(
-      limpar(categorias.map((c) => ({ ...c, campos: normalizarCampos(c.campos, c.slug) })))
+      limpar(
+        [...emOrdem, ...soltas].map((c) => {
+          const mae = c.parentId ? categorias.find((x) => x.id === c.parentId) : null;
+          return {
+            ...c,
+            // A subcategoria herda o formulário da mãe quando não tem o seu.
+            campos: normalizarCampos(c.campos ?? mae?.campos ?? null, mae?.slug ?? c.slug),
+            /** "Celulares › Vitrine" — é assim que aparece na tela. */
+            caminho: mae ? `${mae.name} \u203A ${c.name}` : c.name,
+            ehSubcategoria: Boolean(c.parentId)
+          };
+        })
+      )
     );
   })
 );
@@ -642,6 +675,7 @@ rotasCategorias.post(
   somenteAdmin,
   rota(async (req, res) => {
     const dados = validar(categoriaSchema, req.body);
+    await conferirMae(dados.parentId);
     const slug = apelido(dados.name);
     const categoria = await db.category.create({
       data: {
@@ -661,6 +695,18 @@ rotasCategorias.put(
     const dados = validar(categoriaSchema.partial(), req.body);
     const atual = await db.category.findUnique({ where: { id: req.params.id } });
     if (!atual) throw naoEncontrado("Categoria");
+    if (dados.parentId !== void 0) {
+      if (dados.parentId === req.params.id) {
+        throw new AppError("Uma categoria n\xE3o pode ser subcategoria dela mesma.");
+      }
+      await conferirMae(dados.parentId);
+      const temFilhas = await db.category.count({ where: { parentId: req.params.id } });
+      if (dados.parentId && temFilhas > 0) {
+        throw new AppError(
+          `Esta categoria tem ${temFilhas} subcategoria(s). Mova-as antes de torn\xE1-la subcategoria.`
+        );
+      }
+    }
     const categoria = await db.category.update({
       where: { id: req.params.id },
       data: {
@@ -677,6 +723,13 @@ rotasCategorias.delete(
   "/:id",
   somenteAdmin,
   rota(async (req, res) => {
+    const filhas = await db.category.count({ where: { parentId: req.params.id } });
+    if (filhas > 0) {
+      throw new AppError(
+        `Esta categoria tem ${filhas} subcategoria(s). Exclua ou mova as subcategorias primeiro.`,
+        409
+      );
+    }
     const usados = await db.product.count({ where: { categoryId: req.params.id } });
     if (usados > 0) {
       throw new AppError(
@@ -1193,6 +1246,10 @@ async function disponivel(produtoId, unidadeId, tx) {
     reservado(produtoId, unidadeId, tx)
   ]);
   return Math.max(0, total - reserva);
+}
+async function comAsFilhas(categoryId) {
+  const filhas = await db.category.findMany({ where: { parentId: categoryId }, select: { id: true } });
+  return [categoryId, ...filhas.map((f) => f.id)];
 }
 async function saldoTotal(produtoId, tx) {
   const soma = await (tx ?? db).stock.aggregate({
@@ -2123,7 +2180,7 @@ var filtros = z4.object({
   endDate: z4.coerce.date().optional(),
   sortOrder: z4.enum(["asc", "desc"]).optional()
 });
-function filtrarMovimentacoes(q, unidade) {
+async function filtrarMovimentacoes(q, unidade) {
   const cond = [];
   if (q.search) {
     cond.push({
@@ -2138,7 +2195,7 @@ function filtrarMovimentacoes(q, unidade) {
   if (q.reason) cond.push({ reason: q.reason });
   if (q.productId) cond.push({ productId: q.productId });
   if (q.userId) cond.push({ userId: q.userId });
-  if (q.categoryId) cond.push({ product: { categoryId: q.categoryId } });
+  if (q.categoryId) cond.push({ product: { categoryId: { in: await comAsFilhas(q.categoryId) } } });
   if (unidade) cond.push({ unitId: unidade });
   const periodo2 = intervalo(q.startDate, q.endDate);
   if (periodo2) cond.push({ createdAt: periodo2 });
@@ -2150,7 +2207,7 @@ rotasMovimentacoes.get(
     const q = validar(filtros, semVazios(req.query));
     const p = paginacao(q);
     const unidade = unidadePermitida(req.usuario, q.unitId);
-    const where = filtrarMovimentacoes(q, unidade);
+    const where = await filtrarMovimentacoes(q, unidade);
     const [lista, total, agrupado] = await Promise.all([
       db.stockMovement.findMany({
         where,
@@ -2330,7 +2387,7 @@ async function filtrarProdutos(q, unidadeId) {
       ]
     });
   }
-  if (q.categoryId) cond.push({ categoryId: q.categoryId });
+  if (q.categoryId) cond.push({ categoryId: { in: await comAsFilhas(q.categoryId) } });
   if (q.supplierId) cond.push({ supplierId: q.supplierId });
   if (q.status) cond.push({ status: q.status });
   if (q.brand) cond.push({ brand: contem(q.brand) });
@@ -3042,7 +3099,6 @@ var base = z6.object({
   paymentMethod: z6.enum(["PIX", "DINHEIRO", "DEBITO", "CREDITO", "TRANSFERENCIA"]).optional(),
   unitId: z6.string().uuid().optional()
 });
-var ORDEM_CONDICAO = [...CAMPOS.condicao.opcoes ?? [], "\u2014"];
 var periodo = (q) => {
   if (!q.startDate && !q.endDate) return "Per\xEDodo: todos os registros";
   return `Per\xEDodo: ${q.startDate ? dataBR(q.startDate) : "in\xEDcio"} at\xE9 ${q.endDate ? dataBR(q.endDate) : "hoje"}`;
@@ -3071,7 +3127,7 @@ rotasRelatorios.get(
       where: {
         ...unidade ? { unitId: unidade } : {},
         product: {
-          ...q.categoryId ? { categoryId: q.categoryId } : {},
+          ...q.categoryId ? { categoryId: { in: await comAsFilhas(q.categoryId) } } : {},
           ...q.supplierId ? { supplierId: q.supplierId } : {},
           ...q.status ? { status: q.status } : {},
           ...entrada ? { entryDate: entrada } : {}
@@ -3090,7 +3146,6 @@ rotasRelatorios.get(
       brand: p.brand ?? "\u2014",
       model: p.model ?? "\u2014",
       lote: p.lote ?? "\u2014",
-      condicao: p.condicao ?? "\u2014",
       quantity,
       costPrice: numero(p.costPrice),
       salePrice: numero(p.salePrice),
@@ -3109,7 +3164,9 @@ rotasRelatorios.get(
       // Separado por condição: lacrado e vitrine são mercadorias
       // diferentes, com preço diferente, e misturá-las esconde o que a
       // loja tem de cada uma.
-      group: { key: "condicao", order: ORDEM_CONDICAO, totals: ["quantity", "totalCost", "totalSale"] },
+      // Separado por categoria — que agora carrega a condição:
+      // "Celulares › Vitrine" é um bloco, "Celulares › Lacrado" é outro.
+      group: { key: "category", totals: ["quantity", "totalCost", "totalSale"] },
       columns: [
         { header: "Unidade", key: "unit", width: 12 },
         { header: "Produto", key: "name", width: 24 },
@@ -3117,7 +3174,6 @@ rotasRelatorios.get(
         { header: "Marca", key: "brand", width: 11 },
         { header: "Modelo", key: "model", width: 13 },
         { header: "Lote", key: "lote", width: 11 },
-        { header: "Condi\xE7\xE3o", key: "condicao", width: 11 },
         qtd("Qtd", "quantity", 6),
         money("Custo", "costPrice", 10),
         money("Venda", "salePrice", 10),
@@ -3158,7 +3214,7 @@ rotasRelatorios.get(
           ...q.paymentMethod ? { paymentMethod: q.paymentMethod } : {},
           ...unidade ? { unitId: unidade } : {}
         },
-        ...q.categoryId ? { product: { categoryId: q.categoryId } } : {},
+        ...q.categoryId ? { product: { categoryId: { in: await comAsFilhas(q.categoryId) } } } : {},
         ...q.supplierId ? { product: { supplierId: q.supplierId } } : {}
       },
       include: {
@@ -3184,7 +3240,6 @@ rotasRelatorios.get(
         phone: i.sale.customerPhone ?? "\u2014",
         product: i.productName ?? i.product.name,
         category: i.product.category.name,
-        condicao: i.product.condicao ?? "\u2014",
         imei: i.imei ?? i.serialNumber ?? "\u2014",
         quantity: i.quantity,
         unitPrice: numero(i.unitPrice),
@@ -3203,7 +3258,7 @@ rotasRelatorios.get(
     await exportar(res, q.format, {
       title: "Relat\xF3rio de Vendas",
       subtitle: periodo(q),
-      group: { key: "condicao", order: ORDEM_CONDICAO, totals: ["quantity", "total", "profit"] },
+      group: { key: "category", totals: ["quantity", "total", "profit"] },
       columns: [
         // Larguras conferidas com dados reais: nome de aparelho e pagamento
         // dividido são os que estouram, e é neles que sobra espaço aqui.
@@ -3213,7 +3268,6 @@ rotasRelatorios.get(
         { header: "Cliente", key: "customer", width: 15 },
         { header: "Produto", key: "product", width: 26 },
         { header: "Categoria", key: "category", width: 11 },
-        { header: "Condi\xE7\xE3o", key: "condicao", width: 11 },
         { header: "IMEI / s\xE9rie", key: "imei", width: 14 },
         qtd("Qtd", "quantity", 5),
         money("Unit.", "unitPrice", 11),
@@ -3448,7 +3502,7 @@ rotasRelatorios.get(
         ...quando ? { createdAt: quando } : {},
         ...q.type ? { type: q.type } : {},
         ...unidade ? { unitId: unidade } : {},
-        ...q.categoryId ? { product: { categoryId: q.categoryId } } : {}
+        ...q.categoryId ? { product: { categoryId: { in: await comAsFilhas(q.categoryId) } } } : {}
       },
       include: {
         user: { select: { name: true } },
@@ -3510,7 +3564,6 @@ rotasRelatorios.get(
       base.extend({
         /** Quanto somar ao preço de compra. */
         markup: z6.coerce.number().min(0).max(999999).default(100),
-        condicao: z6.string().trim().optional(),
         /** Mostrar o custo — só para conferência interna. */
         incluirCusto: z6.enum(["true", "false"]).default("false"),
         /** Deixar de fora o que está sem estoque. */
@@ -3522,9 +3575,8 @@ rotasRelatorios.get(
     const mostrarCusto = q.incluirCusto === "true";
     const produtos = await db.product.findMany({
       where: {
-        ...q.categoryId ? { categoryId: q.categoryId } : {},
+        ...q.categoryId ? { categoryId: { in: await comAsFilhas(q.categoryId) } } : {},
         ...q.supplierId ? { supplierId: q.supplierId } : {},
-        ...q.condicao ? { condicao: q.condicao } : {},
         ...q.somenteComEstoque === "true" ? { stock: { some: { quantity: { gt: 0 }, ...unidade ? { unitId: unidade } : {} } } } : {}
       },
       include: {
@@ -3540,7 +3592,7 @@ rotasRelatorios.get(
         category: p.category.name,
         name: p.name,
         detalhe: [p.brand, p.model].filter(Boolean).join(" ") || "\u2014",
-        condicao: p.condicao ?? "\u2014",
+        categoria: p.category.name,
         capacidade: p.capacity ?? "\u2014",
         quantity: emEstoque,
         custo,
@@ -3552,7 +3604,7 @@ rotasRelatorios.get(
       { header: "Categoria", key: "category", width: 14 },
       { header: "Produto", key: "name", width: 26 },
       { header: "Marca / modelo", key: "detalhe", width: 16 },
-      { header: "Condi\xE7\xE3o", key: "condicao", width: 12 },
+      { header: "Categoria", key: "categoria", width: 16 },
       { header: "Capacidade", key: "capacidade", width: 12 },
       qtd("Estoque", "quantity", 8),
       ...mostrarCusto ? [money("Custo", "custo", 11)] : [],
@@ -3601,7 +3653,6 @@ rotasRelatorios.get(
         /** Acréscimo, quando o preço parte do custo. */
         markup: z6.coerce.number().min(0).max(999999).default(100),
         categoryId: z6.string().uuid().optional(),
-        condicao: z6.string().trim().optional(),
         unitId: z6.string().uuid().optional(),
         agruparPor: z6.enum(["marca", "categoria"]).default("marca"),
         mostrarQuantidade: z6.enum(["true", "false"]).default("true"),
@@ -3616,8 +3667,7 @@ rotasRelatorios.get(
     const unidade = unidadePermitida(req.usuario, q.unitId);
     const produtos = await db.product.findMany({
       where: {
-        ...q.categoryId ? { categoryId: q.categoryId } : {},
-        ...q.condicao ? { condicao: q.condicao } : {},
+        ...q.categoryId ? { categoryId: { in: await comAsFilhas(q.categoryId) } } : {},
         // Só o que existe: ninguém oferece no grupo o que já acabou.
         stock: { some: { quantity: { gt: 0 }, ...unidade ? { unitId: unidade } : {} } }
       },
@@ -3658,7 +3708,10 @@ rotasRelatorios.get(
         const quantidade = p.stock.reduce((s, l) => s + l.quantity, 0);
         totalPecas += quantidade;
         const partes = [p.name];
-        if (q.mostrarCondicao === "true" && p.condicao) partes.push(p.condicao);
+        if (q.mostrarCondicao === "true") {
+          const sub = p.category.name.split("\u203A").pop()?.trim();
+          if (sub && sub !== p.category.name) partes.push(sub);
+        }
         if (q.mostrarQuantidade === "true") partes.push(`${quantidade}un`);
         linhas.push(`${partes.join(" \xB7 ")} \u2014 *${dinheiro3(precoDe(p))}*`);
       }
@@ -5370,7 +5423,7 @@ var filtrosSchema2 = z11.object({
   sortBy: z11.string().optional(),
   sortOrder: z11.enum(["asc", "desc"]).optional()
 });
-function filtrarVendas(q, unidadeId) {
+async function filtrarVendas(q, unidadeId) {
   const cond = [{ status: "FINALIZADA" }];
   if (q.search) {
     cond.push({
@@ -5387,7 +5440,9 @@ function filtrarVendas(q, unidadeId) {
     });
   }
   if (q.productId) cond.push({ items: { some: { productId: q.productId } } });
-  if (q.categoryId) cond.push({ items: { some: { product: { categoryId: q.categoryId } } } });
+  if (q.categoryId) {
+    cond.push({ items: { some: { product: { categoryId: { in: await comAsFilhas(q.categoryId) } } } } });
+  }
   if (q.paymentMethod) cond.push({ paymentMethod: q.paymentMethod });
   if (q.sellerId) cond.push({ sellerId: q.sellerId });
   if (q.cashierId) cond.push({ cashierId: q.cashierId });
@@ -5402,7 +5457,7 @@ rotasVendas.get(
     const q = validar(filtrosSchema2, semVazios(req.query));
     const unidade = unidadePermitida(req.usuario, q.unitId);
     const p = paginacao(q);
-    const where = filtrarVendas(q, unidade);
+    const where = await filtrarVendas(q, unidade);
     const [lista, total, somas, itens] = await Promise.all([
       db.sale.findMany({
         where,

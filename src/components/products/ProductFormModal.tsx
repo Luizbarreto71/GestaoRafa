@@ -5,6 +5,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/contexts/ToastContext';
 import { useUnit } from '@/contexts/UnitContext';
 import { useCategories, useCreateProduct, useSuppliers, useUpdateProduct } from '@/hooks/queries';
+import { opcoesDeCategoria } from '@/lib/categorias';
 import { cn } from '@/lib/cn';
 import { formatCurrency, profitMargin, STATUS_OPTIONS, toInputDate } from '@/lib/format';
 import type { Product } from '@/types';
@@ -23,6 +24,8 @@ interface ProductFormModalProps {
 /** O estado guarda tudo; a categoria decide o que aparece na tela. */
 const VAZIO: Record<ChaveCampo, string> = {
   nome: '',
+  // A condição virou subcategoria e não aparece mais no formulário; a
+  // chave fica porque o catálogo ainda a conhece, para ler o que já existe.
   condicao: '',
   marca: '',
   modelo: '',
@@ -70,13 +73,13 @@ export function ProductFormModal({ open, onClose, product }: ProductFormModalPro
     if (product) {
       setCategoriaId(product.categoryId);
       setValores({
+        ...VAZIO,
         nome: product.name,
         marca: product.brand ?? '',
         modelo: product.model ?? '',
         cor: product.color ?? '',
         capacidade: product.capacity ?? '',
         lote: product.lote ?? '',
-        condicao: product.condicao ?? '',
         imei: product.imei ?? '',
         serie: product.serialNumber ?? '',
         codigo: product.barcode ?? '',
@@ -183,7 +186,6 @@ export function ProductFormModal({ open, onClose, product }: ProductFormModalPro
       color: seVisivel('cor', valores.cor),
       capacity: seVisivel('capacidade', valores.capacidade),
       lote: seVisivel('lote', valores.lote),
-      condicao: seVisivel('condicao', valores.condicao),
       imei: seVisivel('imei', valores.imei),
       serialNumber: seVisivel('serie', valores.serie),
       barcode: seVisivel('codigo', valores.codigo),
@@ -404,7 +406,7 @@ export function ProductFormModal({ open, onClose, product }: ProductFormModalPro
               required
               value={categoriaId}
               onChange={(e) => setCategoriaId(e.target.value)}
-              options={(categorias ?? []).map((c) => ({ value: c.id, label: c.name }))}
+              options={opcoesDeCategoria(categorias)}
               placeholder="Selecione…"
               hint={
                 editando

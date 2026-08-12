@@ -15,9 +15,13 @@ import {
 import { exigir, podeFazer } from './permissoes';
 import { db } from './db';
 import { decimal, exportar, reais, type Coluna } from './exportar';
-import { MOTIVO_LABEL, STATUS_PRODUTO_LABEL, TIPO_LABEL } from './estoque';
+import {
+  comAsFilhas,
+  MOTIVO_LABEL,
+  STATUS_PRODUTO_LABEL,
+  TIPO_LABEL,
+} from './estoque';
 import { unidadePermitida } from './unidades';
-import { CAMPOS } from '../shared/campos';
 
 /** Os seis relatórios, todos exportáveis em PDF, Excel ou CSV. */
 
@@ -37,13 +41,6 @@ const base = z.object({
 
 type Base = z.infer<typeof base>;
 
-/**
- * Ordem dos blocos por condição.
- *
- * Segue a do cadastro, e não a alfabética: quem lê o relatório procura
- * primeiro o que tem mais valor.
- */
-const ORDEM_CONDICAO = [...(CAMPOS.condicao.opcoes ?? []), '—'];
 
 const periodo = (q: Base) => {
   if (!q.startDate && !q.endDate) return 'Período: todos os registros';
@@ -88,7 +85,7 @@ rotasRelatorios.get(
       where: {
         ...(unidade ? { unitId: unidade } : {}),
         product: {
-          ...(q.categoryId ? { categoryId: q.categoryId } : {}),
+          ...(q.categoryId ? { categoryId: { in: await comAsFilhas(q.categoryId) } } : {}),
           ...(q.supplierId ? { supplierId: q.supplierId } : {}),
           ...(q.status ? { status: q.status } : {}),
           ...(entrada ? { entryDate: entrada } : {}),
@@ -108,7 +105,6 @@ rotasRelatorios.get(
       brand: p.brand ?? '—',
       model: p.model ?? '—',
       lote: p.lote ?? '—',
-      condicao: p.condicao ?? '—',
       quantity,
       costPrice: numero(p.costPrice),
       salePrice: numero(p.salePrice),
@@ -129,7 +125,9 @@ rotasRelatorios.get(
       // Separado por condição: lacrado e vitrine são mercadorias
       // diferentes, com preço diferente, e misturá-las esconde o que a
       // loja tem de cada uma.
-      group: { key: 'condicao', order: ORDEM_CONDICAO, totals: ['quantity', 'totalCost', 'totalSale'] },
+      // Separado por categoria — que agora carrega a condição:
+      // "Celulares › Vitrine" é um bloco, "Celulares › Lacrado" é outro.
+      group: { key: 'category', totals: ['quantity', 'totalCost', 'totalSale'] },
       columns: [
         { header: 'Unidade', key: 'unit', width: 12 },
         { header: 'Produto', key: 'name', width: 24 },
@@ -137,7 +135,6 @@ rotasRelatorios.get(
         { header: 'Marca', key: 'brand', width: 11 },
         { header: 'Modelo', key: 'model', width: 13 },
         { header: 'Lote', key: 'lote', width: 11 },
-        { header: 'Condição', key: 'condicao', width: 11 },
         qtd('Qtd', 'quantity', 6),
         money('Custo', 'costPrice', 10),
         money('Venda', 'salePrice', 10),
@@ -179,7 +176,7 @@ rotasRelatorios.get(
           ...(q.paymentMethod ? { paymentMethod: q.paymentMethod } : {}),
           ...(unidade ? { unitId: unidade } : {}),
         },
-        ...(q.categoryId ? { product: { categoryId: q.categoryId } } : {}),
+        ...(q.categoryId ? { product: { categoryId: { in: await comAsFilhas(q.categoryId) } } } : {}),
         ...(q.supplierId ? { product: { supplierId: q.supplierId } } : {}),
       },
       include: {
@@ -206,7 +203,6 @@ rotasRelatorios.get(
         phone: i.sale.customerPhone ?? '—',
         product: i.productName ?? i.product.name,
         category: i.product.category.name,
-        condicao: i.product.condicao ?? '—',
         imei: i.imei ?? i.serialNumber ?? '—',
         quantity: i.quantity,
         unitPrice: numero(i.unitPrice),
@@ -232,7 +228,7 @@ rotasRelatorios.get(
     await exportar(res, q.format, {
       title: 'Relatório de Vendas',
       subtitle: periodo(q),
-      group: { key: 'condicao', order: ORDEM_CONDICAO, totals: ['quantity', 'total', 'profit'] },
+      group: { key: 'category', totals: ['quantity', 'total', 'profit'] },
       columns: [
         // Larguras conferidas com dados reais: nome de aparelho e pagamento
         // dividido são os que estouram, e é neles que sobra espaço aqui.
@@ -242,7 +238,6 @@ rotasRelatorios.get(
         { header: 'Cliente', key: 'customer', width: 15 },
         { header: 'Produto', key: 'product', width: 26 },
         { header: 'Categoria', key: 'category', width: 11 },
-        { header: 'Condição', key: 'condicao', width: 11 },
         { header: 'IMEI / série', key: 'imei', width: 14 },
         qtd('Qtd', 'quantity', 5),
         money('Unit.', 'unitPrice', 11),
@@ -517,7 +512,7 @@ rotasRelatorios.get(
         ...(quando ? { createdAt: quando } : {}),
         ...(q.type ? { type: q.type } : {}),
         ...(unidade ? { unitId: unidade } : {}),
-        ...(q.categoryId ? { product: { categoryId: q.categoryId } } : {}),
+        ...(q.categoryId ? { product: { categoryId: { in: await comAsFilhas(q.categoryId) } } } : {}),
       },
       include: {
         user: { select: { name: true } },
@@ -594,7 +589,6 @@ rotasRelatorios.get(
       base.extend({
         /** Quanto somar ao preço de compra. */
         markup: z.coerce.number().min(0).max(999_999).default(100),
-        condicao: z.string().trim().optional(),
         /** Mostrar o custo — só para conferência interna. */
         incluirCusto: z.enum(['true', 'false']).default('false'),
         /** Deixar de fora o que está sem estoque. */
@@ -608,9 +602,8 @@ rotasRelatorios.get(
 
     const produtos = await db.product.findMany({
       where: {
-        ...(q.categoryId ? { categoryId: q.categoryId } : {}),
+        ...(q.categoryId ? { categoryId: { in: await comAsFilhas(q.categoryId) } } : {}),
         ...(q.supplierId ? { supplierId: q.supplierId } : {}),
-        ...(q.condicao ? { condicao: q.condicao } : {}),
         ...(q.somenteComEstoque === 'true'
           ? { stock: { some: { quantity: { gt: 0 }, ...(unidade ? { unitId: unidade } : {}) } } }
           : {}),
@@ -630,7 +623,7 @@ rotasRelatorios.get(
         category: p.category.name,
         name: p.name,
         detalhe: [p.brand, p.model].filter(Boolean).join(' ') || '—',
-        condicao: p.condicao ?? '—',
+        categoria: p.category.name,
         capacidade: p.capacity ?? '—',
         quantity: emEstoque,
         custo,
@@ -643,7 +636,7 @@ rotasRelatorios.get(
       { header: 'Categoria', key: 'category', width: 14 },
       { header: 'Produto', key: 'name', width: 26 },
       { header: 'Marca / modelo', key: 'detalhe', width: 16 },
-      { header: 'Condição', key: 'condicao', width: 12 },
+      { header: 'Categoria', key: 'categoria', width: 16 },
       { header: 'Capacidade', key: 'capacidade', width: 12 },
       qtd('Estoque', 'quantity', 8),
       ...(mostrarCusto ? [money('Custo', 'custo', 11)] : []),
@@ -731,7 +724,6 @@ rotasRelatorios.get(
         /** Acréscimo, quando o preço parte do custo. */
         markup: z.coerce.number().min(0).max(999_999).default(100),
         categoryId: z.string().uuid().optional(),
-        condicao: z.string().trim().optional(),
         unitId: z.string().uuid().optional(),
         agruparPor: z.enum(['marca', 'categoria']).default('marca'),
         mostrarQuantidade: z.enum(['true', 'false']).default('true'),
@@ -750,8 +742,7 @@ rotasRelatorios.get(
 
     const produtos = await db.product.findMany({
       where: {
-        ...(q.categoryId ? { categoryId: q.categoryId } : {}),
-        ...(q.condicao ? { condicao: q.condicao } : {}),
+        ...(q.categoryId ? { categoryId: { in: await comAsFilhas(q.categoryId) } } : {}),
         // Só o que existe: ninguém oferece no grupo o que já acabou.
         stock: { some: { quantity: { gt: 0 }, ...(unidade ? { unitId: unidade } : {}) } },
       },
@@ -806,7 +797,11 @@ rotasRelatorios.get(
         totalPecas += quantidade;
 
         const partes = [p.name];
-        if (q.mostrarCondicao === 'true' && p.condicao) partes.push(p.condicao);
+        // A condição virou subcategoria: sai dali, não de um campo à parte.
+        if (q.mostrarCondicao === 'true') {
+          const sub = p.category.name.split('›').pop()?.trim();
+          if (sub && sub !== p.category.name) partes.push(sub);
+        }
         if (q.mostrarQuantidade === 'true') partes.push(`${quantidade}un`);
 
         linhas.push(`${partes.join(' · ')} — *${dinheiro(precoDe(p))}*`);
