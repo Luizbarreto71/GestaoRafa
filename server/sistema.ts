@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { exigir } from './permissoes';
 import { db, registrarLog } from './db';
 import { normalizarTaxas, TAXAS_PADRAO, type TaxaDeCartao } from '../shared/taxas';
+import { LOJA_PADRAO, normalizarLoja, type DadosDaLoja } from '../shared/loja';
 import { MOTIVO_LABEL, movimentar, TIPO_LABEL } from './estoque';
 import { enviarParaPlanilha, planilhaConfigurada, reescreverPlanilha, statusPlanilha } from './planilha';
 
@@ -448,5 +449,59 @@ rotasSistema.put(
 
     await registrarLog({ acao: 'TAXAS_CARTAO', entidade: 'Setting', id: CHAVE_TAXAS, req });
     res.json({ taxas: limpas, message: `${limpas.length} faixa(s) de parcelamento salvas.` });
+  }),
+);
+
+// ------------------------------------------------------------ Dados da loja
+
+const CHAVE_LOJA = 'dados_da_loja';
+
+export async function lojaSalva(): Promise<DadosDaLoja> {
+  const guardado = await db.setting.findUnique({ where: { key: CHAVE_LOJA } });
+  if (!guardado) return LOJA_PADRAO;
+  try {
+    return normalizarLoja(JSON.parse(guardado.value));
+  } catch {
+    return LOJA_PADRAO;
+  }
+}
+
+/** Aberto a quem opera: é o cabeçalho do comprovante que o cliente leva. */
+rotasSistema.get(
+  '/loja',
+  rota(async (_req, res) => {
+    res.json(await lojaSalva());
+  }),
+);
+
+rotasSistema.put(
+  '/loja',
+  somenteAdmin,
+  rota(async (req, res) => {
+    const dados = validar(
+      z.object({
+        nome: z.string().trim().min(2, 'Informe o nome da loja').max(120),
+        documento: z.string().trim().max(30).optional(),
+        endereco: z.string().trim().max(160).optional(),
+        bairro: z.string().trim().max(80).optional(),
+        cidade: z.string().trim().max(80).optional(),
+        uf: z.string().trim().max(2).optional(),
+        cep: z.string().trim().max(12).optional(),
+        telefone: z.string().trim().max(40).optional(),
+        email: z.string().trim().max(120).optional(),
+        rodape: z.string().trim().max(300).optional(),
+      }),
+      req.body,
+    );
+
+    const loja = normalizarLoja(dados);
+    await db.setting.upsert({
+      where: { key: CHAVE_LOJA },
+      update: { value: JSON.stringify(loja) },
+      create: { key: CHAVE_LOJA, value: JSON.stringify(loja) },
+    });
+
+    await registrarLog({ acao: 'DADOS_DA_LOJA', entidade: 'Setting', id: CHAVE_LOJA, req });
+    res.json({ ...loja, message: 'Dados da loja salvos. Já valem no próximo comprovante.' });
   }),
 );

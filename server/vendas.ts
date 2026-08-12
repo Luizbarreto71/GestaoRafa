@@ -18,6 +18,7 @@ import {
 } from './core';
 import { db, registrarLog } from './db';
 import { enviarRecibo } from './recibo';
+import { lojaSalva } from './sistema';
 import {
   comAsFilhas,
   movimentar,
@@ -345,6 +346,7 @@ rotasVendas.get(
     if (!venda) throw naoEncontrado('Venda');
 
     enviarRecibo(res, {
+      loja: await lojaSalva(),
       code: venda.code,
       saleDate: venda.saleDate,
       unitName: venda.unit?.name,

@@ -3878,6 +3878,39 @@ function normalizarTaxas(bruto) {
   return limpas.length ? limpas : TAXAS_PADRAO;
 }
 
+// shared/loja.ts
+var LOJA_PADRAO = {
+  nome: "Rafa Multimarcas",
+  documento: "",
+  endereco: "",
+  bairro: "",
+  cidade: "",
+  uf: "",
+  cep: "",
+  telefone: "",
+  email: "",
+  rodape: ""
+};
+function normalizarLoja(bruto) {
+  if (!bruto || typeof bruto !== "object") return LOJA_PADRAO;
+  const dado = bruto;
+  const texto3 = (chave) => typeof dado[chave] === "string" ? dado[chave].trim() : LOJA_PADRAO[chave];
+  return {
+    nome: texto3("nome") || LOJA_PADRAO.nome,
+    documento: texto3("documento"),
+    endereco: texto3("endereco"),
+    bairro: texto3("bairro"),
+    cidade: texto3("cidade"),
+    uf: texto3("uf").toUpperCase().slice(0, 2),
+    cep: texto3("cep"),
+    telefone: texto3("telefone"),
+    email: texto3("email"),
+    rodape: texto3("rodape")
+  };
+}
+var linhaDeEndereco = (l) => [l.endereco, l.bairro].filter(Boolean).join(" - ");
+var linhaDeCidade = (l) => [[l.cidade, l.uf].filter(Boolean).join("/"), l.cep && `CEP: ${l.cep}`].filter(Boolean).join(" - ");
+
 // server/sistema.ts
 var rotasSistema = Router8();
 rotasSistema.use(autenticar, exigir("configuracoes"));
@@ -4232,6 +4265,51 @@ rotasSistema.put(
     });
     await registrarLog({ acao: "TAXAS_CARTAO", entidade: "Setting", id: CHAVE_TAXAS, req });
     res.json({ taxas: limpas, message: `${limpas.length} faixa(s) de parcelamento salvas.` });
+  })
+);
+var CHAVE_LOJA = "dados_da_loja";
+async function lojaSalva() {
+  const guardado = await db.setting.findUnique({ where: { key: CHAVE_LOJA } });
+  if (!guardado) return LOJA_PADRAO;
+  try {
+    return normalizarLoja(JSON.parse(guardado.value));
+  } catch {
+    return LOJA_PADRAO;
+  }
+}
+rotasSistema.get(
+  "/loja",
+  rota(async (_req, res) => {
+    res.json(await lojaSalva());
+  })
+);
+rotasSistema.put(
+  "/loja",
+  somenteAdmin,
+  rota(async (req, res) => {
+    const dados = validar(
+      z7.object({
+        nome: z7.string().trim().min(2, "Informe o nome da loja").max(120),
+        documento: z7.string().trim().max(30).optional(),
+        endereco: z7.string().trim().max(160).optional(),
+        bairro: z7.string().trim().max(80).optional(),
+        cidade: z7.string().trim().max(80).optional(),
+        uf: z7.string().trim().max(2).optional(),
+        cep: z7.string().trim().max(12).optional(),
+        telefone: z7.string().trim().max(40).optional(),
+        email: z7.string().trim().max(120).optional(),
+        rodape: z7.string().trim().max(300).optional()
+      }),
+      req.body
+    );
+    const loja = normalizarLoja(dados);
+    await db.setting.upsert({
+      where: { key: CHAVE_LOJA },
+      update: { value: JSON.stringify(loja) },
+      create: { key: CHAVE_LOJA, value: JSON.stringify(loja) }
+    });
+    await registrarLog({ acao: "DADOS_DA_LOJA", entidade: "Setting", id: CHAVE_LOJA, req });
+    res.json({ ...loja, message: "Dados da loja salvos. J\xE1 valem no pr\xF3ximo comprovante." });
   })
 );
 
@@ -5425,84 +5503,122 @@ import { z as z12 } from "zod";
 import PDFDocument2 from "pdfkit";
 var AZUL2 = "#0F172A";
 var CINZA = "#475569";
+var BORDA = "#94A3B8";
+var FAIXA = "#E2E8F0";
 var CLARO = "#F8FAFC";
-var dinheiro2 = (v) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+var dinheiro2 = (v) => v.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+var dataBR2 = (d) => d.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" });
 function enviarRecibo(res, r) {
-  const doc = new PDFDocument2({ margin: 40, size: "A4" });
+  const doc = new PDFDocument2({ margin: 28, size: "A4" });
   res.setHeader("Content-Type", "application/pdf");
-  res.setHeader("Content-Disposition", `inline; filename="recibo-${r.code}.pdf"`);
+  res.setHeader("Content-Disposition", `inline; filename="comprovante-${r.code}.pdf"`);
   doc.pipe(res);
-  const largura = doc.page.width - doc.page.margins.left - doc.page.margins.right;
   const x0 = doc.page.margins.left;
-  doc.rect(0, 0, doc.page.width, 78).fill(AZUL2);
-  doc.fillColor("#FFFFFF").fontSize(19).font("Helvetica-Bold").text("Rafa Multimarcas", x0, 20);
-  doc.fontSize(11).font("Helvetica").text("Comprovante de venda", x0, 45);
-  doc.fontSize(15).font("Helvetica-Bold").text(r.code, x0, 22, { width: largura, align: "right" });
-  doc.fontSize(9).font("Helvetica").text(r.saleDate.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" }), x0, 46, {
-    width: largura,
-    align: "right"
-  });
-  doc.y = 100;
-  const bloco = (titulo, linhas) => {
-    doc.fillColor(CINZA).fontSize(8).font("Helvetica-Bold").text(titulo.toUpperCase(), x0, doc.y);
-    doc.moveDown(0.3);
-    for (const [rotulo, valor] of linhas) {
-      const y2 = doc.y;
-      doc.fillColor(CINZA).fontSize(9).font("Helvetica").text(rotulo, x0, y2, { width: 110 });
-      doc.fillColor(AZUL2).font("Helvetica-Bold").text(valor, x0 + 110, y2, { width: largura - 110 });
-      doc.y = y2 + 14;
-    }
-    doc.moveDown(0.6);
+  const largura = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+  const PAD = 6;
+  const quadro = (y2, altura, preenchimento) => {
+    if (preenchimento) doc.rect(x0, y2, largura, altura).fill(preenchimento);
+    doc.rect(x0, y2, largura, altura).lineWidth(0.7).strokeColor(BORDA).stroke();
   };
-  bloco("Cliente", [
-    ["Nome", r.customerName?.trim() || "Consumidor n\xE3o identificado"],
-    ...r.customerDocument ? [["CPF", r.customerDocument]] : [],
-    ...r.customerPhone ? [["Telefone", r.customerPhone]] : []
+  const secao = (titulo) => {
+    const y2 = doc.y;
+    quadro(y2, 16, FAIXA);
+    doc.fillColor(AZUL2).font("Helvetica-Bold").fontSize(8).text(titulo, x0 + PAD, y2 + 4.5, {
+      lineBreak: false
+    });
+    doc.y = y2 + 16;
+  };
+  const alturaTopo = 56;
+  let y = doc.y;
+  quadro(y, alturaTopo);
+  doc.fillColor(AZUL2).font("Helvetica-Bold").fontSize(13).text(r.loja.nome.toUpperCase(), x0 + PAD, y + 8, {
+    width: largura * 0.55,
+    lineBreak: false
+  });
+  doc.font("Helvetica").fontSize(8).fillColor(CINZA);
+  let linhaY = y + 25;
+  for (const texto3 of [linhaDeEndereco(r.loja), linhaDeCidade(r.loja), r.loja.documento && `CNPJ/CPF: ${r.loja.documento}`]) {
+    if (!texto3) continue;
+    doc.text(texto3, x0 + PAD, linhaY, { width: largura * 0.55, lineBreak: false });
+    linhaY += 10;
+  }
+  doc.font("Helvetica-Bold").fontSize(8).fillColor(AZUL2);
+  let direitaY = y + 9;
+  for (const texto3 of [r.loja.telefone, r.loja.email]) {
+    if (!texto3) continue;
+    doc.text(texto3, x0, direitaY, { width: largura - PAD, align: "right", lineBreak: false });
+    direitaY += 10;
+  }
+  doc.font("Helvetica").fillColor(CINZA).text(`Vendedor: ${r.sellerName?.trim() || "\u2014"}`, x0, direitaY, {
+    width: largura - PAD,
+    align: "right",
+    lineBreak: false
+  });
+  doc.y = y + alturaTopo;
+  y = doc.y;
+  quadro(y, 20, CLARO);
+  doc.fillColor(AZUL2).font("Helvetica-Bold").fontSize(11).text(`COMPROVANTE N\xBA ${r.code}`, x0, y + 5.5, {
+    width: largura,
+    align: "center",
+    lineBreak: false
+  });
+  doc.fontSize(9).text(dataBR2(r.saleDate), x0, y + 6.5, {
+    width: largura - PAD,
+    align: "right",
+    lineBreak: false
+  });
+  doc.y = y + 20;
+  secao("DADOS DO CLIENTE");
+  const linhaDeCampos = (pares) => {
+    const yl = doc.y;
+    quadro(yl, 16);
+    const metade = largura / 2;
+    pares.slice(0, 2).forEach(([rotulo, valor], i) => {
+      const cx = x0 + i * metade;
+      if (i === 1) {
+        doc.moveTo(cx, yl).lineTo(cx, yl + 16).lineWidth(0.7).strokeColor(BORDA).stroke();
+      }
+      doc.fillColor(CINZA).font("Helvetica-Bold").fontSize(8).text(rotulo, cx + PAD, yl + 4.5, {
+        width: 70,
+        lineBreak: false
+      });
+      doc.fillColor(AZUL2).font("Helvetica").text(valor || "\u2014", cx + PAD + 72, yl + 4.5, {
+        width: metade - 72 - PAD * 2,
+        lineBreak: false,
+        ellipsis: true
+      });
+    });
+    doc.y = yl + 16;
+  };
+  linhaDeCampos([
+    ["Cliente:", r.customerName?.trim() || "Consumidor n\xE3o identificado"],
+    ["CPF/CNPJ:", r.customerDocument ?? ""]
   ]);
-  bloco("Atendimento", [
-    ["Loja", r.unitName ?? "\u2014"],
-    ["Vendedor", r.sellerName?.trim() || "\u2014"],
-    ["Caixa", r.cashierName?.trim() || "\u2014"]
+  linhaDeCampos([
+    ["Telefone:", r.customerPhone ?? ""],
+    ["Loja:", r.unitName ?? ""]
   ]);
-  doc.fillColor(CINZA).fontSize(8).font("Helvetica-Bold").text("PRODUTOS", x0, doc.y);
-  doc.moveDown(0.3);
+  doc.y += 6;
+  secao("PRODUTOS");
   const colunas = [
-    { titulo: "Produto", peso: 46 },
-    { titulo: "Qtd", peso: 8, alinhar: "center" },
-    { titulo: "Valor un.", peso: 20, alinhar: "right" },
-    { titulo: "Total", peso: 20, alinhar: "right" }
+    { titulo: "ITEM", peso: 6, alinhar: "center" },
+    { titulo: "NOME", peso: 46 },
+    { titulo: "UND.", peso: 8, alinhar: "center" },
+    { titulo: "QTD.", peso: 9, alinhar: "right" },
+    { titulo: "VR. UNIT.", peso: 15, alinhar: "right" },
+    { titulo: "SUBTOTAL", peso: 16, alinhar: "right" }
   ];
   const peso = colunas.reduce((s, c) => s + c.peso, 0);
   const larguras = colunas.map((c) => c.peso / peso * largura);
-  let y = doc.y;
-  doc.rect(x0, y, largura, 18).fill("#E2E8F0");
-  doc.fillColor(AZUL2).fontSize(8).font("Helvetica-Bold");
-  let x = x0;
-  colunas.forEach((c, i) => {
-    doc.text(c.titulo.toUpperCase(), x + 4, y + 5, {
-      width: larguras[i] - 8,
-      align: c.alinhar ?? "left",
-      lineBreak: false
-    });
-    x += larguras[i];
-  });
-  doc.y = y + 18;
-  r.items.forEach((item, indice) => {
-    const identificador = [item.imei && `IMEI ${item.imei}`, item.serialNumber && `N\xBA ${item.serialNumber}`].filter(Boolean).join(" \xB7 ");
-    const altura = identificador ? 26 : 16;
-    if (doc.y > doc.page.height - doc.page.margins.bottom - 160) doc.addPage();
-    y = doc.y;
-    if (indice % 2 === 1) doc.rect(x0, y, largura, altura).fill(CLARO);
-    doc.fillColor("#1E293B").fontSize(9).font("Helvetica");
-    const valores2 = [
-      item.productName,
-      String(item.quantity),
-      dinheiro2(item.unitPrice),
-      dinheiro2(item.unitPrice * item.quantity)
-    ];
-    x = x0;
+  const linhaDaTabela = (valores2, altura, opcoes) => {
+    const yl = doc.y;
+    quadro(yl, altura, opcoes?.fundo);
+    let x = x0;
     colunas.forEach((c, i) => {
-      doc.text(valores2[i], x + 4, y + 4, {
+      if (i > 0) {
+        doc.moveTo(x, yl).lineTo(x, yl + altura).lineWidth(0.7).strokeColor(BORDA).stroke();
+      }
+      doc.fillColor(opcoes?.negrito ? AZUL2 : "#1E293B").font(opcoes?.negrito ? "Helvetica-Bold" : "Helvetica").fontSize(8).text(valores2[i] ?? "", x + 4, yl + 4.5, {
         width: larguras[i] - 8,
         align: c.alinhar ?? "left",
         lineBreak: false,
@@ -5510,61 +5626,114 @@ function enviarRecibo(res, r) {
       });
       x += larguras[i];
     });
-    if (identificador) {
-      doc.fillColor(CINZA).fontSize(7).text(identificador, x0 + 4, y + 16, {
-        width: larguras[0] - 8,
-        lineBreak: false
+    if (opcoes?.subtexto) {
+      doc.fillColor(CINZA).font("Helvetica").fontSize(6.5).text(opcoes.subtexto, x0 + larguras[0] + 4, yl + 14, {
+        width: larguras[1] - 8,
+        lineBreak: false,
+        ellipsis: true
       });
     }
-    doc.y = y + altura;
-  });
-  doc.moveDown(0.8);
-  const linhaDeTotal = (rotulo, valor, forte = false) => {
-    const yl = doc.y;
-    doc.fillColor(forte ? AZUL2 : CINZA).fontSize(forte ? 12 : 9).font(forte ? "Helvetica-Bold" : "Helvetica").text(rotulo, x0 + largura / 2, yl, { width: largura / 4 });
-    doc.fillColor(forte ? AZUL2 : "#1E293B").font("Helvetica-Bold").text(valor, x0 + largura * 0.75, yl, { width: largura / 4, align: "right" });
-    doc.y = yl + (forte ? 20 : 14);
+    doc.y = yl + altura;
   };
-  doc.moveTo(x0 + largura / 2, doc.y + 2).lineTo(x0 + largura, doc.y + 2).strokeColor("#CBD5E1").stroke();
-  doc.y += 8;
-  linhaDeTotal("TOTAL", dinheiro2(r.total), true);
-  doc.moveDown(0.5);
-  doc.fillColor(CINZA).fontSize(8).font("Helvetica-Bold").text("PAGAMENTO", x0, doc.y);
-  doc.moveDown(0.3);
-  for (const p of r.payments) {
-    const yp = doc.y;
-    doc.fillColor("#1E293B").fontSize(9).font("Helvetica").text(
-      `${PAGAMENTO_LABEL[p.method] ?? p.method}${p.installments > 1 ? ` \xB7 ${p.installments}x` : ""}`,
-      x0,
-      yp,
-      { width: largura / 2 }
+  linhaDaTabela(colunas.map((c) => c.titulo), 16, { negrito: true, fundo: FAIXA });
+  r.items.forEach((item, i) => {
+    const identificador = [item.imei && `IMEI ${item.imei}`, item.serialNumber && `N\xBA ${item.serialNumber}`].filter(Boolean).join(" \xB7 ");
+    if (doc.y > doc.page.height - doc.page.margins.bottom - 150) doc.addPage();
+    linhaDaTabela(
+      [
+        String(i + 1),
+        item.productName,
+        "UN",
+        dinheiro2(item.quantity),
+        dinheiro2(item.unitPrice),
+        dinheiro2(item.unitPrice * item.quantity)
+      ],
+      identificador ? 24 : 16,
+      { subtexto: identificador || void 0 }
     );
-    doc.font("Helvetica-Bold").text(dinheiro2(p.amount), x0, yp, { width: largura, align: "right" });
-    doc.y = yp + 14;
-    if (p.method === "TROCA" && r.troca) {
-      doc.fillColor(CINZA).fontSize(7.5).font("Helvetica").text(
-        [r.troca.modelo, r.troca.imei && `IMEI ${r.troca.imei}`].filter(Boolean).join(" \xB7 "),
-        x0 + 12,
-        doc.y - 2,
-        { width: largura / 2 }
-      );
-      doc.y += 11;
-    }
+  });
+  const pecas = r.items.reduce((s, i) => s + i.quantity, 0);
+  const somaDosItens = r.items.reduce((s, i) => s + i.unitPrice * i.quantity, 0);
+  linhaDaTabela(["", "TOTAL", "", dinheiro2(pecas), "", dinheiro2(somaDosItens)], 16, {
+    negrito: true,
+    fundo: FAIXA
+  });
+  doc.y += 4;
+  const totalDireita = (rotulo, valor, grande = false) => {
+    const yl = doc.y;
+    doc.fillColor(AZUL2).font("Helvetica-Bold").fontSize(grande ? 11 : 9).text(`${rotulo} ${valor}`, x0, yl, { width: largura - PAD, align: "right", lineBreak: false });
+    doc.y = yl + (grande ? 16 : 12);
+  };
+  totalDireita("PRODUTOS:", dinheiro2(somaDosItens));
+  totalDireita("TOTAL:", `R$ ${dinheiro2(r.total)}`, true);
+  doc.y += 4;
+  secao("DADOS DO PAGAMENTO");
+  const colsPag = [
+    { titulo: "DATA", peso: 16 },
+    { titulo: "VALOR", peso: 16, alinhar: "right" },
+    { titulo: "FORMA DE PAGAMENTO", peso: 30 },
+    { titulo: "OBSERVA\xC7\xC3O", peso: 38 }
+  ];
+  const pesoPag = colsPag.reduce((s, c) => s + c.peso, 0);
+  const largsPag = colsPag.map((c) => c.peso / pesoPag * largura);
+  const linhaPag = (valores2, negrito = false, fundo) => {
+    const yl = doc.y;
+    quadro(yl, 16, fundo);
+    let x = x0;
+    colsPag.forEach((c, i) => {
+      if (i > 0) {
+        doc.moveTo(x, yl).lineTo(x, yl + 16).lineWidth(0.7).strokeColor(BORDA).stroke();
+      }
+      doc.fillColor(negrito ? AZUL2 : "#1E293B").font(negrito ? "Helvetica-Bold" : "Helvetica").fontSize(8).text(valores2[i] ?? "", x + 4, yl + 4.5, {
+        width: largsPag[i] - 8,
+        align: c.alinhar ?? "left",
+        lineBreak: false,
+        ellipsis: true
+      });
+      x += largsPag[i];
+    });
+    doc.y = yl + 16;
+  };
+  linhaPag(colsPag.map((c) => c.titulo), true, FAIXA);
+  for (const p of r.payments) {
+    const forma = PAGAMENTO_LABEL[p.method] ?? p.method;
+    const observacao = p.method === "TROCA" && r.troca ? [r.troca.modelo, r.troca.imei && `IMEI ${r.troca.imei}`].filter(Boolean).join(" \xB7 ") : "";
+    linhaPag([
+      dataBR2(r.saleDate),
+      dinheiro2(p.amount),
+      p.installments > 1 ? `${forma} \u2014 ${p.installments}x de ${dinheiro2(p.amount / p.installments)}` : forma,
+      observacao
+    ]);
   }
   if (r.notes?.trim()) {
-    doc.moveDown(0.6);
-    doc.fillColor(CINZA).fontSize(8).font("Helvetica-Bold").text("OBSERVA\xC7\xC3O", x0, doc.y);
-    doc.moveDown(0.2);
-    doc.fontSize(9).font("Helvetica").fillColor("#1E293B").text(r.notes.trim(), x0, doc.y, {
-      width: largura
+    doc.y += 6;
+    secao("OBSERVA\xC7\xD5ES");
+    const yl = doc.y;
+    const alturaObs = Math.max(20, doc.heightOfString(r.notes.trim(), { width: largura - PAD * 2 }) + 9);
+    quadro(yl, alturaObs);
+    doc.fillColor("#1E293B").font("Helvetica").fontSize(8).text(r.notes.trim(), x0 + PAD, yl + 5, {
+      width: largura - PAD * 2
     });
+    doc.y = yl + alturaObs;
   }
-  const rodape = doc.page.height - doc.page.margins.bottom - 34;
-  doc.moveTo(x0, rodape).lineTo(x0 + largura, rodape).strokeColor("#E2E8F0").stroke();
-  doc.fillColor(CINZA).fontSize(7.5).font("Helvetica").text(
-    "Documento sem valor fiscal, emitido para controle interno e comprova\xE7\xE3o de compra. Guarde este comprovante para qualquer atendimento de garantia ou troca.",
+  doc.y += 14;
+  const yAss = doc.y;
+  quadro(yAss, 44);
+  doc.moveTo(x0 + largura * 0.25, yAss + 26).lineTo(x0 + largura * 0.75, yAss + 26).lineWidth(0.7).strokeColor(AZUL2).stroke();
+  doc.fillColor(CINZA).font("Helvetica").fontSize(8).text("Assinatura do cliente", x0, yAss + 30, {
+    width: largura,
+    align: "center",
+    lineBreak: false
+  });
+  doc.y = yAss + 44;
+  doc.y += 8;
+  doc.fillColor(CINZA).fontSize(7).font("Helvetica").text(
+    [
+      r.loja.rodape,
+      "Documento sem valor fiscal, emitido para controle interno e comprova\xE7\xE3o de compra. Guarde este comprovante para qualquer atendimento de garantia ou troca."
+    ].filter(Boolean).join("\n"),
     x0,
-    rodape + 8,
+    doc.y,
     { width: largura, align: "center" }
   );
   doc.end();
@@ -5830,6 +5999,7 @@ rotasVendas.get(
     });
     if (!venda) throw naoEncontrado("Venda");
     enviarRecibo(res, {
+      loja: await lojaSalva(),
       code: venda.code,
       saleDate: venda.saleDate,
       unitName: venda.unit?.name,
