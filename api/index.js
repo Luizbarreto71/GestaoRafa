@@ -3273,7 +3273,17 @@ var linhaDeCidade = (l) => [[l.cidade, l.uf].filter(Boolean).join("/"), l.cep &&
 
 // server/sistema.ts
 var rotasSistema = Router7();
-rotasSistema.use(autenticar, exigir("configuracoes"));
+var LEITURA_LIBERADA = /* @__PURE__ */ new Set([
+  "/taxas-cartao",
+  "/loja",
+  "/unidade-de-venda",
+  "/contas-pix",
+  "/chave-de-acesso"
+]);
+rotasSistema.use(autenticar, (req, res, next) => {
+  if (req.method === "GET" && LEITURA_LIBERADA.has(req.path)) return next();
+  return exigir("configuracoes")(req, res, next);
+});
 rotasSistema.get(
   "/sheets/status",
   rota(async (_req, res) => {

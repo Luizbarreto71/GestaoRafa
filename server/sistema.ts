@@ -16,7 +16,28 @@ import { enviarParaPlanilha, planilhaConfigurada, reescreverPlanilha, statusPlan
 /** Importação de planilha, backup e integração com o Google Sheets. */
 
 export const rotasSistema = Router();
-rotasSistema.use(autenticar, exigir('configuracoes'));
+
+/**
+ * Preferências que a loja inteira lê, mas só o administrador muda.
+ *
+ * A caixa não pode abrir Configurações — e mesmo assim precisa saber com
+ * que taxa cobrar no crédito, para qual Pix mandar o cliente e de que
+ * unidade sai a mercadoria. Sem isso a tela dela caía em valores padrão
+ * silenciosamente, cobrando com a taxa errada.
+ */
+const LEITURA_LIBERADA = new Set([
+  '/taxas-cartao',
+  '/loja',
+  '/unidade-de-venda',
+  '/contas-pix',
+  '/chave-de-acesso',
+]);
+
+rotasSistema.use(autenticar, (req, res, next) => {
+  // Só a leitura é liberada: gravar continua sendo do administrador.
+  if (req.method === 'GET' && LEITURA_LIBERADA.has(req.path)) return next();
+  return exigir('configuracoes')(req, res, next);
+});
 
 // ---------------------------------------------------------------- Planilha
 

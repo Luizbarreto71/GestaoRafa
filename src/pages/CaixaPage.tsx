@@ -523,7 +523,7 @@ function ConferenciaDaPreVenda({
             <p className="label-base">Sai do estoque de</p>
             <p className="flex items-center gap-1.5 rounded-lg bg-slate-50 px-3 py-2.5 text-sm font-semibold text-navy-900 dark:bg-navy-800 dark:text-slate-100">
               <Store className="h-4 w-4 text-slate-400" />
-              {unidades.find((u) => u.id === form.unitId)?.name ?? 'carregando…'}
+              {unidadeDeVenda?.name ?? unidades.find((u) => u.id === form.unitId)?.name ?? 'carregando…'}
             </p>
           </div>
 
@@ -863,7 +863,7 @@ function VendaDireta() {
               <p className="label-base">Sai do estoque de</p>
               <p className="flex items-center gap-1.5 rounded-lg bg-slate-50 px-3 py-2.5 text-sm font-semibold text-navy-900 dark:bg-navy-800 dark:text-slate-100">
                 <Store className="h-4 w-4 text-slate-400" />
-                {unidades.find((u) => u.id === unidade)?.name ?? 'carregando…'}
+                {unidadeDeVenda?.name ?? unidades.find((u) => u.id === unidade)?.name ?? 'carregando…'}
               </p>
             </div>
             <div>
