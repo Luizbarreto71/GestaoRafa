@@ -1,17 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { autenticar } from './auth';
-import {
-  AppError,
-  dataBR,
-  dataHoraCurta,
-  intervalo,
-  numero,
-  PAGAMENTO_LABEL,
-  rota,
-  semVazios,
-  validar,
-} from './core';
+import { AppError, dataBR, dataDoFiltro, dataHoraCurta, intervalo, numero, PAGAMENTO_LABEL, rota, semVazios, validar } from './core';
 import { exigir } from './permissoes';
 import { db } from './db';
 import { decimal, exportar, reais, type Coluna } from './exportar';
@@ -49,7 +39,7 @@ type Base = z.infer<typeof base>;
 
 const periodo = (q: Base) => {
   if (!q.startDate && !q.endDate) return 'Período: todos os registros';
-  return `Período: ${q.startDate ? dataBR(q.startDate) : 'início'} até ${q.endDate ? dataBR(q.endDate) : 'hoje'}`;
+  return `Período: ${q.startDate ? dataDoFiltro(q.startDate) : 'início'} até ${q.endDate ? dataDoFiltro(q.endDate) : 'hoje'}`;
 };
 
 /** Coluna de dinheiro alinhada à direita. */

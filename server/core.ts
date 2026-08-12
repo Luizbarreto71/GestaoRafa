@@ -239,6 +239,19 @@ export function intervalo(inicio?: Date, fim?: Date) {
   return { ...(inicio ? { gte: inicioDoDia(inicio) } : {}), ...(fim ? { lte: fimDoDia(fim) } : {}) };
 }
 
+/**
+ * A data de um filtro, escrita como quem digitou espera ler.
+ *
+ * "2026-08-12" chega da tela como meia-noite em UTC — que no fuso da loja
+ * ainda é dia 11. Escrever com `dataBR` mostrava o dia anterior no
+ * cabeçalho de todo relatório, embora o filtro estivesse certo: é o mesmo
+ * cuidado que `inicioDoDia` já toma, aplicado ao texto.
+ */
+export function dataDoFiltro(d: Date): string {
+  const [ano, mes, dia] = diaDoCalendario(d);
+  return `${String(dia).padStart(2, '0')}/${String(mes + 1).padStart(2, '0')}/${ano}`;
+}
+
 export const dataBR = (d: Date | string) =>
   new Date(d).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
 

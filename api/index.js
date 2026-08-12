@@ -146,6 +146,10 @@ function intervalo(inicio, fim) {
   if (!inicio && !fim) return void 0;
   return { ...inicio ? { gte: inicioDoDia(inicio) } : {}, ...fim ? { lte: fimDoDia(fim) } : {} };
 }
+function dataDoFiltro(d) {
+  const [ano, mes, dia] = diaDoCalendario(d);
+  return `${String(dia).padStart(2, "0")}/${String(mes + 1).padStart(2, "0")}/${ano}`;
+}
 var dataBR = (d) => new Date(d).toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" });
 var dataHoraBR = (d) => new Date(d).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" });
 var dataHoraCurta = (d) => new Date(d).toLocaleString("pt-BR", {
@@ -3994,7 +3998,7 @@ var base = z7.object({
 });
 var periodo = (q) => {
   if (!q.startDate && !q.endDate) return "Per\xEDodo: todos os registros";
-  return `Per\xEDodo: ${q.startDate ? dataBR(q.startDate) : "in\xEDcio"} at\xE9 ${q.endDate ? dataBR(q.endDate) : "hoje"}`;
+  return `Per\xEDodo: ${q.startDate ? dataDoFiltro(q.startDate) : "in\xEDcio"} at\xE9 ${q.endDate ? dataDoFiltro(q.endDate) : "hoje"}`;
 };
 var money = (header, key, width = 12) => ({
   header,
