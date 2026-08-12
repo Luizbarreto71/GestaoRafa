@@ -41,6 +41,7 @@ export interface DadosDaVenda {
     notes?: string | null;
     /** Taxa da maquininha, em %. Só faz sentido no crédito. */
     feePercent?: number | null;
+    destino?: string | null;
   }[];
   /**
    * Aparelho recebido na troca, em reais.
@@ -284,6 +285,13 @@ export async function registrarVenda(dados: DadosDaVenda) {
           amount: new Prisma.Decimal(p.amount.toFixed(2)),
           installments: p.installments ?? 1,
           notes: null as string | null,
+          /** Em qual conta caiu — o Pix da loja tem mais de uma. */
+          destino: p.destino?.trim() || null,
+          // O que a maquininha desconta fica gravado com a venda: a taxa
+          // muda com o tempo, e o relatório de amanhã não pode recalcular
+          // o passado com o preço de hoje.
+          feePercent: taxaDaLinha(tabela, p.method, p.installments ?? 1, p.feePercent),
+          netAmount: liquidoDaLinha(tabela, p.method, p.amount, p.installments ?? 1, p.feePercent),
         }))
       : aReceber.greaterThan(0)
         ? [
@@ -292,6 +300,7 @@ export async function registrarVenda(dados: DadosDaVenda) {
               amount: aReceber,
               installments: dados.installments ?? 1,
               notes: null as string | null,
+              destino: null as string | null,
               feePercent: taxaDaLinha(tabela, dados.paymentMethod, dados.installments ?? 1, null),
               netAmount: liquidoDaLinha(
                 tabela,
@@ -321,6 +330,7 @@ export async function registrarVenda(dados: DadosDaVenda) {
             amount: daTroca,
             installments: 1,
             notes: null,
+            destino: null,
             feePercent: null,
             netAmount: daTroca,
           },

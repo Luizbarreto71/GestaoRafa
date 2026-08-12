@@ -900,6 +900,7 @@ rotasRelatorios.get(
         feePercent: true,
         netAmount: true,
         settledAt: true,
+        destino: true,
       },
     });
 
@@ -920,9 +921,22 @@ rotasRelatorios.get(
 
     const total = pagamentos.reduce((s, p) => s + numero(p.amount), 0);
 
-    const linhas = (Object.keys(PAGAMENTO_LABEL) as string[])
-      .map((forma) => {
-        const daForma = pagamentos.filter((p) => p.method === forma);
+    // Pix da loja tem mais de uma conta: uma linha por conta, senão não dá
+    // para conferir extrato nenhum.
+    const chaves = [
+      ...new Set(
+        pagamentos.map((p) => (p.method === 'PIX' && p.destino ? `PIX::${p.destino}` : p.method)),
+      ),
+    ];
+    const ordem = Object.keys(PAGAMENTO_LABEL);
+    chaves.sort((a, b) => ordem.indexOf(a.split('::')[0]) - ordem.indexOf(b.split('::')[0]));
+
+    const linhas = chaves
+      .map((chave) => {
+        const [forma, conta] = chave.split('::');
+        const daForma = pagamentos.filter(
+          (p) => p.method === forma && (conta ? p.destino === conta : !(forma === 'PIX' && p.destino)),
+        );
         const soma = daForma.reduce((s, p) => s + numero(p.amount), 0);
 
         // Uma venda dividida em dois Pix conta como uma venda, não duas.
@@ -944,7 +958,7 @@ rotasRelatorios.get(
         );
 
         return {
-          payment: PAGAMENTO_LABEL[forma],
+          payment: conta ?? PAGAMENTO_LABEL[forma],
           sales: vendas,
           lancamentos: daForma.length,
           total: soma,
@@ -959,8 +973,7 @@ rotasRelatorios.get(
         };
       })
       // Forma sem movimento no período só ocuparia linha.
-      .filter((l) => l.lancamentos > 0)
-      .sort((a, b) => b.total - a.total);
+      .filter((l) => l.lancamentos > 0);
 
     // Só a troca fica de fora: aparelho nunca vira dinheiro na conta. O
     // fiado entra, e o próprio líquido resolve — zero enquanto está em

@@ -493,6 +493,9 @@ model SalePayment {
   settledById   String?
   /// Bandeira, número da maquininha, quem transferiu…
   notes         String?
+  /// Para onde o dinheiro foi: qual conta de Pix, por exemplo. Guardado
+  /// como texto para o histórico sobreviver a uma conta encerrada.
+  destino       String?
 
   saleId String
   sale   Sale   @relation(fields: [saleId], references: [id], onDelete: Cascade)

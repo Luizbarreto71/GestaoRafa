@@ -118,7 +118,7 @@ export function App() {
         <Route
           path="/estoque"
           element={
-            <Tela permissao="produtos.ver">
+            <Tela permissao="estoque.tela">
               <StockPage />
             </Tela>
           }

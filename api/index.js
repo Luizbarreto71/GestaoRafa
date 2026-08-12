@@ -1047,6 +1047,7 @@ var TODAS = [
   "produtos.ver",
   "produtos.editar",
   "estoque.ver",
+  "estoque.tela",
   "estoque.movimentar",
   "estoque.transferir",
   "retirada.aprovar",
@@ -1071,6 +1072,7 @@ var PERMISSOES = {
     "produtos.ver",
     "produtos.editar",
     "estoque.ver",
+    "estoque.tela",
     "estoque.movimentar",
     "estoque.transferir",
     "prevenda.criar",
@@ -1081,7 +1083,6 @@ var PERMISSOES = {
   // Recebe, confere e finaliza. Não cadastra nem altera preço.
   CAIXA: [
     "produtos.ver",
-    "estoque.ver",
     "prevenda.verTodas",
     "troca.criar",
     "pdv",
@@ -1090,7 +1091,13 @@ var PERMISSOES = {
     "caixa.fechar"
   ],
   // Só monta a intenção de venda. Nunca baixa estoque.
-  VENDEDOR: ["produtos.ver", "estoque.ver", "prevenda.criar", "troca.criar"]
+  VENDEDOR: [
+    "produtos.ver",
+    "estoque.ver",
+    "estoque.tela",
+    "prevenda.criar",
+    "troca.criar"
+  ]
 };
 var podeFazer = (perfil, permissao) => Boolean(perfil && PERMISSOES[perfil]?.includes(permissao));
 function exigir(permissao) {
@@ -3697,6 +3704,41 @@ rotasSistema.put(
     res.json({ unitId, name: unidade.name, message: `As vendas passam a sair da ${unidade.name}.` });
   })
 );
+var CHAVE_PIX = "contas_pix";
+async function contasDePix() {
+  const guardado = await db.setting.findUnique({ where: { key: CHAVE_PIX } });
+  if (!guardado) return [];
+  try {
+    const lista = JSON.parse(guardado.value);
+    return Array.isArray(lista) ? lista.filter((c) => typeof c === "string" && c.trim()) : [];
+  } catch {
+    return [];
+  }
+}
+rotasSistema.get(
+  "/contas-pix",
+  rota(async (_req, res) => {
+    res.json({ contas: await contasDePix() });
+  })
+);
+rotasSistema.put(
+  "/contas-pix",
+  somenteAdmin,
+  rota(async (req, res) => {
+    const { contas } = validar(
+      z6.object({ contas: z6.array(z6.string().trim().min(1).max(60)).max(12) }),
+      req.body
+    );
+    const limpas = [...new Set(contas.map((c) => c.trim()).filter(Boolean))];
+    await db.setting.upsert({
+      where: { key: CHAVE_PIX },
+      update: { value: JSON.stringify(limpas) },
+      create: { key: CHAVE_PIX, value: JSON.stringify(limpas) }
+    });
+    await registrarLog({ acao: "CONTAS_PIX", entidade: "Setting", id: CHAVE_PIX, req });
+    res.json({ contas: limpas, message: `${limpas.length} conta(s) de Pix salvas.` });
+  })
+);
 
 // server/relatorios.ts
 var rotasRelatorios = Router8();
@@ -4392,7 +4434,8 @@ rotasRelatorios.get(
         saleId: true,
         feePercent: true,
         netAmount: true,
-        settledAt: true
+        settledAt: true,
+        destino: true
       }
     });
     const tabela = await taxasDoCartao();
@@ -4404,8 +4447,18 @@ rotasRelatorios.get(
       return taxa != null ? numero(p.amount) * (1 - taxa / 100) : numero(p.amount);
     };
     const total = pagamentos.reduce((s, p) => s + numero(p.amount), 0);
-    const linhas = Object.keys(PAGAMENTO_LABEL).map((forma) => {
-      const daForma = pagamentos.filter((p) => p.method === forma);
+    const chaves = [
+      ...new Set(
+        pagamentos.map((p) => p.method === "PIX" && p.destino ? `PIX::${p.destino}` : p.method)
+      )
+    ];
+    const ordem = Object.keys(PAGAMENTO_LABEL);
+    chaves.sort((a, b) => ordem.indexOf(a.split("::")[0]) - ordem.indexOf(b.split("::")[0]));
+    const linhas = chaves.map((chave) => {
+      const [forma, conta] = chave.split("::");
+      const daForma = pagamentos.filter(
+        (p) => p.method === forma && (conta ? p.destino === conta : !(forma === "PIX" && p.destino))
+      );
       const soma = daForma.reduce((s, p) => s + numero(p.amount), 0);
       const vendas = new Set(daForma.map((p) => p.saleId)).size;
       const parceladas = daForma.filter((p) => p.installments > 1);
@@ -4419,7 +4472,7 @@ rotasRelatorios.get(
         0
       );
       return {
-        payment: PAGAMENTO_LABEL[forma],
+        payment: conta ?? PAGAMENTO_LABEL[forma],
         sales: vendas,
         lancamentos: daForma.length,
         total: soma,
@@ -4430,7 +4483,7 @@ rotasRelatorios.get(
         ticket: vendas > 0 ? soma / vendas : 0,
         parcelado: parceladas.length ? `${parceladas.length} em at\xE9 ${Math.max(...parceladas.map((p) => p.installments))}x` : "\u2014"
       };
-    }).filter((l) => l.lancamentos > 0).sort((a, b) => b.total - a.total);
+    }).filter((l) => l.lancamentos > 0);
     const emDinheiro = linhas.filter((l) => l.payment !== PAGAMENTO_LABEL.TROCA);
     await exportar(res, q.format, {
       title: "Vendas por Forma de Pagamento",
@@ -4644,13 +4697,21 @@ async function registrarVenda(dados) {
       // venda dizendo que dois valores iguais são diferentes.
       amount: new Prisma3.Decimal(p.amount.toFixed(2)),
       installments: p.installments ?? 1,
-      notes: null
+      notes: null,
+      /** Em qual conta caiu — o Pix da loja tem mais de uma. */
+      destino: p.destino?.trim() || null,
+      // O que a maquininha desconta fica gravado com a venda: a taxa
+      // muda com o tempo, e o relatório de amanhã não pode recalcular
+      // o passado com o preço de hoje.
+      feePercent: taxaDaLinha(tabela, p.method, p.installments ?? 1, p.feePercent),
+      netAmount: liquidoDaLinha(tabela, p.method, p.amount, p.installments ?? 1, p.feePercent)
     })) : aReceber.greaterThan(0) ? [
       {
         method: dados.paymentMethod,
         amount: aReceber,
         installments: dados.installments ?? 1,
         notes: null,
+        destino: null,
         feePercent: taxaDaLinha(tabela, dados.paymentMethod, dados.installments ?? 1, null),
         netAmount: liquidoDaLinha(
           tabela,
@@ -4674,6 +4735,7 @@ async function registrarVenda(dados) {
         amount: daTroca,
         installments: 1,
         notes: null,
+        destino: null,
         feePercent: null,
         netAmount: daTroca
       }
@@ -4787,8 +4849,9 @@ async function resumoDoTurno(where) {
     // Soma pelo rateio, não pela venda: com pagamento dividido, jogar o
     // total inteiro na forma "principal" faria a gaveta não bater com o
     // extrato da maquininha no fim do dia.
+    // Por conta também: o fechamento precisa bater com cada extrato.
     db.salePayment.groupBy({
-      by: ["method"],
+      by: ["method", "destino"],
       where: { sale: where },
       _sum: { amount: true },
       _count: true
@@ -4811,14 +4874,24 @@ async function resumoDoTurno(where) {
      * não existe.
      */
     divergencia: Math.abs(total - somaDasFormas) < 0.01 ? 0 : total - somaDasFormas,
-    porPagamento: Object.keys(PAGAMENTO_LABEL).map((forma) => {
-      const linha = porPagamento.find((p) => p.method === forma);
-      return {
-        forma,
-        rotulo: PAGAMENTO_LABEL[forma],
-        quantidade: linha?._count ?? 0,
-        total: numero(linha?._sum.amount)
-      };
+    porPagamento: Object.keys(PAGAMENTO_LABEL).flatMap((forma) => {
+      const linhas = porPagamento.filter((p) => p.method === forma);
+      if (forma === "PIX" && linhas.some((l) => l.destino)) {
+        return linhas.map((l) => ({
+          forma,
+          rotulo: l.destino ?? PAGAMENTO_LABEL[forma],
+          quantidade: l._count,
+          total: numero(l._sum.amount)
+        }));
+      }
+      return [
+        {
+          forma,
+          rotulo: PAGAMENTO_LABEL[forma],
+          quantidade: linhas.reduce((s, l) => s + l._count, 0),
+          total: linhas.reduce((s, l) => s + numero(l._sum.amount), 0)
+        }
+      ];
     })
   };
 }
@@ -5257,7 +5330,9 @@ var finalizarSchema = z10.object({
       installments: z10.coerce.number().int().min(1).max(24).default(1),
       notes: z10.string().trim().max(120).optional().nullable(),
       /** Taxa da maquininha, em %. Guardada com a venda. */
-      feePercent: z10.coerce.number().min(0).max(99.99).optional().nullable()
+      feePercent: z10.coerce.number().min(0).max(99.99).optional().nullable(),
+      /** Em qual conta caiu — usado no Pix, que tem mais de uma. */
+      destino: z10.string().trim().max(60).optional().nullable()
     })
   ).max(6, "No m\xE1ximo 6 formas na mesma venda").optional(),
   notes: z10.string().trim().max(1e3).optional().nullable(),
@@ -6199,7 +6274,9 @@ var vendaSchema = z13.object({
       installments: z13.coerce.number().int().min(1).max(24).default(1),
       notes: z13.string().trim().max(120).optional().nullable(),
       /** Taxa da maquininha, em %. Guardada com a venda. */
-      feePercent: z13.coerce.number().min(0).max(99.99).optional().nullable()
+      feePercent: z13.coerce.number().min(0).max(99.99).optional().nullable(),
+      /** Em qual conta caiu — usado no Pix, que tem mais de uma. */
+      destino: z13.string().trim().max(60).optional().nullable()
     })
   ).max(6, "No m\xE1ximo 6 formas na mesma venda").optional(),
   /**

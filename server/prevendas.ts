@@ -334,6 +334,8 @@ const finalizarSchema = z.object({
         notes: z.string().trim().max(120).optional().nullable(),
         /** Taxa da maquininha, em %. Guardada com a venda. */
         feePercent: z.coerce.number().min(0).max(99.99).optional().nullable(),
+        /** Em qual conta caiu — usado no Pix, que tem mais de uma. */
+        destino: z.string().trim().max(60).optional().nullable(),
       }),
     )
     .max(6, 'No máximo 6 formas na mesma venda')

@@ -546,3 +546,17 @@ export const useUnidadeDeVenda = () =>
     },
     staleTime: 10 * 60_000,
   });
+
+/** As contas de Pix que a loja usa para receber. */
+export const useContasDePix = () => {
+  const { data } = useQuery({
+    queryKey: ['contas-pix'],
+    queryFn: async () => {
+      const { data } = await api.get<{ contas: string[] }>('/settings/contas-pix');
+      return data.contas;
+    },
+    staleTime: 10 * 60_000,
+  });
+
+  return data ?? [];
+};

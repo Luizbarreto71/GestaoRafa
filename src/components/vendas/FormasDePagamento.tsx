@@ -2,6 +2,7 @@ import { CalculadoraDeCartao, useTaxasDeCartao } from '@/components/vendas/Calcu
 import { Input, Select } from '@/components/ui/Field';
 import { cn } from '@/lib/cn';
 import { formatCurrency } from '@/lib/format';
+import { useContasDePix } from '@/hooks/queries';
 import { aceitaParcelas, FORMAS, infoDaForma } from '@/lib/pagamentos';
 import { Check, HandCoins, Plus, Split, Trash2 } from 'lucide-react';
 
@@ -10,6 +11,8 @@ export type FormaDePagamento = {
   amount: string;
   installments: string;
   notes: string;
+  /** Conta que recebeu, quando a forma tem mais de uma. */
+  destino?: string;
   /** Taxa da maquininha desta linha, em %. Vem da calculadora. */
   feePercent?: number | null;
 };
@@ -38,17 +41,35 @@ const opcoesDeParcela = (valor: number) =>
  * Botões em vez de lista suspensa: no balcão a mão vai direto ao Pix sem
  * abrir menu, e o ícone é reconhecido antes de a palavra ser lida.
  */
-function EscolhaDaForma({ valor, aoEscolher }: { valor: string; aoEscolher: (v: string) => void }) {
+function EscolhaDaForma({
+  valor,
+  destino,
+  aoEscolher,
+  contasPix,
+}: {
+  valor: string;
+  destino: string;
+  aoEscolher: (forma: string, destino: string) => void;
+  contasPix: string[];
+}) {
+  // Uma conta de Pix por botão: a caixa escolhe forma e conta num toque só,
+  // em vez de escolher Pix e depois procurar de quem é a chave.
+  const botoes = FORMAS.flatMap((forma) =>
+    forma.valor === 'PIX' && contasPix.length
+      ? contasPix.map((conta) => ({ ...forma, rotulo: conta, destino: conta }))
+      : [{ ...forma, destino: '' }],
+  );
+
   return (
-    <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-7">
-      {FORMAS.map((forma) => {
-        const escolhida = valor === forma.valor;
+    <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-5">
+      {botoes.map((forma) => {
+        const escolhida = valor === forma.valor && destino === forma.destino;
 
         return (
           <button
-            key={forma.valor}
+            key={forma.valor + forma.destino}
             type="button"
-            onClick={() => aoEscolher(forma.valor)}
+            onClick={() => aoEscolher(forma.valor, forma.destino)}
             title={forma.rotulo}
             className={cn(
               'relative flex flex-col items-center justify-center gap-1.5 rounded-xl border-2 px-2 py-3 transition',
@@ -96,6 +117,8 @@ export function FormasDePagamento({
   aoMudarFormas,
   formaUnica,
   aoMudarFormaUnica,
+  destino = '',
+  aoMudarDestino,
   parcelas,
   aoMudarParcelas,
   entrada = '',
@@ -110,6 +133,9 @@ export function FormasDePagamento({
   aoMudarFormas: (f: FormaDePagamento[]) => void;
   formaUnica: string;
   aoMudarFormaUnica: (v: string) => void;
+  /** Conta que recebeu, quando a forma tem mais de uma. */
+  destino?: string;
+  aoMudarDestino?: (v: string) => void;
   parcelas: string;
   aoMudarParcelas: (v: string) => void;
   /** Quanto o cliente adianta quando o resto fica em aberto. */
@@ -127,8 +153,11 @@ export function FormasDePagamento({
   const alterar = (i: number, mudanca: Partial<FormaDePagamento>) =>
     aoMudarFormas(formas.map((f, indice) => (indice === i ? { ...f, ...mudanca } : f)));
 
-  function escolher(valor: string) {
+  const contasPix = useContasDePix();
+
+  function escolher(valor: string, conta: string) {
     aoMudarFormaUnica(valor);
+    aoMudarDestino?.(conta);
     // Forma sem parcelamento não pode carregar "6x" de uma escolha anterior.
     if (!aceitaParcelas(valor)) aoMudarParcelas('1');
   }
@@ -151,7 +180,12 @@ export function FormasDePagamento({
   if (!dividido) {
     return (
       <div className="space-y-3">
-        <EscolhaDaForma valor={formaUnica} aoEscolher={escolher} />
+        <EscolhaDaForma
+          valor={formaUnica}
+          destino={destino}
+          aoEscolher={escolher}
+          contasPix={contasPix}
+        />
 
         {/* Parcelas vive dentro da calculadora: no crédito é lá que ela
             muda a taxa, e dois campos iguais na tela geram dúvida. */}
@@ -246,6 +280,19 @@ export function FormasDePagamento({
                   <Trash2 className="h-4 w-4" />
                 </button>
               </div>
+
+              {f.method === 'PIX' && contasPix.length > 0 && (
+                <div className="mt-2 pl-7">
+                  <Select
+                    label="Caiu em qual conta"
+                    value={f.destino ?? ''}
+                    onChange={(e) => alterar(i, { destino: e.target.value })}
+                    options={contasPix.map((c) => ({ value: c, label: c }))}
+                    placeholder="Escolha a conta"
+                    wrapperClassName="max-w-[17rem]"
+                  />
+                </div>
+              )}
 
               {aceitaParcelas(f.method) && (
                 <div className="mt-2 pl-7">
@@ -426,6 +473,7 @@ export function paraApi(dividido: boolean, formas: FormaDePagamento[]) {
       amount: Number(f.amount),
       installments: Number(f.installments) || 1,
       notes: f.notes.trim() || null,
+      destino: f.destino?.trim() || null,
       // Só o crédito tem taxa; nas outras formas o líquido é o próprio valor.
       feePercent: f.method === 'CREDITO' ? (f.feePercent ?? null) : null,
     }));

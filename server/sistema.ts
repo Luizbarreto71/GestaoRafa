@@ -557,3 +557,56 @@ rotasSistema.put(
     res.json({ unitId, name: unidade.name, message: `As vendas passam a sair da ${unidade.name}.` });
   }),
 );
+
+// ---------------------------------------------------------- Contas de Pix
+
+const CHAVE_PIX = 'contas_pix';
+
+/**
+ * As contas de Pix que recebem no balcão.
+ *
+ * A loja tem mais de uma, e saber em qual caiu é o que permite conferir
+ * cada extrato no fim do dia. Ficam em configuração porque nome de conta
+ * muda — e nome de pessoa dentro do banco de dados é dívida garantida.
+ */
+export async function contasDePix(): Promise<string[]> {
+  const guardado = await db.setting.findUnique({ where: { key: CHAVE_PIX } });
+  if (!guardado) return [];
+
+  try {
+    const lista = JSON.parse(guardado.value);
+    return Array.isArray(lista) ? lista.filter((c) => typeof c === 'string' && c.trim()) : [];
+  } catch {
+    return [];
+  }
+}
+
+rotasSistema.get(
+  '/contas-pix',
+  rota(async (_req, res) => {
+    res.json({ contas: await contasDePix() });
+  }),
+);
+
+rotasSistema.put(
+  '/contas-pix',
+  somenteAdmin,
+  rota(async (req, res) => {
+    const { contas } = validar(
+      z.object({ contas: z.array(z.string().trim().min(1).max(60)).max(12) }),
+      req.body,
+    );
+
+    // Sem repetidas: duas contas com o mesmo nome não separam nada.
+    const limpas = [...new Set(contas.map((c) => c.trim()).filter(Boolean))];
+
+    await db.setting.upsert({
+      where: { key: CHAVE_PIX },
+      update: { value: JSON.stringify(limpas) },
+      create: { key: CHAVE_PIX, value: JSON.stringify(limpas) },
+    });
+
+    await registrarLog({ acao: 'CONTAS_PIX', entidade: 'Setting', id: CHAVE_PIX, req });
+    res.json({ contas: limpas, message: `${limpas.length} conta(s) de Pix salvas.` });
+  }),
+);

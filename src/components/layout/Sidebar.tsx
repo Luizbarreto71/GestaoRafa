@@ -35,7 +35,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: '/pre-vendas', label: 'Pré-vendas', icon: ShoppingBag, permissao: 'prevenda.criar' },
   { to: '/em-aberto', label: 'Valores em aberto', icon: HandCoins, permissao: 'prevenda.verTodas' },
   { to: '/trocas', label: 'Trocas', icon: Repeat2, permissao: 'troca.criar' },
-  { to: '/estoque', label: 'Estoque', icon: Package, permissao: 'produtos.ver' },
+  { to: '/estoque', label: 'Estoque', icon: Package, permissao: 'estoque.tela' },
   { to: '/vendas', label: 'Vendas', icon: ShoppingCart, permissao: 'prevenda.verTodas' },
   { to: '/movimentacao', label: 'Movimentação', icon: PackagePlus, permissao: 'estoque.movimentar' },
   { to: '/movimentacoes', label: 'Histórico', icon: History, permissao: 'estoque.ver' },

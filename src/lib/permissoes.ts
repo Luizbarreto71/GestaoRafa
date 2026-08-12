@@ -12,6 +12,7 @@ export type Permissao =
   | 'produtos.ver'
   | 'produtos.editar'
   | 'estoque.ver'
+  | 'estoque.tela'
   | 'estoque.movimentar'
   | 'estoque.transferir'
   | 'retirada.aprovar'
@@ -33,6 +34,7 @@ const TODAS: Permissao[] = [
   'produtos.ver',
   'produtos.editar',
   'estoque.ver',
+  'estoque.tela',
   'estoque.movimentar',
   'estoque.transferir',
   'retirada.aprovar',
@@ -57,6 +59,7 @@ export const PERMISSOES: Record<UserRole, Permissao[]> = {
     'produtos.ver',
     'produtos.editar',
     'estoque.ver',
+    'estoque.tela',
     'estoque.movimentar',
     'estoque.transferir',
     'prevenda.criar',
@@ -66,7 +69,6 @@ export const PERMISSOES: Record<UserRole, Permissao[]> = {
   ],
   CAIXA: [
     'produtos.ver',
-    'estoque.ver',
     'prevenda.verTodas',
     'troca.criar',
     'pdv',
@@ -74,7 +76,8 @@ export const PERMISSOES: Record<UserRole, Permissao[]> = {
     'venda.cancelar',
     'caixa.fechar',
   ],
-  VENDEDOR: ['produtos.ver', 'estoque.ver', 'prevenda.criar', 'troca.criar'],
+  VENDEDOR: ['produtos.ver', 'estoque.ver',
+    'estoque.tela', 'prevenda.criar', 'troca.criar'],
 };
 
 export const pode = (papel: UserRole | undefined, permissao: Permissao): boolean =>

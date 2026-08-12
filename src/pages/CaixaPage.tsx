@@ -26,6 +26,7 @@ import {
   useAtenderPreVenda,
   useCaixaAtual,
   useCancelarPreVenda,
+  useContasDePix,
   useCreateSale,
   useFinalizarPreVenda,
   usePreVenda,
@@ -594,6 +595,7 @@ function VendaDireta() {
   const criar = useCreateSale();
   const { data: usuarios } = useUsers({ pageSize: 100 }, true);
   const { data: unidadeDeVenda } = useUnidadeDeVenda();
+  const contasPix = useContasDePix();
 
   const [itens, setItens] = useState<ItemVenda[]>([]);
   const [recibo, setRecibo] = useState<{ id: string; code: string; totalAmount: number } | null>(null);
@@ -607,6 +609,7 @@ function VendaDireta() {
     customerDocument: '',
     unitId: '',
     paymentMethod: 'PIX',
+    destino: '',
     installments: '1',
     entrada: '',
     formaDaEntrada: 'PIX',
@@ -669,6 +672,15 @@ function VendaDireta() {
       }
     }
 
+    // Pix sem conta não dá para conferir no extrato de ninguém.
+    if (!dividido && form.paymentMethod === 'PIX' && contasPix.length > 0 && !form.destino) {
+      return toast.warning('Escolha a conta do Pix', 'Toque em PIX RAFA, PIX CLARA ou PIX DIEGO TELES.');
+    }
+
+    if (dividido && formas.some((f) => f.method === 'PIX' && contasPix.length > 0 && !f.destino)) {
+      return toast.warning('Falta a conta de um dos Pix', 'Escolha em qual conta cada Pix caiu.');
+    }
+
     if (form.paymentMethod === 'EM_ABERTO' && !dividido) {
       const pago = Number(form.entrada) || 0;
       if (pago > total) {
@@ -701,7 +713,21 @@ function VendaDireta() {
         unitId: unidade,
         paymentMethod: form.paymentMethod,
         installments: Number(form.installments) || 1,
-        payments: dividido ? paraApi(true, formas) : pagamentoEmAberto(),
+        payments: dividido
+          ? paraApi(true, formas)
+          : (pagamentoEmAberto() ??
+            // Só para carregar a conta que recebeu; sem destino a venda
+            // continua sem rateio, como antes.
+            (form.destino
+              ? [
+                  {
+                    method: form.paymentMethod,
+                    amount: total,
+                    installments: Number(form.installments) || 1,
+                    destino: form.destino,
+                  },
+                ]
+              : undefined)),
         tradeIn: trocaParaApi(comTroca, troca),
         customerName: form.customerName.trim() || null,
         customerPhone: form.customerPhone.trim() || null,
@@ -721,7 +747,7 @@ function VendaDireta() {
       setForm((f) => ({ ...f, customerName: '', customerPhone: '', customerDocument: '', notes: '' }));
       setDividido(false);
       setFormas([]);
-      setForm((f) => ({ ...f, paymentMethod: 'PIX', entrada: '', formaDaEntrada: 'PIX' }));
+      setForm((f) => ({ ...f, paymentMethod: 'PIX', destino: '', entrada: '', formaDaEntrada: 'PIX' }));
       setComTroca(false);
       setTroca(trocaVazia());
     } catch (erro) {
@@ -765,6 +791,8 @@ function VendaDireta() {
             aoMudarFormas={setFormas}
             formaUnica={form.paymentMethod}
             aoMudarFormaUnica={(v) => setForm((f) => ({ ...f, paymentMethod: v }))}
+            destino={form.destino}
+            aoMudarDestino={(v) => setForm((f) => ({ ...f, destino: v }))}
             parcelas={form.installments}
             aoMudarParcelas={(v) => setForm((f) => ({ ...f, installments: v }))}
             entrada={form.entrada}

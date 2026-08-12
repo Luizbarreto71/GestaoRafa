@@ -35,8 +35,9 @@ async function resumoDoTurno(where: Prisma.SaleWhereInput) {
     // Soma pelo rateio, não pela venda: com pagamento dividido, jogar o
     // total inteiro na forma "principal" faria a gaveta não bater com o
     // extrato da maquininha no fim do dia.
+    // Por conta também: o fechamento precisa bater com cada extrato.
     db.salePayment.groupBy({
-      by: ['method'],
+      by: ['method', 'destino'],
       where: { sale: where },
       _sum: { amount: true },
       _count: true,
@@ -61,14 +62,27 @@ async function resumoDoTurno(where: Prisma.SaleWhereInput) {
      * não existe.
      */
     divergencia: Math.abs(total - somaDasFormas) < 0.01 ? 0 : total - somaDasFormas,
-    porPagamento: (Object.keys(PAGAMENTO_LABEL) as PaymentMethod[]).map((forma) => {
-      const linha = porPagamento.find((p) => p.method === forma);
-      return {
-        forma,
-        rotulo: PAGAMENTO_LABEL[forma],
-        quantidade: linha?._count ?? 0,
-        total: numero(linha?._sum.amount),
-      };
+    porPagamento: (Object.keys(PAGAMENTO_LABEL) as PaymentMethod[]).flatMap((forma) => {
+      const linhas = porPagamento.filter((p) => p.method === forma);
+
+      // Pix com conta vira uma linha por conta; o resto continua junto.
+      if (forma === 'PIX' && linhas.some((l) => l.destino)) {
+        return linhas.map((l) => ({
+          forma,
+          rotulo: l.destino ?? PAGAMENTO_LABEL[forma],
+          quantidade: l._count,
+          total: numero(l._sum.amount),
+        }));
+      }
+
+      return [
+        {
+          forma,
+          rotulo: PAGAMENTO_LABEL[forma],
+          quantidade: linhas.reduce((s, l) => s + l._count, 0),
+          total: linhas.reduce((s, l) => s + numero(l._sum.amount), 0),
+        },
+      ];
     }),
   };
 }
