@@ -24,6 +24,7 @@ import {
 } from '@/hooks/queries';
 import { useDebounce } from '@/hooks/useDebounce';
 import { downloadFile } from '@/lib/api';
+import { nomeCurtoDaCategoria } from '@/lib/categorias';
 import { cn } from '@/lib/cn';
 import { formatCurrency, STATUS_OPTIONS } from '@/lib/format';
 import type { Category, Product } from '@/types';
@@ -257,30 +258,19 @@ export default function StockPage() {
       key: 'category',
       header: 'Categoria',
       sortKey: 'category.name',
-      render: (product) => {
-        // "Celulares › Vitrine": a mãe em cinza, a subcategoria em
-        // destaque, que é o que a pessoa procura na estante.
-        const [mae, sub] = partesDaCategoria(product);
-
-        return (
-          <span className="inline-flex items-center gap-1.5 text-sm">
-            <span
-              className="h-2 w-2 shrink-0 rounded-full"
-              style={{ backgroundColor: product.category?.color ?? '#64748B' }}
-            />
-            <span className="min-w-0">
-              {sub ? (
-                <>
-                  <span className="block text-[11px] text-slate-400">{mae}</span>
-                  <span className="block font-semibold text-navy-900 dark:text-slate-200">{sub}</span>
-                </>
-              ) : (
-                <span className="text-navy-900 dark:text-slate-200">{mae}</span>
-              )}
-            </span>
+      render: (product) => (
+        // Só a ponta do caminho: repetir "Celulares" em 85 linhas não
+        // informa nada e rouba a atenção do que muda de linha para linha.
+        <span className="inline-flex items-center gap-1.5 text-sm">
+          <span
+            className="h-2 w-2 shrink-0 rounded-full"
+            style={{ backgroundColor: product.category?.color ?? '#64748B' }}
+          />
+          <span className="truncate text-navy-900 dark:text-slate-200">
+            {nomeCurtoDaCategoria(product.category?.name)}
           </span>
-        );
-      },
+        </span>
+      ),
     },
     {
       key: 'model',
@@ -663,7 +653,7 @@ export default function StockPage() {
                 </div>
 
                 <p className="truncate text-xs text-slate-500 dark:text-slate-400">
-                  {[product.category?.name, product.model].filter(Boolean).join(' · ')}
+                  {[nomeCurtoDaCategoria(product.category?.name), product.model].filter(Boolean).join(' · ')}
                 </p>
                 {!unidadeId && product.stock?.length > 0 && (
                   <p className="truncate text-xs text-slate-500 dark:text-slate-400">
@@ -827,15 +817,3 @@ export default function StockPage() {
  * Qualquer coisa "lacrada" (inclusive "Xiaomi Lacrado") entra em verde:
  * o que importa na estante é distinguir lacrado de vitrine e de seminovo.
  */
-/**
- * Separa "Celulares › Vitrine" em mãe e subcategoria.
- *
- * O caminho vem pronto do servidor; aqui só se decide o que fica grande e
- * o que fica pequeno.
- */
-function partesDaCategoria(product: Product): [string, string | null] {
-  const nome = product.category?.name ?? '—';
-  const partes = nome.split('›').map((p) => p.trim());
-  return partes.length > 1 ? [partes[0], partes.slice(1).join(' › ')] : [nome, null];
-}
-
