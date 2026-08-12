@@ -3185,6 +3185,146 @@ function compararProdutos(a, b) {
   return capacidadeEmGB(a.name, a.capacity) - capacidadeEmGB(b.name, b.capacity);
 }
 
+// shared/lista-atacado.ts
+var EMOJI_PADRAO = "\u{1F4E6}";
+var POR_NOME = [
+  { procura: /fone|headphone|airpod|earbud|buds/i, emoji: "\u{1F3A7}" },
+  { procura: /watch|rel[oó]gio|smartwatch/i, emoji: "\u231A" },
+  { procura: /jbl|boombox|partybox|partbox|caixa de som|som\b/i, emoji: "\u{1F509}" },
+  { procura: /note ?book|macbook|laptop/i, emoji: "\u{1F4BB}" },
+  { procura: /v[ií]deo ?game|playstation|xbox|nintendo|console/i, emoji: "\u{1F3AE}" },
+  { procura: /\btvs?\b|televis/i, emoji: "\u{1F4FA}" },
+  { procura: /celular|iphone|smartphone|xiaomi|redmi|poco|realme|samsung|motorola|aparelho/i, emoji: "\u{1F4F1}" }
+];
+function emojiSugerido(nomeDaCategoria) {
+  const achou = POR_NOME.find((r) => r.procura.test(nomeDaCategoria));
+  return achou?.emoji ?? EMOJI_PADRAO;
+}
+var RISCO_TOPO = "\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014";
+var RISCO_CATEGORIA = "\u2014\u2014\u2013\u2014\u2014\u2013\u2014\u2014\u2013\u2014\u2014\u2013";
+var CORES = [
+  "PRETO",
+  "PRETA",
+  "BRANCO",
+  "BRANCA",
+  "AZUL",
+  "VERDE",
+  "VERMELHO",
+  "VERMELHA",
+  "ROXO",
+  "ROXA",
+  "ROSA",
+  "AMARELO",
+  "AMARELA",
+  "LARANJA",
+  "DOURADO",
+  "DOURADA",
+  "PRATA",
+  "PRATEADO",
+  "CINZA",
+  "GRAFITE",
+  "TITANIO",
+  "BEGE",
+  "LILAS",
+  "CIANO",
+  "MARROM",
+  "CORAL",
+  "MIDNIGHT",
+  "STARLIGHT",
+  "ESCURO",
+  "CLARO",
+  "FOSCO"
+];
+var semAcento = (t) => t.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+function nomeParaLista(bruto) {
+  let nome = bruto.trim().replace(/\s+/g, " ");
+  nome = nome.replace(/(\d+)\s*(gb|tb)\b/gi, (_, n, u) => `${n}${u.toUpperCase()}`);
+  const partes = nome.split(" ");
+  while (partes.length > 1 && CORES.includes(semAcento(partes[partes.length - 1]))) {
+    partes.pop();
+  }
+  return partes.join(" ");
+}
+function familiaDoProduto(nome) {
+  const partes = nomeParaLista(nome).split(" ").filter((t) => !/^\d+(GB|TB)$/i.test(t) && !/^\d+\s*\/\s*\d+$/.test(t));
+  if (partes.length >= 3 && /^\d+$/.test(partes[partes.length - 1])) partes.pop();
+  return semAcento(partes.join(" "));
+}
+function precoDaLista(valor) {
+  const numero3 = valor.toLocaleString("pt-BR", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  });
+  return `R$ ${numero3}`;
+}
+function saudacao(hora) {
+  if (hora < 12) return "BOM DIA";
+  if (hora < 18) return "BOA TARDE";
+  return "BOA NOITE";
+}
+
+// server/lista-atacado.ts
+function agoraNaLoja(momento) {
+  const data = momento.toLocaleDateString("pt-BR", {
+    timeZone: FUSO_DA_LOJA,
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric"
+  });
+  const hora = Number(
+    momento.toLocaleString("pt-BR", { timeZone: FUSO_DA_LOJA, hour: "2-digit", hour12: false })
+  );
+  return { data, hora: Number.isFinite(hora) ? hora : 12 };
+}
+function montarListaDeAtacado(produtos, emojis, momento = /* @__PURE__ */ new Date()) {
+  const { data, hora } = agoraNaLoja(momento);
+  const partes = [RISCO_TOPO, `\u{1F4C5} ${saudacao(hora)} - ${data} \u{1F4C5}`, RISCO_TOPO, ""];
+  const categorias = /* @__PURE__ */ new Map();
+  for (const p of produtos) {
+    const bloco = categorias.get(p.categoriaId);
+    if (bloco) bloco.itens.push(p);
+    else categorias.set(p.categoriaId, { nome: p.categoriaNome, ordem: p.categoriaOrdem, itens: [p] });
+  }
+  const ordenadas = [...categorias.entries()].sort(
+    ([, a], [, b]) => a.ordem - b.ordem || a.nome.localeCompare(b.nome, "pt-BR")
+  );
+  let totalDeLinhas = 0;
+  let juntados = 0;
+  for (const [categoriaId, bloco] of ordenadas) {
+    const emoji = emojis[categoriaId]?.trim() || emojiSugerido(bloco.nome);
+    partes.push(RISCO_CATEGORIA, `${emoji} ${bloco.nome}`, RISCO_CATEGORIA, "");
+    const linhas = [];
+    for (const p of [...bloco.itens].sort(compararProdutos)) {
+      const nome = nomeParaLista(p.name);
+      const repetida = linhas.some((l) => l.nome === nome && l.preco === p.atacado);
+      if (repetida) {
+        juntados += 1;
+        continue;
+      }
+      linhas.push({ nome, preco: p.atacado, familia: familiaDoProduto(p.name) });
+    }
+    linhas.forEach((linha, i) => {
+      if (i > 0 && linha.familia !== linhas[i - 1].familia) partes.push("");
+      partes.push(`${emoji} - ${linha.nome} - ${precoDaLista(linha.preco)};`);
+    });
+    partes.push("");
+    totalDeLinhas += linhas.length;
+  }
+  while (partes.length && partes[partes.length - 1] === "") partes.pop();
+  return {
+    texto: partes.join("\n"),
+    resumo: { linhas: totalDeLinhas, categorias: ordenadas.length, juntados }
+  };
+}
+
+// server/sistema.ts
+import bcrypt3 from "bcryptjs";
+import ExcelJS2 from "exceljs";
+import { Router as Router7 } from "express";
+import multer from "multer";
+import { Readable } from "stream";
+import { z as z6 } from "zod";
+
 // shared/taxas.ts
 var TAXAS_PADRAO = [
   { parcelas: 1, padrao: 5.5, elo: 6.5 },
@@ -3230,14 +3370,6 @@ function normalizarTaxas(bruto) {
   return limpas.length ? limpas : TAXAS_PADRAO;
 }
 
-// server/sistema.ts
-import bcrypt3 from "bcryptjs";
-import ExcelJS2 from "exceljs";
-import { Router as Router7 } from "express";
-import multer from "multer";
-import { Readable } from "stream";
-import { z as z6 } from "zod";
-
 // shared/loja.ts
 var LOJA_PADRAO = {
   nome: "Rafa Multimarcas",
@@ -3278,7 +3410,8 @@ var LEITURA_LIBERADA = /* @__PURE__ */ new Set([
   "/loja",
   "/unidade-de-venda",
   "/contas-pix",
-  "/chave-de-acesso"
+  "/chave-de-acesso",
+  "/emojis-categoria"
 ]);
 rotasSistema.use(autenticar, (req, res, next) => {
   if (req.method === "GET" && LEITURA_LIBERADA.has(req.path)) return next();
@@ -3427,7 +3560,7 @@ var DE_PARA = {
   observa\u00E7\u00F5es: "notes",
   obs: "notes"
 };
-var semAcento = (v) => v.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
+var semAcento2 = (v) => v.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
 function paraNumero(v) {
   if (v === null || v === void 0 || v === "") return 0;
   if (typeof v === "number") return v;
@@ -3508,9 +3641,9 @@ rotasSistema.post(
       db.category.findMany(),
       db.supplier.findMany()
     ]);
-    const porCategoria = new Map(categorias.map((c) => [semAcento(c.name), c]));
-    categorias.forEach((c) => porCategoria.set(semAcento(c.slug), c));
-    const porFornecedor = new Map(fornecedores.map((f) => [semAcento(f.name), f]));
+    const porCategoria = new Map(categorias.map((c) => [semAcento2(c.name), c]));
+    categorias.forEach((c) => porCategoria.set(semAcento2(c.slug), c));
+    const porFornecedor = new Map(fornecedores.map((f) => [semAcento2(f.name), f]));
     const unidadeDaImportacao = req.usuario?.unidadeId ?? (await db.unit.findFirst({ where: { active: true }, orderBy: [{ type: "asc" }, { name: "asc" }] }))?.id ?? null;
     const erros = [];
     let importados = 0;
@@ -3523,7 +3656,7 @@ rotasSistema.post(
       });
       if (!dados.name) continue;
       processadas += 1;
-      const categoria = porCategoria.get(semAcento(dados.category ?? ""));
+      const categoria = porCategoria.get(semAcento2(dados.category ?? ""));
       if (!categoria) {
         erros.push({
           row: n,
@@ -3533,7 +3666,7 @@ rotasSistema.post(
       }
       let fornecedorId = null;
       if (dados.supplier) {
-        const chave = semAcento(dados.supplier);
+        const chave = semAcento2(dados.supplier);
         let fornecedor = porFornecedor.get(chave);
         if (!fornecedor) {
           fornecedor = await db.supplier.create({ data: { name: dados.supplier.trim() } });
@@ -3792,6 +3925,50 @@ rotasSistema.delete(
     await db.setting.deleteMany({ where: { key: CHAVE_ACESSO } });
     await registrarLog({ acao: "CHAVE_DE_ACESSO_REMOVIDA", entidade: "Setting", id: CHAVE_ACESSO, req });
     res.json({ definida: false, message: "Chave removida. Vender abaixo do atacado fica bloqueado." });
+  })
+);
+var CHAVE_EMOJIS = "emojis_categoria";
+async function emojisDeCategoria() {
+  const guardado = await db.setting.findUnique({ where: { key: CHAVE_EMOJIS } });
+  if (!guardado) return {};
+  try {
+    const mapa = JSON.parse(guardado.value);
+    if (!mapa || typeof mapa !== "object") return {};
+    return Object.fromEntries(
+      Object.entries(mapa).filter(
+        ([, v]) => typeof v === "string" && v.trim()
+      )
+    );
+  } catch {
+    return {};
+  }
+}
+rotasSistema.get(
+  "/emojis-categoria",
+  rota(async (_req, res) => {
+    res.json({ emojis: await emojisDeCategoria() });
+  })
+);
+rotasSistema.put(
+  "/emojis-categoria",
+  somenteAdmin,
+  rota(async (req, res) => {
+    const { emojis } = validar(
+      z6.object({
+        // Curto de propósito: aqui cabe um emoji, não um rótulo. Dois ou
+        // três símbolos ainda passam — há emoji que ocupa vários caracteres.
+        emojis: z6.record(z6.string().uuid(), z6.string().trim().max(8))
+      }),
+      req.body
+    );
+    const limpos = Object.fromEntries(Object.entries(emojis).filter(([, v]) => v.trim()));
+    await db.setting.upsert({
+      where: { key: CHAVE_EMOJIS },
+      update: { value: JSON.stringify(limpos) },
+      create: { key: CHAVE_EMOJIS, value: JSON.stringify(limpos) }
+    });
+    await registrarLog({ acao: "EMOJIS_CATEGORIA", entidade: "Setting", id: CHAVE_EMOJIS, req });
+    res.json({ emojis: limpos, message: "Emojis da lista salvos." });
   })
 );
 
@@ -4352,123 +4529,44 @@ rotasRelatorios.get(
     });
   })
 );
-var chaveDaMarca = (marca) => (marca ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toUpperCase();
-function ehErroDeDigitacao(a, b) {
-  if (a === b) return false;
-  if (Math.min(a.length, b.length) < 4) return false;
-  if (Math.abs(a.length - b.length) > 1) return false;
-  let anterior = Array.from({ length: b.length + 1 }, (_, i) => i);
-  for (let i = 1; i <= a.length; i += 1) {
-    const atual = [i];
-    for (let j = 1; j <= b.length; j += 1) {
-      atual[j] = Math.min(
-        anterior[j] + 1,
-        atual[j - 1] + 1,
-        anterior[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
-      );
-    }
-    if (Math.min(...atual) > 1) return false;
-    anterior = atual;
-  }
-  return anterior[b.length] <= 1;
-}
 rotasRelatorios.get(
   "/whatsapp-list",
   rota(async (req, res) => {
     const q = validar(
       z7.object({
-        /** De onde sai o preço mostrado. */
-        preco: z7.enum(["atacado", "varejo", "custo"]).default("atacado"),
-        /** Acréscimo, quando o preço parte do custo. */
-        markup: z7.coerce.number().min(0).max(999999).default(100),
         categoryId: z7.string().uuid().optional(),
         unitId: z7.string().uuid().optional(),
-        agruparPor: z7.enum(["marca", "categoria"]).default("marca"),
-        mostrarQuantidade: z7.enum(["true", "false"]).default("true"),
-        mostrarCondicao: z7.enum(["true", "false"]).default("true"),
-        titulo: z7.string().trim().max(60).optional()
+        /** Sem estoque some da lista — é o padrão: não se oferece o que acabou. */
+        somenteDisponiveis: z7.enum(["true", "false"]).default("true")
       }),
       semVazios(req.query)
     );
-    if (q.preco === "custo" && !podeFazer(req.usuario?.papel, "financeiro")) {
-      throw new AppError("S\xF3 o administrador pode montar a lista a partir do pre\xE7o de compra", 403);
-    }
     const unidade = unidadePermitida(req.usuario, q.unitId);
+    const somenteDisponiveis = q.somenteDisponiveis === "true";
     const produtos = await db.product.findMany({
       where: {
         ...q.categoryId ? { categoryId: { in: await comAsFilhas(q.categoryId) } } : {},
-        // Só o que existe: ninguém oferece no grupo o que já acabou.
-        stock: { some: { quantity: { gt: 0 }, ...unidade ? { unitId: unidade } : {} } }
+        // Sem preço de atacado o produto não é de atacado: mandar o preço
+        // de varejo para o grupo seria oferecer a mercadoria errada.
+        wholesalePrice: { not: null },
+        // Vendido e reservado já têm dono.
+        status: "EM_ESTOQUE",
+        ...somenteDisponiveis ? { stock: { some: { quantity: { gt: 0 }, ...unidade ? { unitId: unidade } : {} } } } : unidade ? { stock: { some: { unitId: unidade } } } : {}
       },
-      include: {
-        category: true,
-        stock: unidade ? { where: { unitId: unidade } } : true
-      },
-      orderBy: { name: "asc" }
+      include: { category: { select: { id: true, name: true, ordem: true } } }
     });
-    produtos.sort(compararProdutos);
-    const precoDe = (p) => {
-      if (q.preco === "custo") return numero(p.costPrice) + q.markup;
-      if (q.preco === "varejo") return numero(p.salePrice) || numero(p.wholesalePrice);
-      return numero(p.wholesalePrice) || numero(p.salePrice);
-    };
-    const grupos = /* @__PURE__ */ new Map();
-    for (const p of produtos) {
-      const bruto = q.agruparPor === "categoria" ? p.category.name : p.brand;
-      const chave = chaveDaMarca(bruto) || "OUTROS";
-      if (!grupos.has(chave)) {
-        grupos.set(chave, { titulo: (bruto ?? "").trim() || "OUTROS", itens: [] });
-      }
-      grupos.get(chave).itens.push(p);
-    }
-    const ordenados = [...grupos.entries()].sort(([a], [b]) => {
-      if (a === "OUTROS") return 1;
-      if (b === "OUTROS") return -1;
-      return a.localeCompare(b, "pt-BR");
-    });
-    const dinheiro3 = (v) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL", minimumFractionDigits: 0 });
-    const linhas = [];
-    linhas.push(`*${(q.titulo ?? "RAFA MULTIMARCAS").toUpperCase()}*`);
-    linhas.push(`_Lista atualizada em ${dataBR(/* @__PURE__ */ new Date())}_`);
-    linhas.push("");
-    let totalPecas = 0;
-    for (const [, grupo] of ordenados) {
-      linhas.push(`*${grupo.titulo.toUpperCase()}*`);
-      for (const p of grupo.itens) {
-        const quantidade = p.stock.reduce((s, l) => s + l.quantity, 0);
-        totalPecas += quantidade;
-        const partes = [p.name];
-        if (q.mostrarCondicao === "true") {
-          const sub = p.category.name.split("\u203A").pop()?.trim();
-          if (sub && sub !== p.category.name) partes.push(sub);
-        }
-        if (q.mostrarQuantidade === "true") partes.push(`${quantidade}un`);
-        linhas.push(`${partes.join(" \xB7 ")} \u2014 *${dinheiro3(precoDe(p))}*`);
-      }
-      linhas.push("");
-    }
-    linhas.push("\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501");
-    linhas.push(`${produtos.length} modelos \xB7 ${totalPecas} pe\xE7as`);
-    linhas.push("_Valores sujeitos a altera\xE7\xE3o._");
-    const texto3 = linhas.join("\n");
-    const parecidas = [];
-    const chaves = [...grupos.keys()].filter((c) => c !== "OUTROS");
-    for (let i = 0; i < chaves.length; i += 1) {
-      for (let j = i + 1; j < chaves.length; j += 1) {
-        if (ehErroDeDigitacao(chaves[i], chaves[j])) parecidas.push(`${chaves[i]} / ${chaves[j]}`);
-      }
-    }
-    res.json({
-      texto: texto3,
-      resumo: {
-        modelos: produtos.length,
-        pecas: totalPecas,
-        grupos: ordenados.length,
-        semMarca: grupos.get("OUTROS")?.itens.length ?? 0
-      },
-      // O sistema não decide por você qual grafia está certa.
-      marcasParecidas: [...new Set(parecidas)]
-    });
+    const { texto: texto3, resumo } = montarListaDeAtacado(
+      produtos.map((p) => ({
+        name: p.name,
+        capacity: p.capacity,
+        atacado: numero(p.wholesalePrice),
+        categoriaId: p.category.id,
+        categoriaNome: p.category.name,
+        categoriaOrdem: p.category.ordem
+      })),
+      await emojisDeCategoria()
+    );
+    res.json({ texto: texto3, resumo });
   })
 );
 rotasRelatorios.get(

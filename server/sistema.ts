@@ -31,6 +31,7 @@ const LEITURA_LIBERADA = new Set([
   '/unidade-de-venda',
   '/contas-pix',
   '/chave-de-acesso',
+  '/emojis-categoria',
 ]);
 
 rotasSistema.use(autenticar, (req, res, next) => {
@@ -700,5 +701,68 @@ rotasSistema.delete(
 
     // Sem chave, ninguém libera nada: o mínimo passa a ser inegociável.
     res.json({ definida: false, message: 'Chave removida. Vender abaixo do atacado fica bloqueado.' });
+  }),
+);
+
+// ------------------------------------------- Emojis da lista de atacado
+
+const CHAVE_EMOJIS = 'emojis_categoria';
+
+/**
+ * O emoji de cada categoria na lista do grupo de atacado.
+ *
+ * Guardado por id, e não por nome: renomear "JBL" para "JBLs e BOOMBOX" não
+ * pode fazer o emoji sumir. Categoria sem escolha cai na sugestão pelo
+ * nome, então a lista já sai certa antes de alguém abrir esta tela.
+ */
+export async function emojisDeCategoria(): Promise<Record<string, string>> {
+  const guardado = await db.setting.findUnique({ where: { key: CHAVE_EMOJIS } });
+  if (!guardado) return {};
+
+  try {
+    const mapa: unknown = JSON.parse(guardado.value);
+    if (!mapa || typeof mapa !== 'object') return {};
+
+    return Object.fromEntries(
+      Object.entries(mapa as Record<string, unknown>).filter(
+        ([, v]) => typeof v === 'string' && v.trim(),
+      ) as [string, string][],
+    );
+  } catch {
+    return {};
+  }
+}
+
+rotasSistema.get(
+  '/emojis-categoria',
+  rota(async (_req, res) => {
+    res.json({ emojis: await emojisDeCategoria() });
+  }),
+);
+
+rotasSistema.put(
+  '/emojis-categoria',
+  somenteAdmin,
+  rota(async (req, res) => {
+    const { emojis } = validar(
+      z.object({
+        // Curto de propósito: aqui cabe um emoji, não um rótulo. Dois ou
+        // três símbolos ainda passam — há emoji que ocupa vários caracteres.
+        emojis: z.record(z.string().uuid(), z.string().trim().max(8)),
+      }),
+      req.body,
+    );
+
+    // Vazio quer dizer "volte a sugerir pelo nome", e não "guarde nada".
+    const limpos = Object.fromEntries(Object.entries(emojis).filter(([, v]) => v.trim()));
+
+    await db.setting.upsert({
+      where: { key: CHAVE_EMOJIS },
+      update: { value: JSON.stringify(limpos) },
+      create: { key: CHAVE_EMOJIS, value: JSON.stringify(limpos) },
+    });
+
+    await registrarLog({ acao: 'EMOJIS_CATEGORIA', entidade: 'Setting', id: CHAVE_EMOJIS, req });
+    res.json({ emojis: limpos, message: 'Emojis da lista salvos.' });
   }),
 );

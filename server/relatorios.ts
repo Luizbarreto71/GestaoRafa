@@ -12,7 +12,7 @@ import {
   semVazios,
   validar,
 } from './core';
-import { exigir, podeFazer } from './permissoes';
+import { exigir } from './permissoes';
 import { db } from './db';
 import { decimal, exportar, reais, type Coluna } from './exportar';
 import {
@@ -23,6 +23,8 @@ import {
 } from './estoque';
 import { unidadePermitida } from './unidades';
 import { compararProdutos } from '../shared/ordenar';
+import { montarListaDeAtacado } from './lista-atacado';
+import { emojisDeCategoria } from './sistema';
 import { taxaDe } from '../shared/taxas';
 import { taxasDoCartao } from './sistema';
 
@@ -704,182 +706,58 @@ rotasRelatorios.get(
 // ------------------------------------------------ Lista para o WhatsApp
 
 /**
- * Junta variações do mesmo nome de marca.
- *
- * "Xiaomi", "XIAOMI" e " xiaomi " são a mesma coisa e não podem virar três
- * títulos na lista. Diferenças de letra de verdade (XIOMI × XIAOMI) ficam
- * separadas de propósito: corrigir isso é decisão de quem cadastrou, não
- * palpite do sistema.
- */
-const chaveDaMarca = (marca: string | null): string =>
-  (marca ?? '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .trim()
-    .toUpperCase();
-
-/**
  * Lista de tudo em estoque, pronta para colar no grupo de atacado.
  *
- * Sai como texto com a formatação do WhatsApp (asterisco marca negrito),
- * separada por marca. Não é PDF de propósito: no grupo o que serve é
- * mensagem, não anexo.
+ * Sai como texto puro, no formato exato que a loja usa no grupo: cada
+ * quebra de linha e cada ponto e vírgula fazem parte do resultado. A
+ * montagem fica em `lista-atacado.ts` — aqui só se decide o que entra.
  */
-/**
- * Duas marcas que só diferem por um deslize de teclado.
- *
- * Uma letra a mais, a menos ou trocada — "XIOMI" e "XIAOMI". Marcas de
- * verdade que existem juntas no mercado ("POCO" e "PODO") são raras o
- * bastante para valer o aviso; o sistema só avisa, não junta sozinho.
- */
-function ehErroDeDigitacao(a: string, b: string): boolean {
-  if (a === b) return false;
-  // Nomes muito curtos diferem por uma letra com facilidade demais.
-  if (Math.min(a.length, b.length) < 4) return false;
-  if (Math.abs(a.length - b.length) > 1) return false;
-
-  // Distância de edição, cortando assim que passa de 1.
-  let anterior = Array.from({ length: b.length + 1 }, (_, i) => i);
-  for (let i = 1; i <= a.length; i += 1) {
-    const atual = [i];
-    for (let j = 1; j <= b.length; j += 1) {
-      atual[j] = Math.min(
-        anterior[j] + 1,
-        atual[j - 1] + 1,
-        anterior[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1),
-      );
-    }
-    if (Math.min(...atual) > 1) return false;
-    anterior = atual;
-  }
-  return anterior[b.length] <= 1;
-}
-
 rotasRelatorios.get(
   '/whatsapp-list',
   rota(async (req, res) => {
     const q = validar(
       z.object({
-        /** De onde sai o preço mostrado. */
-        preco: z.enum(['atacado', 'varejo', 'custo']).default('atacado'),
-        /** Acréscimo, quando o preço parte do custo. */
-        markup: z.coerce.number().min(0).max(999_999).default(100),
         categoryId: z.string().uuid().optional(),
         unitId: z.string().uuid().optional(),
-        agruparPor: z.enum(['marca', 'categoria']).default('marca'),
-        mostrarQuantidade: z.enum(['true', 'false']).default('true'),
-        mostrarCondicao: z.enum(['true', 'false']).default('true'),
-        titulo: z.string().trim().max(60).optional(),
+        /** Sem estoque some da lista — é o padrão: não se oferece o que acabou. */
+        somenteDisponiveis: z.enum(['true', 'false']).default('true'),
       }),
       semVazios(req.query),
     );
 
-    // Preço a partir do custo expõe a margem: exige permissão de financeiro.
-    if (q.preco === 'custo' && !podeFazer(req.usuario?.papel, 'financeiro')) {
-      throw new AppError('Só o administrador pode montar a lista a partir do preço de compra', 403);
-    }
-
     const unidade = unidadePermitida(req.usuario, q.unitId);
+    const somenteDisponiveis = q.somenteDisponiveis === 'true';
 
     const produtos = await db.product.findMany({
       where: {
         ...(q.categoryId ? { categoryId: { in: await comAsFilhas(q.categoryId) } } : {}),
-        // Só o que existe: ninguém oferece no grupo o que já acabou.
-        stock: { some: { quantity: { gt: 0 }, ...(unidade ? { unitId: unidade } : {}) } },
+        // Sem preço de atacado o produto não é de atacado: mandar o preço
+        // de varejo para o grupo seria oferecer a mercadoria errada.
+        wholesalePrice: { not: null },
+        // Vendido e reservado já têm dono.
+        status: 'EM_ESTOQUE',
+        ...(somenteDisponiveis
+          ? { stock: { some: { quantity: { gt: 0 }, ...(unidade ? { unitId: unidade } : {}) } } }
+          : unidade
+            ? { stock: { some: { unitId: unidade } } }
+            : {}),
       },
-      include: {
-        category: true,
-        stock: unidade ? { where: { unitId: unidade } } : true,
-      },
-      orderBy: { name: 'asc' },
+      include: { category: { select: { id: true, name: true, ordem: true } } },
     });
 
-    // Mesma ordem do relatório de estoque: é a mesma lista, noutro formato.
-    produtos.sort(compararProdutos);
+    const { texto, resumo } = montarListaDeAtacado(
+      produtos.map((p) => ({
+        name: p.name,
+        capacity: p.capacity,
+        atacado: numero(p.wholesalePrice),
+        categoriaId: p.category.id,
+        categoriaNome: p.category.name,
+        categoriaOrdem: p.category.ordem,
+      })),
+      await emojisDeCategoria(),
+    );
 
-    const precoDe = (p: (typeof produtos)[number]): number => {
-      if (q.preco === 'custo') return numero(p.costPrice) + q.markup;
-      if (q.preco === 'varejo') return numero(p.salePrice) || numero(p.wholesalePrice);
-      return numero(p.wholesalePrice) || numero(p.salePrice);
-    };
-
-    // Agrupa mantendo a grafia mais usada de cada marca.
-    const grupos = new Map<string, { titulo: string; itens: typeof produtos }>();
-
-    for (const p of produtos) {
-      const bruto = q.agruparPor === 'categoria' ? p.category.name : p.brand;
-      const chave = chaveDaMarca(bruto) || 'OUTROS';
-
-      if (!grupos.has(chave)) {
-        grupos.set(chave, { titulo: (bruto ?? '').trim() || 'OUTROS', itens: [] });
-      }
-      grupos.get(chave)!.itens.push(p);
-    }
-
-    const ordenados = [...grupos.entries()].sort(([a], [b]) => {
-      // "Outros" sempre por último; o resto em ordem alfabética.
-      if (a === 'OUTROS') return 1;
-      if (b === 'OUTROS') return -1;
-      return a.localeCompare(b, 'pt-BR');
-    });
-
-    const dinheiro = (v: number) =>
-      v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 0 });
-
-    const linhas: string[] = [];
-    linhas.push(`*${(q.titulo ?? 'RAFA MULTIMARCAS').toUpperCase()}*`);
-    linhas.push(`_Lista atualizada em ${dataBR(new Date())}_`);
-    linhas.push('');
-
-    let totalPecas = 0;
-
-    for (const [, grupo] of ordenados) {
-      linhas.push(`*${grupo.titulo.toUpperCase()}*`);
-
-      for (const p of grupo.itens) {
-        const quantidade = p.stock.reduce((s, l) => s + l.quantity, 0);
-        totalPecas += quantidade;
-
-        const partes = [p.name];
-        // A condição virou subcategoria: sai dali, não de um campo à parte.
-        if (q.mostrarCondicao === 'true') {
-          const sub = p.category.name.split('›').pop()?.trim();
-          if (sub && sub !== p.category.name) partes.push(sub);
-        }
-        if (q.mostrarQuantidade === 'true') partes.push(`${quantidade}un`);
-
-        linhas.push(`${partes.join(' · ')} — *${dinheiro(precoDe(p))}*`);
-      }
-
-      linhas.push('');
-    }
-
-    linhas.push('━━━━━━━━━━━━━━━');
-    linhas.push(`${produtos.length} modelos · ${totalPecas} peças`);
-    linhas.push('_Valores sujeitos a alteração._');
-
-    const texto = linhas.join('\n');
-
-    // Marcas parecidas: avisa em vez de juntar por conta própria.
-    const parecidas: string[] = [];
-    const chaves = [...grupos.keys()].filter((c) => c !== 'OUTROS');
-    for (let i = 0; i < chaves.length; i += 1) {
-      for (let j = i + 1; j < chaves.length; j += 1) {
-        if (ehErroDeDigitacao(chaves[i], chaves[j])) parecidas.push(`${chaves[i]} / ${chaves[j]}`);
-      }
-    }
-
-    res.json({
-      texto,
-      resumo: {
-        modelos: produtos.length,
-        pecas: totalPecas,
-        grupos: ordenados.length,
-        semMarca: grupos.get('OUTROS')?.itens.length ?? 0,
-      },
-      // O sistema não decide por você qual grafia está certa.
-      marcasParecidas: [...new Set(parecidas)],
-    });
+    res.json({ texto, resumo });
   }),
 );
 
