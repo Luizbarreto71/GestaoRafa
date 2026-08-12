@@ -161,8 +161,8 @@ export const unitService = {
 // ----------------------------------------------------------------- Dashboard
 
 export const dashboardService = {
-  overview: (days = 14, unitId?: string) =>
-    api.get<DashboardData>('/dashboard', { params: clean({ days, unitId }) }).then((r) => r.data),
+  overview: (days = 14, unitId?: string, date?: string) =>
+    api.get<DashboardData>('/dashboard', { params: clean({ days, unitId, date }) }).then((r) => r.data),
   alerts: (unitId?: string) =>
     api.get<AlertsData>('/dashboard/alerts', { params: clean({ unitId }) }).then((r) => r.data),
 };

@@ -404,6 +404,8 @@ export interface MovementsPage extends Paginated<Movement> {
 }
 
 export interface DashboardData {
+  /** O dia que os cartões estão somando. */
+  date?: string;
   cards: {
     totalProducts: number;
     itemsInStock: number;

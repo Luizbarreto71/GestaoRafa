@@ -48,10 +48,10 @@ function invalidateStock(queryClient: ReturnType<typeof useQueryClient>) {
 
 // ----------------------------------------------------------------- Dashboard
 
-export const useDashboard = (days = 14, unitId?: string | null) =>
+export const useDashboard = (days = 14, unitId?: string | null, date?: string) =>
   useQuery({
-    queryKey: [...queryKeys.dashboard(days), unitId ?? 'todas'],
-    queryFn: () => dashboardService.overview(days, unitId ?? undefined),
+    queryKey: [...queryKeys.dashboard(days), unitId ?? 'todas', date ?? 'hoje'],
+    queryFn: () => dashboardService.overview(days, unitId ?? undefined, date),
     staleTime: 30_000,
   });
 

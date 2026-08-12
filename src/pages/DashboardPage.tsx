@@ -19,6 +19,7 @@ import {
   TrendingUp,
   Wallet,
 } from 'lucide-react';
+import { Input } from '@/components/ui/Field';
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 
@@ -30,13 +31,20 @@ const PERIODS = [
 
 export default function DashboardPage() {
   const [days, setDays] = useState(14);
+  // Vazio = hoje. Guardado como AAAA-MM-DD, que é o que o campo de data usa.
+  const [dia, setDia] = useState('');
   const [chartMode, setChartMode] = useState<'revenue' | 'flow'>('revenue');
   const { unidadeId, rotulo } = useUnit();
-  const { data, isLoading } = useDashboard(days, unidadeId);
+  const { data, isLoading } = useDashboard(days, unidadeId, dia || undefined);
   const { user } = useAuth();
   const navigate = useNavigate();
 
   const cards = data?.cards;
+
+  /** Hoje no fuso da loja, para o campo não deixar escolher o futuro. */
+  const hojeISO = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
+  const ehHoje = !dia || dia === hojeISO;
+  const diaPorExtenso = dia ? dia.split('-').reverse().join('/') : '';
 
   const greeting = (() => {
     const hour = new Date().getHours();
@@ -55,6 +63,28 @@ export default function DashboardPage() {
           <p className="mt-0.5 text-sm text-slate-500 dark:text-slate-400">
             {unidadeId ? `Dados da ${rotulo}.` : 'Consolidado de todas as unidades.'}
           </p>
+        </div>
+
+        <div className="flex items-end gap-2">
+          {/* O painel pode olhar outro dia: quem fecha o caixa de manhã
+              quer o movimento de ontem sem trocar de tela. */}
+          <Input
+            label="Dia dos cartões"
+            type="date"
+            value={dia || (data?.date ?? '')}
+            max={hojeISO}
+            onChange={(e) => setDia(e.target.value)}
+            wrapperClassName="w-44"
+          />
+          {!ehHoje && (
+            <button
+              type="button"
+              onClick={() => setDia('')}
+              className="mb-1.5 rounded-lg px-2 py-1 text-xs font-semibold text-accent hover:underline"
+            >
+              voltar para hoje
+            </button>
+          )}
         </div>
 
         <Button icon={<ShoppingCart className="h-4 w-4" />} onClick={() => navigate('/estoque')}>
@@ -83,13 +113,13 @@ export default function DashboardPage() {
           onClick={() => navigate('/estoque?status=EM_ESTOQUE')}
         />
         <StatCard
-          label="Vendidos hoje"
+          label={ehHoje ? 'Vendidos hoje' : `Vendidos em ${diaPorExtenso}`}
           value={formatNumber(cards?.soldToday ?? 0)}
           hint={`${cards?.salesCountToday ?? 0} venda(s) · ${formatCurrency(cards?.revenueToday ?? 0)}`}
           icon={ShoppingCart}
           tone="success"
           loading={isLoading}
-          onClick={() => navigate('/vendas')}
+          onClick={() => navigate(`/vendas?startDate=${data?.date ?? ''}&endDate=${data?.date ?? ''}`)}
         />
         <StatCard
           label="Valor total do estoque"

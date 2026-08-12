@@ -115,15 +115,27 @@ function ordenar(sortBy, sortOrder, permitidas, padrao) {
   return padrao;
 }
 var contem = (texto3) => ({ contains: texto3, mode: "insensitive" });
+var FUSO_DA_LOJA = "America/Sao_Paulo";
+function deslocamentoDaLoja(instante) {
+  const comoUtc = new Date(instante.toLocaleString("en-US", { timeZone: "UTC" }));
+  const comoLoja = new Date(instante.toLocaleString("en-US", { timeZone: FUSO_DA_LOJA }));
+  return (comoUtc.getTime() - comoLoja.getTime()) / 6e4;
+}
+function diaDoCalendario(d) {
+  const ehMeiaNoiteUtc = d.getUTCHours() === 0 && d.getUTCMinutes() === 0 && d.getUTCSeconds() === 0;
+  if (ehMeiaNoiteUtc) return [d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()];
+  const naLoja = new Date(d.toLocaleString("en-US", { timeZone: FUSO_DA_LOJA }));
+  return [naLoja.getFullYear(), naLoja.getMonth(), naLoja.getDate()];
+}
 function inicioDoDia(d = /* @__PURE__ */ new Date()) {
-  const x = new Date(d);
-  x.setHours(0, 0, 0, 0);
-  return x;
+  const [ano, mes, dia] = diaDoCalendario(d);
+  const provisorio = new Date(Date.UTC(ano, mes, dia, 0, 0, 0, 0));
+  return new Date(provisorio.getTime() + deslocamentoDaLoja(provisorio) * 6e4);
 }
 function fimDoDia(d = /* @__PURE__ */ new Date()) {
-  const x = new Date(d);
-  x.setHours(23, 59, 59, 999);
-  return x;
+  const [ano, mes, dia] = diaDoCalendario(d);
+  const provisorio = new Date(Date.UTC(ano, mes, dia, 23, 59, 59, 999));
+  return new Date(provisorio.getTime() + deslocamentoDaLoja(provisorio) * 6e4);
 }
 function somarDias(d, dias) {
   const x = new Date(d);
@@ -1623,11 +1635,12 @@ rotasDashboard.get(
     const dias = Math.min(90, Math.max(7, Number(req.query.days) || 14));
     const unidade = unidadePermitida(req.usuario, req.query.unitId);
     const naUnidade = unidade ? { unitId: unidade } : {};
-    const hoje = /* @__PURE__ */ new Date();
+    const escolhida = req.query.date ? new Date(String(req.query.date)) : null;
+    const hoje = escolhida && !Number.isNaN(escolhida.getTime()) ? escolhida : /* @__PURE__ */ new Date();
     const inicioHoje = inicioDoDia(hoje);
     const fimHoje = fimDoDia(hoje);
     const inicioGrafico = inicioDoDia(somarDias(hoje, -(dias - 1)));
-    const inicioDoMes = inicioDoDia(new Date(hoje.getFullYear(), hoje.getMonth(), 1));
+    const inicioDoMes = inicioDoDia(new Date(Date.UTC(hoje.getUTCFullYear(), hoje.getUTCMonth(), 1)));
     const baixos = await estoqueBaixo(unidade, 10);
     const [
       totalProdutos,
@@ -1648,17 +1661,21 @@ rotasDashboard.get(
     ] = await Promise.all([
       db.product.count(),
       totalEmEstoque(unidade),
+      // Venda cancelada não é faturamento: o dinheiro voltou e a peça
+      // também. Sem este filtro o painel discordava do relatório.
       db.sale.aggregate({
-        where: { saleDate: { gte: inicioHoje, lte: fimHoje }, ...naUnidade },
+        where: { status: "FINALIZADA", saleDate: { gte: inicioHoje, lte: fimHoje }, ...naUnidade },
         _count: true
       }),
       // Itens vendidos vêm da tabela de itens: uma venda pode ter vários.
       db.saleItem.aggregate({
-        where: { sale: { saleDate: { gte: inicioHoje, lte: fimHoje }, ...naUnidade } },
+        where: {
+          sale: { status: "FINALIZADA", saleDate: { gte: inicioHoje, lte: fimHoje }, ...naUnidade }
+        },
         _sum: { quantity: true }
       }),
       db.sale.aggregate({
-        where: { saleDate: { gte: inicioHoje, lte: fimHoje }, ...naUnidade },
+        where: { status: "FINALIZADA", saleDate: { gte: inicioHoje, lte: fimHoje }, ...naUnidade },
         _sum: { totalAmount: true, costAmount: true }
       }),
       db.product.findMany({
@@ -1682,7 +1699,7 @@ rotasDashboard.get(
         }
       }),
       db.sale.findMany({
-        where: { saleDate: { gte: inicioGrafico, lte: fimHoje }, ...naUnidade },
+        where: { status: "FINALIZADA", saleDate: { gte: inicioGrafico, lte: fimHoje }, ...naUnidade },
         select: { saleDate: true, totalAmount: true, items: { select: { quantity: true } } }
       }),
       db.stockMovement.findMany({
@@ -1695,11 +1712,11 @@ rotasDashboard.get(
       }),
       db.category.findMany(),
       db.sale.aggregate({
-        where: { saleDate: { gte: inicioDoMes }, ...naUnidade },
+        where: { status: "FINALIZADA", saleDate: { gte: inicioDoMes }, ...naUnidade },
         _sum: { totalAmount: true, costAmount: true }
       }),
       db.saleItem.aggregate({
-        where: { sale: { saleDate: { gte: inicioDoMes }, ...naUnidade } },
+        where: { sale: { status: "FINALIZADA", saleDate: { gte: inicioDoMes }, ...naUnidade } },
         _sum: { quantity: true }
       }),
       valorDoEstoque(unidade)
@@ -1735,6 +1752,8 @@ rotasDashboard.get(
     res.json(
       limpar({
         unitId: unidade ?? null,
+        /** O dia que os cartões estão somando, no formato do filtro. */
+        date: inicioHoje.toLocaleDateString("en-CA", { timeZone: FUSO_DA_LOJA }),
         cards: {
           totalProducts: totalProdutos,
           itemsInStock: itensEmEstoque,
@@ -1794,7 +1813,7 @@ rotasDashboard.get(
         take: 20
       }),
       db.sale.findMany({
-        where: { saleDate: { gte: inicioDoDia(), lte: fimDoDia() }, ...naUnidade },
+        where: { status: "FINALIZADA", saleDate: { gte: inicioDoDia(), lte: fimDoDia() }, ...naUnidade },
         select: {
           id: true,
           code: true,

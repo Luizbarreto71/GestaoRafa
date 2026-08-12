@@ -175,16 +175,56 @@ export const contem = (texto: string) => ({ contains: texto, mode: 'insensitive'
 
 // ------------------------------------------------------------------ Datas
 
+/** O fuso da loja. Todo corte de dia acontece por ele. */
+export const FUSO_DA_LOJA = 'America/Sao_Paulo';
+
+/**
+ * Quantos minutos o fuso da loja está atrás do UTC naquele instante.
+ *
+ * Calculado, e não fixo em −180: o Brasil já teve horário de verão e pode
+ * voltar a ter, e uma constante escondida erraria por uma hora sem avisar.
+ */
+function deslocamentoDaLoja(instante: Date): number {
+  const comoUtc = new Date(instante.toLocaleString('en-US', { timeZone: 'UTC' }));
+  const comoLoja = new Date(instante.toLocaleString('en-US', { timeZone: FUSO_DA_LOJA }));
+  return (comoUtc.getTime() - comoLoja.getTime()) / 60_000;
+}
+
+/**
+ * O dia do calendário que este instante representa.
+ *
+ * Data vinda de filtro ("2026-08-11") chega como meia-noite UTC e vale como
+ * o dia 11 — ler o fuso da loja diria 10. Já `new Date()` é um instante de
+ * verdade, e aí o dia certo é o da loja. A diferença entre os dois é o que
+ * esta função resolve.
+ */
+function diaDoCalendario(d: Date): [number, number, number] {
+  const ehMeiaNoiteUtc =
+    d.getUTCHours() === 0 && d.getUTCMinutes() === 0 && d.getUTCSeconds() === 0;
+
+  if (ehMeiaNoiteUtc) return [d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()];
+
+  const naLoja = new Date(d.toLocaleString('en-US', { timeZone: FUSO_DA_LOJA }));
+  return [naLoja.getFullYear(), naLoja.getMonth(), naLoja.getDate()];
+}
+
+/**
+ * O instante em que o dia começa na loja.
+ *
+ * Sem isto o corte acontecia no fuso do servidor — que na Vercel é UTC —, e
+ * toda venda feita depois das 21h caía no dia seguinte. Um dia de trabalho
+ * aparecia partido em dois no relatório.
+ */
 export function inicioDoDia(d: Date = new Date()): Date {
-  const x = new Date(d);
-  x.setHours(0, 0, 0, 0);
-  return x;
+  const [ano, mes, dia] = diaDoCalendario(d);
+  const provisorio = new Date(Date.UTC(ano, mes, dia, 0, 0, 0, 0));
+  return new Date(provisorio.getTime() + deslocamentoDaLoja(provisorio) * 60_000);
 }
 
 export function fimDoDia(d: Date = new Date()): Date {
-  const x = new Date(d);
-  x.setHours(23, 59, 59, 999);
-  return x;
+  const [ano, mes, dia] = diaDoCalendario(d);
+  const provisorio = new Date(Date.UTC(ano, mes, dia, 23, 59, 59, 999));
+  return new Date(provisorio.getTime() + deslocamentoDaLoja(provisorio) * 60_000);
 }
 
 export function somarDias(d: Date, dias: number): Date {

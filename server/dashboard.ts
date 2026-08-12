@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { autenticar } from './auth';
-import { fimDoDia, inicioDoDia, limpar, numero, rota, somarDias } from './core';
+import { fimDoDia, FUSO_DA_LOJA, inicioDoDia, limpar, numero, rota, somarDias } from './core';
 import { exigir } from './permissoes';
 import { db } from './db';
 import { estoqueBaixo, totalEmEstoque, valorDoEstoque } from './estoque';
@@ -24,11 +24,15 @@ rotasDashboard.get(
     const unidade = unidadePermitida(req.usuario, req.query.unitId as string | undefined);
     const naUnidade = unidade ? { unitId: unidade } : {};
 
-    const hoje = new Date();
+    // O "dia" do painel pode ser outro: quem fecha o caixa de manhã quer
+    // ver o movimento de ontem sem trocar de tela.
+    const escolhida = req.query.date ? new Date(String(req.query.date)) : null;
+    const hoje = escolhida && !Number.isNaN(escolhida.getTime()) ? escolhida : new Date();
+
     const inicioHoje = inicioDoDia(hoje);
     const fimHoje = fimDoDia(hoje);
     const inicioGrafico = inicioDoDia(somarDias(hoje, -(dias - 1)));
-    const inicioDoMes = inicioDoDia(new Date(hoje.getFullYear(), hoje.getMonth(), 1));
+    const inicioDoMes = inicioDoDia(new Date(Date.UTC(hoje.getUTCFullYear(), hoje.getUTCMonth(), 1)));
 
     const baixos = await estoqueBaixo(unidade, 10);
 
@@ -51,17 +55,21 @@ rotasDashboard.get(
     ] = await Promise.all([
       db.product.count(),
       totalEmEstoque(unidade),
+      // Venda cancelada não é faturamento: o dinheiro voltou e a peça
+      // também. Sem este filtro o painel discordava do relatório.
       db.sale.aggregate({
-        where: { saleDate: { gte: inicioHoje, lte: fimHoje }, ...naUnidade },
+        where: { status: 'FINALIZADA', saleDate: { gte: inicioHoje, lte: fimHoje }, ...naUnidade },
         _count: true,
       }),
       // Itens vendidos vêm da tabela de itens: uma venda pode ter vários.
       db.saleItem.aggregate({
-        where: { sale: { saleDate: { gte: inicioHoje, lte: fimHoje }, ...naUnidade } },
+        where: {
+          sale: { status: 'FINALIZADA', saleDate: { gte: inicioHoje, lte: fimHoje }, ...naUnidade },
+        },
         _sum: { quantity: true },
       }),
       db.sale.aggregate({
-        where: { saleDate: { gte: inicioHoje, lte: fimHoje }, ...naUnidade },
+        where: { status: 'FINALIZADA', saleDate: { gte: inicioHoje, lte: fimHoje }, ...naUnidade },
         _sum: { totalAmount: true, costAmount: true },
       }),
       db.product.findMany({
@@ -85,7 +93,7 @@ rotasDashboard.get(
         },
       }),
       db.sale.findMany({
-        where: { saleDate: { gte: inicioGrafico, lte: fimHoje }, ...naUnidade },
+        where: { status: 'FINALIZADA', saleDate: { gte: inicioGrafico, lte: fimHoje }, ...naUnidade },
         select: { saleDate: true, totalAmount: true, items: { select: { quantity: true } } },
       }),
       db.stockMovement.findMany({
@@ -98,11 +106,11 @@ rotasDashboard.get(
       }),
       db.category.findMany(),
       db.sale.aggregate({
-        where: { saleDate: { gte: inicioDoMes }, ...naUnidade },
+        where: { status: 'FINALIZADA', saleDate: { gte: inicioDoMes }, ...naUnidade },
         _sum: { totalAmount: true, costAmount: true },
       }),
       db.saleItem.aggregate({
-        where: { sale: { saleDate: { gte: inicioDoMes }, ...naUnidade } },
+        where: { sale: { status: 'FINALIZADA', saleDate: { gte: inicioDoMes }, ...naUnidade } },
         _sum: { quantity: true },
       }),
       valorDoEstoque(unidade),
@@ -151,6 +159,8 @@ rotasDashboard.get(
     res.json(
       limpar({
         unitId: unidade ?? null,
+        /** O dia que os cartões estão somando, no formato do filtro. */
+        date: inicioHoje.toLocaleDateString('en-CA', { timeZone: FUSO_DA_LOJA }),
         cards: {
           totalProducts: totalProdutos,
           itemsInStock: itensEmEstoque,
@@ -218,7 +228,7 @@ rotasDashboard.get(
         take: 20,
       }),
       db.sale.findMany({
-        where: { saleDate: { gte: inicioDoDia(), lte: fimDoDia() }, ...naUnidade },
+        where: { status: 'FINALIZADA', saleDate: { gte: inicioDoDia(), lte: fimDoDia() }, ...naUnidade },
         select: {
           id: true,
           code: true,
