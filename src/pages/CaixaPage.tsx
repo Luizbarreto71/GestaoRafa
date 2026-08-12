@@ -1,7 +1,7 @@
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
-import { Input, Select, Textarea } from '@/components/ui/Field';
+import { Input, Textarea } from '@/components/ui/Field';
 import { Modal } from '@/components/ui/Modal';
 import { StatCard } from '@/components/ui/StatCard';
 import { CarrinhoDeItens, totalDosItens } from '@/components/vendas/CarrinhoDeItens';
@@ -30,6 +30,7 @@ import {
   useFinalizarPreVenda,
   usePreVenda,
   usePreVendas,
+  useUnidadeDeVenda,
   useUsers,
 } from '@/hooks/queries';
 import { downloadFile } from '@/lib/api';
@@ -48,6 +49,7 @@ import {
   Receipt,
   Repeat2,
   ShoppingBag,
+  Store,
   TrendingUp,
 } from 'lucide-react';
 import { useEffect, useState, type FormEvent } from 'react';
@@ -281,6 +283,7 @@ function ConferenciaDaPreVenda({
   aoFinalizar: (venda: { id: string; code: string; totalAmount: number }) => void;
 }) {
   const { unidades } = useUnit();
+  const { data: unidadeDeVenda } = useUnidadeDeVenda();
   const toast = useToast();
 
   const { data: detalhe } = usePreVenda(preVenda?.id);
@@ -322,12 +325,16 @@ function ConferenciaDaPreVenda({
       })),
     );
     setForm({
-      unitId: detalhe.unit?.id ?? unidades[0]?.id ?? '',
+      // Mesma regra do balcão: a venda sai da unidade configurada, mesmo
+      // que o vendedor tenha sugerido outra na pré-venda.
+      unitId: unidadeDeVenda?.unitId ?? '',
       paymentMethod: detalhe.paymentMethod ?? 'PIX',
       installments: String(detalhe.installments ?? 1),
       notes: detalhe.notes ?? '',
     });
-  }, [detalhe, unidades]);
+    // A unidade entra nas dependências: ela chega do servidor e pode
+    // demorar mais que a pré-venda.
+  }, [detalhe, unidades, unidadeDeVenda]);
 
   if (!preVenda) return null;
 
@@ -508,14 +515,13 @@ function ConferenciaDaPreVenda({
             </p>
           )}
 
-          <Select
-            label="Unidade de saída"
-            required
-            value={form.unitId}
-            onChange={(e) => setForm((f) => ({ ...f, unitId: e.target.value }))}
-            options={unidades.map((u) => ({ value: u.id, label: u.name }))}
-            hint="De onde o produto sai"
-          />
+          <div>
+            <p className="label-base">Sai do estoque de</p>
+            <p className="flex items-center gap-1.5 rounded-lg bg-slate-50 px-3 py-2.5 text-sm font-semibold text-navy-900 dark:bg-navy-800 dark:text-slate-100">
+              <Store className="h-4 w-4 text-slate-400" />
+              {unidades.find((u) => u.id === form.unitId)?.name ?? 'carregando…'}
+            </p>
+          </div>
 
           <FormasDePagamento
             dividido={dividido}
@@ -587,6 +593,7 @@ function VendaDireta() {
   const toast = useToast();
   const criar = useCreateSale();
   const { data: usuarios } = useUsers({ pageSize: 100 }, true);
+  const { data: unidadeDeVenda } = useUnidadeDeVenda();
 
   const [itens, setItens] = useState<ItemVenda[]>([]);
   const [recibo, setRecibo] = useState<{ id: string; code: string; totalAmount: number } | null>(null);
@@ -627,7 +634,12 @@ function VendaDireta() {
     ];
   }
 
-  const unidade = form.unitId || unidades[0]?.id || '';
+  // A venda sai sempre da unidade configurada; o caixa não escolhe.
+  //
+  // Sem cair na primeira da lista enquanto carrega: por um instante a tela
+  // mostraria outra loja, e quem finaliza rápido tiraria a peça do estoque
+  // errado. Melhor segurar o botão por meio segundo.
+  const unidade = unidadeDeVenda?.unitId ?? '';
   const totalDosProdutos = totalDosItens(itens);
   // O aparelho do cliente é forma de pagamento: o que sobra é o que ele paga.
   const daTroca = comTroca ? Number(troca.valorAvaliado) || 0 : 0;
@@ -763,15 +775,17 @@ function VendaDireta() {
             />
           </Secao>
 
-          <Secao numero={3} titulo="Quem atendeu e de onde sai">
+          <Secao numero={3} titulo="Quem atendeu">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <Select
-              label="Unidade de saída"
-              required
-              value={unidade}
-              onChange={(e) => setForm((f) => ({ ...f, unitId: e.target.value }))}
-              options={unidades.map((u) => ({ value: u.id, label: u.name }))}
-            />
+            {/* A loja vende de um lugar só: mostrar basta, escolher seria
+                mais um campo para errar. Muda em Configurações. */}
+            <div>
+              <p className="label-base">Sai do estoque de</p>
+              <p className="flex items-center gap-1.5 rounded-lg bg-slate-50 px-3 py-2.5 text-sm font-semibold text-navy-900 dark:bg-navy-800 dark:text-slate-100">
+                <Store className="h-4 w-4 text-slate-400" />
+                {unidades.find((u) => u.id === unidade)?.name ?? 'carregando…'}
+              </p>
+            </div>
             <div>
               <Input
                 label="Vendedor"
@@ -833,7 +847,7 @@ function VendaDireta() {
             type="submit"
             variant="success"
             loading={criar.isPending}
-            disabled={!itens.length}
+            disabled={!itens.length || !unidade}
             icon={<Check className="h-4 w-4" />}
             className="w-full py-3 text-base"
           >

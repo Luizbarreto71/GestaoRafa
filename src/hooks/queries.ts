@@ -1,4 +1,4 @@
-import { getErrorMessage } from '@/lib/api';
+import { api, getErrorMessage } from '@/lib/api';
 import type { Sale, Troca } from '@/types';
 import { enqueue, isOfflineError } from '@/lib/offline';
 import {
@@ -528,3 +528,21 @@ export function useTroca(acao: 'criar' | 'anatel' | 'recusar' | 'excluir') {
     },
   });
 }
+
+/**
+ * De onde saem as vendas do balcão.
+ *
+ * A loja vende de um lugar só; o caixa não escolhe. Vem do servidor para
+ * o dia em que mudar não precisar de outra versão do sistema.
+ */
+export const useUnidadeDeVenda = () =>
+  useQuery({
+    queryKey: ['unidade-de-venda'],
+    queryFn: async () => {
+      const { data } = await api.get<{ unitId: string | null; name: string | null }>(
+        '/settings/unidade-de-venda',
+      );
+      return data;
+    },
+    staleTime: 10 * 60_000,
+  });

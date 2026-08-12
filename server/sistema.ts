@@ -505,3 +505,55 @@ rotasSistema.put(
     res.json({ ...loja, message: 'Dados da loja salvos. Já valem no próximo comprovante.' });
   }),
 );
+
+// ------------------------------------------------------- Unidade de venda
+
+const CHAVE_UNIDADE = 'unidade_de_venda';
+
+/**
+ * De onde saem as vendas do balcão.
+ *
+ * A loja vende de um lugar só, então perguntar isso em toda venda é um
+ * campo a mais para errar. Fica em configuração, e não fixo no código,
+ * para sobreviver a uma troca de nome ou de ponto.
+ */
+export async function unidadeDeVenda() {
+  const guardado = await db.setting.findUnique({ where: { key: CHAVE_UNIDADE } });
+
+  if (guardado) {
+    const escolhida = await db.unit.findUnique({ where: { id: guardado.value } });
+    if (escolhida?.active) return escolhida;
+  }
+
+  // Sem escolha salva, a primeira ativa — e o administrador ajusta depois.
+  return db.unit.findFirst({ where: { active: true }, orderBy: [{ type: 'asc' }, { name: 'asc' }] });
+}
+
+rotasSistema.get(
+  '/unidade-de-venda',
+  rota(async (_req, res) => {
+    const unidade = await unidadeDeVenda();
+    res.json({ unitId: unidade?.id ?? null, name: unidade?.name ?? null });
+  }),
+);
+
+rotasSistema.put(
+  '/unidade-de-venda',
+  somenteAdmin,
+  rota(async (req, res) => {
+    const { unitId } = validar(z.object({ unitId: z.string().uuid() }), req.body);
+
+    const unidade = await db.unit.findUnique({ where: { id: unitId } });
+    if (!unidade) throw new AppError('Unidade não encontrada', 404);
+    if (!unidade.active) throw new AppError(`A unidade ${unidade.name} está desativada.`);
+
+    await db.setting.upsert({
+      where: { key: CHAVE_UNIDADE },
+      update: { value: unitId },
+      create: { key: CHAVE_UNIDADE, value: unitId },
+    });
+
+    await registrarLog({ acao: 'UNIDADE_DE_VENDA', entidade: 'Setting', id: CHAVE_UNIDADE, req });
+    res.json({ unitId, name: unidade.name, message: `As vendas passam a sair da ${unidade.name}.` });
+  }),
+);

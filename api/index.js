@@ -3664,6 +3664,39 @@ rotasSistema.put(
     res.json({ ...loja, message: "Dados da loja salvos. J\xE1 valem no pr\xF3ximo comprovante." });
   })
 );
+var CHAVE_UNIDADE = "unidade_de_venda";
+async function unidadeDeVenda() {
+  const guardado = await db.setting.findUnique({ where: { key: CHAVE_UNIDADE } });
+  if (guardado) {
+    const escolhida = await db.unit.findUnique({ where: { id: guardado.value } });
+    if (escolhida?.active) return escolhida;
+  }
+  return db.unit.findFirst({ where: { active: true }, orderBy: [{ type: "asc" }, { name: "asc" }] });
+}
+rotasSistema.get(
+  "/unidade-de-venda",
+  rota(async (_req, res) => {
+    const unidade = await unidadeDeVenda();
+    res.json({ unitId: unidade?.id ?? null, name: unidade?.name ?? null });
+  })
+);
+rotasSistema.put(
+  "/unidade-de-venda",
+  somenteAdmin,
+  rota(async (req, res) => {
+    const { unitId } = validar(z6.object({ unitId: z6.string().uuid() }), req.body);
+    const unidade = await db.unit.findUnique({ where: { id: unitId } });
+    if (!unidade) throw new AppError("Unidade n\xE3o encontrada", 404);
+    if (!unidade.active) throw new AppError(`A unidade ${unidade.name} est\xE1 desativada.`);
+    await db.setting.upsert({
+      where: { key: CHAVE_UNIDADE },
+      update: { value: unitId },
+      create: { key: CHAVE_UNIDADE, value: unitId }
+    });
+    await registrarLog({ acao: "UNIDADE_DE_VENDA", entidade: "Setting", id: CHAVE_UNIDADE, req });
+    res.json({ unitId, name: unidade.name, message: `As vendas passam a sair da ${unidade.name}.` });
+  })
+);
 
 // server/relatorios.ts
 var rotasRelatorios = Router8();
