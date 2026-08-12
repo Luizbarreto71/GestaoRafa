@@ -1,3 +1,4 @@
+import { CalculadoraDeCartao, useTaxasDeCartao } from '@/components/vendas/CalculadoraDeCartao';
 import { Input, Select } from '@/components/ui/Field';
 import { cn } from '@/lib/cn';
 import { formatCurrency, PAYMENT_OPTIONS } from '@/lib/format';
@@ -51,6 +52,7 @@ export function FormasDePagamento({
   /** Total da venda, para conferir o rateio. */
   total: number;
 }) {
+  const taxas = useTaxasDeCartao();
   const distribuido = somaDasFormas(formas);
   const falta = total - distribuido;
 
@@ -74,32 +76,39 @@ export function FormasDePagamento({
 
   if (!dividido) {
     return (
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <Select
-          label="Forma de pagamento"
-          required
-          value={formaUnica}
-          onChange={(e) => aoMudarFormaUnica(e.target.value)}
-          options={PAYMENT_OPTIONS}
-        />
-        <Input
-          label="Parcelas"
-          type="number"
-          min={1}
-          max={24}
-          value={parcelas}
-          onChange={(e) => aoMudarParcelas(e.target.value)}
-        />
-        <div className="flex items-end">
-          <button
-            type="button"
-            onClick={dividir}
-            className="flex w-full items-center justify-center gap-2 rounded-lg border border-accent px-3 py-2.5 text-sm font-semibold text-accent transition hover:bg-accent/10"
-          >
-            <Split className="h-4 w-4" />
-            Dividir o pagamento
-          </button>
+      <div className="space-y-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <Select
+            label="Forma de pagamento"
+            required
+            value={formaUnica}
+            onChange={(e) => aoMudarFormaUnica(e.target.value)}
+            options={PAYMENT_OPTIONS}
+          />
+          <Input
+            label="Parcelas"
+            type="number"
+            min={1}
+            max={24}
+            value={parcelas}
+            onChange={(e) => aoMudarParcelas(e.target.value)}
+          />
+          <div className="flex items-end">
+            <button
+              type="button"
+              onClick={dividir}
+              className="flex w-full items-center justify-center gap-2 rounded-lg border border-accent px-3 py-2.5 text-sm font-semibold text-accent transition hover:bg-accent/10"
+            >
+              <Split className="h-4 w-4" />
+              Dividir o pagamento
+            </button>
+          </div>
         </div>
+
+        {/* Só no crédito: no Pix e no dinheiro não há taxa a repassar. */}
+        {formaUnica === 'CREDITO' && (
+          <CalculadoraDeCartao taxas={taxas} valorSugerido={total} />
+        )}
       </div>
     );
   }
@@ -191,6 +200,23 @@ export function FormasDePagamento({
           </button>
         )}
       </div>
+
+      {formas.some((f) => f.method === 'CREDITO') && (
+        <div className="mt-3">
+          <CalculadoraDeCartao
+            taxas={taxas}
+            valorSugerido={total}
+            aoUsar={(valor, parcelasDoCartao) => {
+              // Preenche a última linha de crédito: é a que a pessoa
+              // acabou de mexer na prática.
+              const i = formas.map((f) => f.method).lastIndexOf('CREDITO');
+              if (i >= 0) {
+                alterar(i, { amount: valor.toFixed(2), installments: String(parcelasDoCartao) });
+              }
+            }}
+          />
+        </div>
+      )}
 
       <div
         className={cn(

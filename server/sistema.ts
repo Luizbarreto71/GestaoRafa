@@ -3,9 +3,11 @@ import { Router } from 'express';
 import multer from 'multer';
 import { Readable } from 'stream';
 import { autenticar, somenteAdmin } from './auth';
-import { AppError, limpar, numero, rota } from './core';
+import { AppError, limpar, numero, rota, validar } from './core';
+import { z } from 'zod';
 import { exigir } from './permissoes';
 import { db, registrarLog } from './db';
+import { normalizarTaxas, TAXAS_PADRAO, type TaxaDeCartao } from '../shared/taxas';
 import { MOTIVO_LABEL, movimentar, TIPO_LABEL } from './estoque';
 import { enviarParaPlanilha, planilhaConfigurada, reescreverPlanilha, statusPlanilha } from './planilha';
 
@@ -383,5 +385,68 @@ rotasSistema.post(
       errors: erros,
       message: `${importados} produto(s) importados com sucesso.`,
     });
+  }),
+);
+
+// ------------------------------------------------------- Taxas do cartão
+
+const CHAVE_TAXAS = 'taxas_cartao';
+
+/** A tabela salva, ou a padrão da loja quando ninguém mexeu ainda. */
+async function taxasSalvas(): Promise<TaxaDeCartao[]> {
+  const guardado = await db.setting.findUnique({ where: { key: CHAVE_TAXAS } });
+  if (!guardado) return TAXAS_PADRAO;
+
+  try {
+    return normalizarTaxas(JSON.parse(guardado.value));
+  } catch {
+    // Registro corrompido não pode derrubar o caixa: volta ao padrão.
+    return TAXAS_PADRAO;
+  }
+}
+
+/**
+ * A tabela de taxas fica aberta a quem opera o caixa.
+ *
+ * É ela que diz quanto cobrar no cartão — esconder do caixa tornaria o
+ * cálculo impossível justamente para quem precisa dele.
+ */
+rotasSistema.get(
+  '/taxas-cartao',
+  rota(async (_req, res) => {
+    res.json({ taxas: await taxasSalvas(), padrao: TAXAS_PADRAO });
+  }),
+);
+
+rotasSistema.put(
+  '/taxas-cartao',
+  somenteAdmin,
+  rota(async (req, res) => {
+    const { taxas } = validar(
+      z.object({
+        taxas: z
+          .array(
+            z.object({
+              parcelas: z.coerce.number().int().min(1).max(24),
+              padrao: z.coerce.number().min(0).max(99.99),
+              elo: z.coerce.number().min(0).max(99.99).optional().nullable(),
+            }),
+          )
+          .min(1, 'Informe ao menos uma linha')
+          .max(24),
+      }),
+      req.body,
+    );
+
+    const limpas = normalizarTaxas(taxas);
+
+    await db.setting.upsert({
+      where: { key: CHAVE_TAXAS },
+      update: { value: JSON.stringify(limpas) },
+      create: { key: CHAVE_TAXAS, value: JSON.stringify(limpas) },
+    });
+
+    await registrarLog({ acao: 'TAXAS_CARTAO', entidade: 'Setting', id: CHAVE_TAXAS, req });
+    res.json({ taxas: limpas, message: `${limpas.length} faixa(s) de parcelamento salvas.` });
   }),
 );

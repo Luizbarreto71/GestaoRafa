@@ -4,6 +4,7 @@ import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Field';
 import { useAuth } from '@/contexts/AuthContext';
 import { useTheme } from '@/contexts/ThemeContext';
+import { TaxasDeCartao } from './TaxasDeCartao';
 import { useToast } from '@/contexts/ToastContext';
 import { useSheetsStatus } from '@/hooks/queries';
 import { useOnlineStatus } from '@/hooks/useOnlineStatus';
@@ -121,6 +122,13 @@ export function SystemTab() {
 
   return (
     <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+      {/* A tabela ocupa a largura toda: são 18 linhas com quatro colunas. */}
+      {isAdmin && (
+        <div className="lg:col-span-2">
+          <TaxasDeCartao />
+        </div>
+      )}
+
       {/* Tema */}
       <Card>
         <CardHeader title="Aparência" subtitle="Escolha entre tema claro e escuro" />

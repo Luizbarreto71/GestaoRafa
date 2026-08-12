@@ -1822,7 +1822,7 @@ rotasDashboard.get(
             unitName: unidades.find((u) => u.id === b.unitId)?.name ?? null
           };
         }),
-        outOfStock: zerados.map((z12) => ({ ...z12.product, unitName: z12.unit.name })),
+        outOfStock: zerados.map((z13) => ({ ...z13.product, unitName: z13.unit.name })),
         soldToday: vendasHoje,
         soldTodayCount: vendasHoje.reduce((s, v) => s + v.items.reduce((n, i) => n + i.quantity, 0), 0),
         revenueToday: vendasHoje.reduce((s, v) => s + numero(v.totalAmount), 0),
@@ -3836,6 +3836,49 @@ import ExcelJS2 from "exceljs";
 import { Router as Router8 } from "express";
 import multer from "multer";
 import { Readable } from "stream";
+import { z as z7 } from "zod";
+
+// shared/taxas.ts
+var TAXAS_PADRAO = [
+  { parcelas: 1, padrao: 5.5, elo: 6.5 },
+  { parcelas: 2, padrao: 6, elo: 7 },
+  { parcelas: 3, padrao: 6.5, elo: 7.5 },
+  { parcelas: 4, padrao: 7, elo: 8 },
+  { parcelas: 5, padrao: 7.5, elo: 8.5 },
+  { parcelas: 6, padrao: 7.5, elo: 8.5 },
+  { parcelas: 7, padrao: 8, elo: 9 },
+  { parcelas: 8, padrao: 8.5, elo: 9.5 },
+  { parcelas: 9, padrao: 9, elo: 10 },
+  { parcelas: 10, padrao: 9.5, elo: 10.5 },
+  { parcelas: 11, padrao: 10, elo: 11 },
+  { parcelas: 12, padrao: 10.5, elo: 11.5 },
+  { parcelas: 13, padrao: 14, elo: null },
+  { parcelas: 14, padrao: 14.5, elo: null },
+  { parcelas: 15, padrao: 15, elo: null },
+  { parcelas: 16, padrao: 15.5, elo: null },
+  { parcelas: 17, padrao: 16, elo: null },
+  { parcelas: 18, padrao: 16.5, elo: null }
+];
+function normalizarTaxas(bruto) {
+  if (!Array.isArray(bruto)) return TAXAS_PADRAO;
+  const limpas = bruto.map((linha) => {
+    if (!linha || typeof linha !== "object") return null;
+    const { parcelas, padrao, elo } = linha;
+    const p = Number(parcelas);
+    const t = Number(padrao);
+    if (!Number.isInteger(p) || p < 1 || p > 24) return null;
+    if (!Number.isFinite(t) || t < 0 || t >= 100) return null;
+    const e = elo === null || elo === void 0 || elo === "" ? null : Number(elo);
+    return {
+      parcelas: p,
+      padrao: t,
+      elo: e !== null && Number.isFinite(e) && e >= 0 && e < 100 ? e : null
+    };
+  }).filter((l) => l !== null).sort((a, b) => a.parcelas - b.parcelas);
+  return limpas.length ? limpas : TAXAS_PADRAO;
+}
+
+// server/sistema.ts
 var rotasSistema = Router8();
 rotasSistema.use(autenticar, exigir("configuracoes"));
 rotasSistema.get(
@@ -4149,17 +4192,59 @@ rotasSistema.post(
     });
   })
 );
+var CHAVE_TAXAS = "taxas_cartao";
+async function taxasSalvas() {
+  const guardado = await db.setting.findUnique({ where: { key: CHAVE_TAXAS } });
+  if (!guardado) return TAXAS_PADRAO;
+  try {
+    return normalizarTaxas(JSON.parse(guardado.value));
+  } catch {
+    return TAXAS_PADRAO;
+  }
+}
+rotasSistema.get(
+  "/taxas-cartao",
+  rota(async (_req, res) => {
+    res.json({ taxas: await taxasSalvas(), padrao: TAXAS_PADRAO });
+  })
+);
+rotasSistema.put(
+  "/taxas-cartao",
+  somenteAdmin,
+  rota(async (req, res) => {
+    const { taxas } = validar(
+      z7.object({
+        taxas: z7.array(
+          z7.object({
+            parcelas: z7.coerce.number().int().min(1).max(24),
+            padrao: z7.coerce.number().min(0).max(99.99),
+            elo: z7.coerce.number().min(0).max(99.99).optional().nullable()
+          })
+        ).min(1, "Informe ao menos uma linha").max(24)
+      }),
+      req.body
+    );
+    const limpas = normalizarTaxas(taxas);
+    await db.setting.upsert({
+      where: { key: CHAVE_TAXAS },
+      update: { value: JSON.stringify(limpas) },
+      create: { key: CHAVE_TAXAS, value: JSON.stringify(limpas) }
+    });
+    await registrarLog({ acao: "TAXAS_CARTAO", entidade: "Setting", id: CHAVE_TAXAS, req });
+    res.json({ taxas: limpas, message: `${limpas.length} faixa(s) de parcelamento salvas.` });
+  })
+);
 
 // server/caixa.ts
 import { Router as Router10 } from "express";
-import { z as z8 } from "zod";
+import { z as z9 } from "zod";
 
 // server/vendas-service.ts
 import { Prisma as Prisma3 } from "@prisma/client";
 
 // server/notificacoes.ts
 import { Router as Router9 } from "express";
-import { z as z7 } from "zod";
+import { z as z8 } from "zod";
 async function notificar(aviso) {
   try {
     await db.notification.create({ data: aviso });
@@ -4187,10 +4272,10 @@ rotasNotificacoes.get(
   "/",
   rota(async (req, res) => {
     const q = validar(
-      z7.object({
-        page: z7.coerce.number().int().min(1).optional(),
-        pageSize: z7.coerce.number().int().min(1).max(100).optional(),
-        naoLidas: z7.enum(["true", "false"]).optional()
+      z8.object({
+        page: z8.coerce.number().int().min(1).optional(),
+        pageSize: z8.coerce.number().int().min(1).max(100).optional(),
+        naoLidas: z8.enum(["true", "false"]).optional()
       }),
       semVazios(req.query)
     );
@@ -4210,7 +4295,7 @@ rotasNotificacoes.get(
 rotasNotificacoes.post(
   "/ler",
   rota(async (req, res) => {
-    const { id } = validar(z7.object({ id: z7.string().uuid().optional() }), req.body ?? {});
+    const { id } = validar(z8.object({ id: z8.string().uuid().optional() }), req.body ?? {});
     await db.notification.updateMany({
       where: { userId: req.usuario.id, ...id ? { id } : { read: false } },
       data: { read: true }
@@ -4500,9 +4585,9 @@ rotasCaixa.post(
   exigir("pdv"),
   rota(async (req, res) => {
     const { unitId, notes } = validar(
-      z8.object({
-        unitId: z8.string().uuid().optional().nullable(),
-        notes: z8.string().trim().max(300).optional().nullable()
+      z9.object({
+        unitId: z9.string().uuid().optional().nullable(),
+        notes: z9.string().trim().max(300).optional().nullable()
       }),
       req.body ?? {}
     );
@@ -4528,7 +4613,7 @@ rotasCaixa.post(
   exigir("caixa.fechar"),
   rota(async (req, res) => {
     const { notes } = validar(
-      z8.object({ notes: z8.string().trim().max(500).optional().nullable() }),
+      z9.object({ notes: z9.string().trim().max(500).optional().nullable() }),
       req.body ?? {}
     );
     const turno = await db.cashRegister.findFirst({
@@ -4569,9 +4654,9 @@ rotasCaixa.get(
   exigir("pdv"),
   rota(async (req, res) => {
     const q = validar(
-      z8.object({
-        cashierId: z8.string().uuid().optional(),
-        status: z8.enum(["ABERTO", "FECHADO"]).optional()
+      z9.object({
+        cashierId: z9.string().uuid().optional(),
+        status: z9.enum(["ABERTO", "FECHADO"]).optional()
       }),
       semVazios(req.query)
     );
@@ -4590,7 +4675,7 @@ rotasCaixa.get(
   exigir("pdv"),
   rota(async (req, res) => {
     const { format } = validar(
-      z8.object({ format: z8.enum(["json", "pdf", "xlsx", "csv"]).default("json") }),
+      z9.object({ format: z9.enum(["json", "pdf", "xlsx", "csv"]).default("json") }),
       semVazios(req.query)
     );
     const turno = await db.cashRegister.findUnique({
@@ -4667,7 +4752,7 @@ rotasCaixa.get(
 // server/prevendas.ts
 import { Prisma as Prisma4 } from "@prisma/client";
 import { Router as Router11 } from "express";
-import { z as z9 } from "zod";
+import { z as z10 } from "zod";
 var rotasPreVendas = Router11();
 rotasPreVendas.use(autenticar);
 var PAGAMENTOS = ["PIX", "DINHEIRO", "DEBITO", "CREDITO", "TRANSFERENCIA", "OUTRO"];
@@ -4714,25 +4799,25 @@ var COM_TUDO = {
   unit: { select: { id: true, name: true } },
   sale: { select: { id: true, code: true } }
 };
-var itemSchema = z9.object({
-  productId: z9.string().uuid("Selecione o produto"),
-  quantity: z9.coerce.number().int().min(1, "Quantidade m\xEDnima: 1"),
-  unitPrice: z9.coerce.number().min(0, "Informe o valor"),
-  imei: z9.string().trim().max(40).optional().nullable(),
-  serialNumber: z9.string().trim().max(60).optional().nullable()
+var itemSchema = z10.object({
+  productId: z10.string().uuid("Selecione o produto"),
+  quantity: z10.coerce.number().int().min(1, "Quantidade m\xEDnima: 1"),
+  unitPrice: z10.coerce.number().min(0, "Informe o valor"),
+  imei: z10.string().trim().max(40).optional().nullable(),
+  serialNumber: z10.string().trim().max(60).optional().nullable()
 });
-var preVendaSchema = z9.object({
-  customerName: z9.string().trim().min(2, "Informe o nome do cliente").max(180),
-  customerPhone: z9.string().trim().max(30).optional().nullable(),
-  customerDocument: z9.string().trim().max(30).optional().nullable(),
-  customerId: z9.string().uuid().optional().nullable(),
-  unitId: z9.string().uuid().optional().nullable(),
-  paymentMethod: z9.enum(PAGAMENTOS).optional().nullable(),
-  installments: z9.coerce.number().int().min(1).max(24).default(1),
-  notes: z9.string().trim().max(1e3).optional().nullable(),
-  items: z9.array(itemSchema).min(1, "Inclua ao menos um produto"),
+var preVendaSchema = z10.object({
+  customerName: z10.string().trim().min(2, "Informe o nome do cliente").max(180),
+  customerPhone: z10.string().trim().max(30).optional().nullable(),
+  customerDocument: z10.string().trim().max(30).optional().nullable(),
+  customerId: z10.string().uuid().optional().nullable(),
+  unitId: z10.string().uuid().optional().nullable(),
+  paymentMethod: z10.enum(PAGAMENTOS).optional().nullable(),
+  installments: z10.coerce.number().int().min(1).max(24).default(1),
+  notes: z10.string().trim().max(1e3).optional().nullable(),
+  items: z10.array(itemSchema).min(1, "Inclua ao menos um produto"),
   /** Aparelho usado que o cliente está dando como parte do pagamento. */
-  tradeInId: z9.string().uuid().optional().nullable()
+  tradeInId: z10.string().uuid().optional().nullable()
 });
 var podeVerTodas = (req) => podeFazer(req.usuario?.papel, "prevenda.verTodas");
 async function liberarTroca(preSaleId) {
@@ -4745,16 +4830,16 @@ rotasPreVendas.get(
   "/",
   rota(async (req, res) => {
     const q = validar(
-      z9.object({
-        page: z9.coerce.number().int().min(1).optional(),
-        pageSize: z9.coerce.number().int().min(1).max(100).optional(),
+      z10.object({
+        page: z10.coerce.number().int().min(1).optional(),
+        pageSize: z10.coerce.number().int().min(1).max(100).optional(),
         // Aceita mais de um status separado por vírgula: a fila do caixa
         // precisa das que aguardam e das que já estão sendo atendidas.
-        status: z9.string().optional().transform((v) => v ? v.split(",").map((s) => s.trim()).filter(Boolean) : void 0).pipe(z9.array(z9.enum(STATUS_PRE_VENDA)).min(1).optional()),
-        sellerId: z9.string().uuid().optional(),
-        search: z9.string().trim().optional(),
-        startDate: z9.coerce.date().optional(),
-        endDate: z9.coerce.date().optional()
+        status: z10.string().optional().transform((v) => v ? v.split(",").map((s) => s.trim()).filter(Boolean) : void 0).pipe(z10.array(z10.enum(STATUS_PRE_VENDA)).min(1).optional()),
+        sellerId: z10.string().uuid().optional(),
+        search: z10.string().trim().optional(),
+        startDate: z10.coerce.date().optional(),
+        endDate: z10.coerce.date().optional()
       }),
       semVazios(req.query)
     );
@@ -4898,22 +4983,22 @@ rotasPreVendas.post(
     res.json(limpar(atualizada));
   })
 );
-var finalizarSchema = z9.object({
-  unitId: z9.string().uuid("Informe de qual unidade o produto saiu"),
-  paymentMethod: z9.enum(PAGAMENTOS),
-  installments: z9.coerce.number().int().min(1).max(24).default(1),
+var finalizarSchema = z10.object({
+  unitId: z10.string().uuid("Informe de qual unidade o produto saiu"),
+  paymentMethod: z10.enum(PAGAMENTOS),
+  installments: z10.coerce.number().int().min(1).max(24).default(1),
   /** Pagamento dividido, igual ao do balcão. */
-  payments: z9.array(
-    z9.object({
-      method: z9.enum(PAGAMENTOS),
-      amount: z9.coerce.number().min(0.01, "Informe o valor desta forma"),
-      installments: z9.coerce.number().int().min(1).max(24).default(1),
-      notes: z9.string().trim().max(120).optional().nullable()
+  payments: z10.array(
+    z10.object({
+      method: z10.enum(PAGAMENTOS),
+      amount: z10.coerce.number().min(0.01, "Informe o valor desta forma"),
+      installments: z10.coerce.number().int().min(1).max(24).default(1),
+      notes: z10.string().trim().max(120).optional().nullable()
     })
   ).max(6, "No m\xE1ximo 6 formas na mesma venda").optional(),
-  notes: z9.string().trim().max(1e3).optional().nullable(),
+  notes: z10.string().trim().max(1e3).optional().nullable(),
   /** O caixa pode corrigir valor e identificadores antes de fechar. */
-  items: z9.array(itemSchema.extend({ id: z9.string().uuid().optional() })).optional()
+  items: z10.array(itemSchema.extend({ id: z10.string().uuid().optional() })).optional()
 });
 rotasPreVendas.post(
   "/:id/finalizar",
@@ -4992,7 +5077,7 @@ rotasPreVendas.post(
   exigir("venda.finalizar"),
   rota(async (req, res) => {
     const { motivo } = validar(
-      z9.object({ motivo: z9.string().trim().max(300).optional() }),
+      z10.object({ motivo: z10.string().trim().max(300).optional() }),
       req.body ?? {}
     );
     const preVenda = await db.preSale.findUnique({ where: { id: req.params.id } });
@@ -5038,7 +5123,7 @@ rotasPreVendas.delete(
 // server/trocas.ts
 import { Prisma as Prisma5 } from "@prisma/client";
 import { Router as Router12 } from "express";
-import { z as z10 } from "zod";
+import { z as z11 } from "zod";
 
 // shared/trocas.ts
 var DEFEITOS = [
@@ -5098,37 +5183,37 @@ var paraJson = (t) => ({
   /** Quanto o cliente ainda precisa pagar. Negativo = a loja é que deve. */
   diferenca: Number(t.valorSaida) - Number(t.valorAvaliado)
 });
-var fotoSchema = z10.object({
-  tipo: z10.enum(["ANATEL", "DOCUMENTO", "APARELHO"]),
+var fotoSchema = z11.object({
+  tipo: z11.enum(["ANATEL", "DOCUMENTO", "APARELHO"]),
   /** data:image/jpeg;base64,… já reduzida pelo navegador. */
-  data: z10.string().max(4e6)
+  data: z11.string().max(4e6)
 });
-var trocaSchema = z10.object({
-  modelo: z10.string().trim().min(2, "Informe o modelo do aparelho").max(120),
-  marca: z10.string().trim().max(60).optional().nullable(),
-  armazenamento: z10.string().trim().max(20).optional().nullable(),
-  cor: z10.string().trim().max(40).optional().nullable(),
+var trocaSchema = z11.object({
+  modelo: z11.string().trim().min(2, "Informe o modelo do aparelho").max(120),
+  marca: z11.string().trim().max(60).optional().nullable(),
+  armazenamento: z11.string().trim().max(20).optional().nullable(),
+  cor: z11.string().trim().max(40).optional().nullable(),
   /**
    * Opcional porque o balcão não para.
    *
    * Quando vem, é conferido de verdade: erro de digitação vira problema
    * depois que o cliente já foi embora.
    */
-  imei: z10.string().trim().transform((v) => v.replace(/\D/g, "")).refine((v) => v === "" || v.length === 15, "O IMEI tem 15 n\xFAmeros").refine((v) => v === "" || imeiValido(v), "Esse IMEI n\xE3o passa na confer\xEAncia \u2014 confira os n\xFAmeros").optional().nullable(),
-  imeiSituacao: z10.enum(["NAO_CONSULTADO", "REGULAR", "IRREGULAR", "BLOQUEADO"]).default("NAO_CONSULTADO"),
-  estado: z10.string().trim().max(40).optional().nullable(),
-  defeitos: z10.array(z10.enum(CHAVES_DEFEITO)).default([]),
-  observacoes: z10.string().trim().max(2e3).optional().nullable(),
-  valorAvaliado: z10.coerce.number().min(0, "Informe quanto vale o aparelho do cliente"),
-  productId: z10.string().uuid().optional().nullable(),
-  saidaNome: z10.string().trim().max(180).optional().nullable(),
-  valorSaida: z10.coerce.number().min(0).default(0),
-  customerId: z10.string().uuid().optional().nullable(),
-  customerName: z10.string().trim().min(2, "Informe o nome do cliente").max(180),
-  customerPhone: z10.string().trim().max(30).optional().nullable(),
-  customerDocument: z10.string().trim().max(30).optional().nullable(),
-  unitId: z10.string().uuid().optional().nullable(),
-  photos: z10.array(fotoSchema).max(10).optional()
+  imei: z11.string().trim().transform((v) => v.replace(/\D/g, "")).refine((v) => v === "" || v.length === 15, "O IMEI tem 15 n\xFAmeros").refine((v) => v === "" || imeiValido(v), "Esse IMEI n\xE3o passa na confer\xEAncia \u2014 confira os n\xFAmeros").optional().nullable(),
+  imeiSituacao: z11.enum(["NAO_CONSULTADO", "REGULAR", "IRREGULAR", "BLOQUEADO"]).default("NAO_CONSULTADO"),
+  estado: z11.string().trim().max(40).optional().nullable(),
+  defeitos: z11.array(z11.enum(CHAVES_DEFEITO)).default([]),
+  observacoes: z11.string().trim().max(2e3).optional().nullable(),
+  valorAvaliado: z11.coerce.number().min(0, "Informe quanto vale o aparelho do cliente"),
+  productId: z11.string().uuid().optional().nullable(),
+  saidaNome: z11.string().trim().max(180).optional().nullable(),
+  valorSaida: z11.coerce.number().min(0).default(0),
+  customerId: z11.string().uuid().optional().nullable(),
+  customerName: z11.string().trim().min(2, "Informe o nome do cliente").max(180),
+  customerPhone: z11.string().trim().max(30).optional().nullable(),
+  customerDocument: z11.string().trim().max(30).optional().nullable(),
+  unitId: z11.string().uuid().optional().nullable(),
+  photos: z11.array(fotoSchema).max(10).optional()
 });
 var podeVerTodas2 = (req) => podeFazer(req.usuario?.papel, "prevenda.verTodas");
 function separarFotos2(fotos) {
@@ -5143,13 +5228,13 @@ rotasTrocas.get(
   exigir("troca.criar"),
   rota(async (req, res) => {
     const q = validar(
-      z10.object({
-        page: z10.coerce.number().int().min(1).optional(),
-        pageSize: z10.coerce.number().int().min(1).max(100).optional(),
-        status: z10.string().optional().transform((v) => v ? v.split(",").map((s) => s.trim()).filter(Boolean) : void 0).pipe(z10.array(z10.enum(["AVALIADA", "ACEITA", "RECUSADA"])).min(1).optional()),
-        search: z10.string().trim().optional(),
+      z11.object({
+        page: z11.coerce.number().int().min(1).optional(),
+        pageSize: z11.coerce.number().int().min(1).max(100).optional(),
+        status: z11.string().optional().transform((v) => v ? v.split(",").map((s) => s.trim()).filter(Boolean) : void 0).pipe(z11.array(z11.enum(["AVALIADA", "ACEITA", "RECUSADA"])).min(1).optional()),
+        search: z11.string().trim().optional(),
         /** Só as que ainda não foram amarradas a uma pré-venda. */
-        livres: z10.enum(["true", "false"]).optional()
+        livres: z11.enum(["true", "false"]).optional()
       }),
       semVazios(req.query)
     );
@@ -5261,10 +5346,10 @@ rotasTrocas.post(
     });
   })
 );
-var situacaoSchema = z10.object({
-  imeiSituacao: z10.enum(["NAO_CONSULTADO", "REGULAR", "IRREGULAR", "BLOQUEADO"]),
+var situacaoSchema = z11.object({
+  imeiSituacao: z11.enum(["NAO_CONSULTADO", "REGULAR", "IRREGULAR", "BLOQUEADO"]),
   /** Print da consulta, se veio junto. */
-  foto: z10.string().max(4e6).optional().nullable()
+  foto: z11.string().max(4e6).optional().nullable()
 });
 rotasTrocas.post(
   "/:id/anatel",
@@ -5333,7 +5418,7 @@ rotasTrocas.delete(
 
 // server/vendas.ts
 import { Router as Router13 } from "express";
-import { z as z11 } from "zod";
+import { z as z12 } from "zod";
 
 // server/recibo.ts
 import PDFDocument2 from "pdfkit";
@@ -5497,20 +5582,20 @@ var COM_TUDO3 = {
   preSale: { select: { id: true, code: true } },
   payments: { orderBy: { amount: "desc" } }
 };
-var filtrosSchema2 = z11.object({
-  page: z11.coerce.number().int().min(1).optional(),
-  pageSize: z11.coerce.number().int().min(1).max(200).optional(),
-  search: z11.string().trim().optional(),
-  productId: z11.string().uuid().optional(),
-  categoryId: z11.string().uuid().optional(),
-  paymentMethod: z11.enum(PAGAMENTOS2).optional(),
-  sellerId: z11.string().uuid().optional(),
-  cashierId: z11.string().uuid().optional(),
-  unitId: z11.string().uuid().optional(),
-  startDate: z11.coerce.date().optional(),
-  endDate: z11.coerce.date().optional(),
-  sortBy: z11.string().optional(),
-  sortOrder: z11.enum(["asc", "desc"]).optional()
+var filtrosSchema2 = z12.object({
+  page: z12.coerce.number().int().min(1).optional(),
+  pageSize: z12.coerce.number().int().min(1).max(200).optional(),
+  search: z12.string().trim().optional(),
+  productId: z12.string().uuid().optional(),
+  categoryId: z12.string().uuid().optional(),
+  paymentMethod: z12.enum(PAGAMENTOS2).optional(),
+  sellerId: z12.string().uuid().optional(),
+  cashierId: z12.string().uuid().optional(),
+  unitId: z12.string().uuid().optional(),
+  startDate: z12.coerce.date().optional(),
+  endDate: z12.coerce.date().optional(),
+  sortBy: z12.string().optional(),
+  sortOrder: z12.enum(["asc", "desc"]).optional()
 });
 async function filtrarVendas(q, unidadeId) {
   const cond = [{ status: "FINALIZADA" }];
@@ -5581,31 +5666,31 @@ rotasVendas.get(
     res.json(limpar(venda));
   })
 );
-var vendaSchema = z11.object({
-  items: z11.array(
-    z11.object({
-      productId: z11.string().uuid("Selecione o produto"),
-      quantity: z11.coerce.number().int().min(1, "Quantidade m\xEDnima: 1"),
-      unitPrice: z11.coerce.number().min(0, "Informe o valor"),
-      imei: z11.string().trim().max(40).optional().nullable(),
-      serialNumber: z11.string().trim().max(60).optional().nullable()
+var vendaSchema = z12.object({
+  items: z12.array(
+    z12.object({
+      productId: z12.string().uuid("Selecione o produto"),
+      quantity: z12.coerce.number().int().min(1, "Quantidade m\xEDnima: 1"),
+      unitPrice: z12.coerce.number().min(0, "Informe o valor"),
+      imei: z12.string().trim().max(40).optional().nullable(),
+      serialNumber: z12.string().trim().max(60).optional().nullable()
     })
   ).min(1, "Inclua ao menos um produto"),
-  unitId: z11.string().uuid("Informe de qual unidade o produto saiu"),
-  paymentMethod: z11.enum(PAGAMENTOS2),
-  installments: z11.coerce.number().int().min(1).max(24).default(1),
+  unitId: z12.string().uuid("Informe de qual unidade o produto saiu"),
+  paymentMethod: z12.enum(PAGAMENTOS2),
+  installments: z12.coerce.number().int().min(1).max(24).default(1),
   /**
    * Pagamento dividido: parte no PIX, parte no cartão, e por aí.
    *
    * Vazio = a venda inteira em `paymentMethod`. A soma tem de fechar com
    * o total, e isso é conferido dentro da transação.
    */
-  payments: z11.array(
-    z11.object({
-      method: z11.enum(PAGAMENTOS2),
-      amount: z11.coerce.number().min(0.01, "Informe o valor desta forma"),
-      installments: z11.coerce.number().int().min(1).max(24).default(1),
-      notes: z11.string().trim().max(120).optional().nullable()
+  payments: z12.array(
+    z12.object({
+      method: z12.enum(PAGAMENTOS2),
+      amount: z12.coerce.number().min(0.01, "Informe o valor desta forma"),
+      installments: z12.coerce.number().int().min(1).max(24).default(1),
+      notes: z12.string().trim().max(120).optional().nullable()
     })
   ).max(6, "No m\xE1ximo 6 formas na mesma venda").optional(),
   /**
@@ -5615,24 +5700,24 @@ var vendaSchema = z11.object({
    * atrasa todo mundo. A pré-venda continua pedindo: lá o caixa precisa
    * saber de quem é o pedido.
    */
-  customerName: z11.string().trim().max(180).optional().nullable(),
-  customerPhone: z11.string().trim().max(30).optional().nullable(),
-  customerDocument: z11.string().trim().max(30).optional().nullable(),
-  customerId: z11.string().uuid().optional().nullable(),
+  customerName: z12.string().trim().max(180).optional().nullable(),
+  customerPhone: z12.string().trim().max(30).optional().nullable(),
+  customerDocument: z12.string().trim().max(30).optional().nullable(),
+  customerId: z12.string().uuid().optional().nullable(),
   /**
    * Aparelho que o cliente deixou como parte do pagamento.
    *
    * Versão de balcão: só o que dá para anotar com o cliente na frente.
    * O aparelho vira uma forma de pagamento e o cliente paga a diferença.
    */
-  tradeIn: z11.object({
-    modelo: z11.string().trim().min(2, "Informe o modelo do aparelho").max(120),
-    cor: z11.string().trim().max(40).optional().nullable(),
-    armazenamento: z11.string().trim().max(20).optional().nullable(),
-    valorAvaliado: z11.coerce.number().min(0.01, "Informe quanto vale o aparelho do cliente")
+  tradeIn: z12.object({
+    modelo: z12.string().trim().min(2, "Informe o modelo do aparelho").max(120),
+    cor: z12.string().trim().max(40).optional().nullable(),
+    armazenamento: z12.string().trim().max(20).optional().nullable(),
+    valorAvaliado: z12.coerce.number().min(0.01, "Informe quanto vale o aparelho do cliente")
   }).optional().nullable(),
   /** Vendedor que atendeu, para a comissão. Vazio = o próprio caixa. */
-  sellerId: z11.string().uuid().optional().nullable(),
+  sellerId: z12.string().uuid().optional().nullable(),
   /**
    * Nome digitado no balcão.
    *
@@ -5640,9 +5725,9 @@ var vendaSchema = z11.object({
    * no sistema. Sem isto, a venda ficaria no nome do caixa e a comissão
    * apontaria para a pessoa errada.
    */
-  sellerName: z11.string().trim().max(120).optional().nullable(),
-  notes: z11.string().trim().max(1e3).optional().nullable(),
-  saleDate: z11.coerce.date().optional()
+  sellerName: z12.string().trim().max(120).optional().nullable(),
+  notes: z12.string().trim().max(1e3).optional().nullable(),
+  saleDate: z12.coerce.date().optional()
 });
 rotasVendas.post(
   "/",
