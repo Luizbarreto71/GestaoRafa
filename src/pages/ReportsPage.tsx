@@ -12,6 +12,7 @@ import {
   BarChart3,
   Boxes,
   CalendarRange,
+  CreditCard,
   FileSpreadsheet,
   FileText,
   Loader2,
@@ -21,7 +22,14 @@ import {
 } from 'lucide-react';
 import { useState } from 'react';
 
-type ReportKey = 'stock' | 'sales' | 'by-category' | 'by-supplier' | 'by-period' | 'movements';
+type ReportKey =
+  | 'stock'
+  | 'sales'
+  | 'by-category'
+  | 'by-supplier'
+  | 'by-period'
+  | 'by-payment'
+  | 'movements';
 
 interface ReportDefinition {
   key: ReportKey;
@@ -78,6 +86,15 @@ const REPORTS: ReportDefinition[] = [
     icon: CalendarRange,
     tone: 'bg-navy-900/10 text-navy-900 dark:bg-white/10 dark:text-slate-200',
     fields: ['period', 'groupBy'],
+  },
+  {
+    key: 'by-payment',
+    endpoint: '/reports/by-payment',
+    title: 'Vendas por forma de pagamento',
+    description: 'Quanto entrou em Pix, dinheiro, cartão e troca, com ticket médio.',
+    icon: CreditCard,
+    tone: 'bg-accent/10 text-accent',
+    fields: ['period'],
   },
   {
     key: 'movements',
