@@ -221,7 +221,12 @@ function criarCliente() {
   try {
     return new PrismaClient({
       log: process.env.NODE_ENV === "production" ? ["error"] : ["error", "warn"],
-      datasources: { db: { url: endereco } }
+      datasources: { db: { url: endereco } },
+      // O padrão do Prisma é 5 segundos, contados da abertura da
+      // transação. Com o banco na nuvem, cada consulta lá dentro é uma ida
+      // e volta pela internet — uma venda de vários itens passava disso e
+      // era desfeita no meio, com a caixa vendo só "não foi possível".
+      transactionOptions: { timeout: 3e4, maxWait: 15e3 }
     });
   } catch (erro) {
     erroDoBanco = erro instanceof Error ? erro.message : String(erro);
@@ -4795,31 +4800,44 @@ async function registrarVenda(dados) {
       throw new AppError("Para deixar valor em aberto, informe o telefone de quem vai pagar.");
     }
   }
+  const [unidade, tabela, turno, vendedorCadastrado] = await Promise.all([
+    db.unit.findUnique({ where: { id: dados.unitId } }),
+    taxasDoCartao(),
+    dados.cashierId ? db.cashRegister.findFirst({
+      where: { cashierId: dados.cashierId, status: "ABERTO" },
+      orderBy: { openedAt: "desc" }
+    }) : null,
+    !dados.sellerName?.trim() && dados.sellerId ? db.user.findUnique({ where: { id: dados.sellerId }, select: { name: true } }) : null
+  ]);
+  if (!unidade) throw naoEncontrado("Unidade");
   const resultado = await db.$transaction(async (tx) => {
-    const unidade = await tx.unit.findUnique({ where: { id: dados.unitId } });
-    if (!unidade) throw naoEncontrado("Unidade");
     await conferirIdentificadores(dados.itens, tx);
-    const produtos = /* @__PURE__ */ new Map();
+    const achados = await tx.product.findMany({
+      where: { id: { in: [...new Set(dados.itens.map((i) => i.productId))] } }
+    });
+    const produtos = new Map(achados.map((p) => [p.id, p]));
+    if (dados.itens.some((i) => !produtos.has(i.productId))) throw naoEncontrado("Produto");
+    const saldos = new Map(
+      await Promise.all(
+        [...produtos.keys()].map(
+          async (id) => [id, await disponivel(id, dados.unitId, tx)]
+        )
+      )
+    );
+    const pedido = /* @__PURE__ */ new Map();
     for (const item of dados.itens) {
-      const produto = produtos.get(item.productId) ?? await tx.product.findUnique({ where: { id: item.productId } });
-      if (!produto) throw naoEncontrado("Produto");
-      produtos.set(item.productId, produto);
-      const livre = await disponivel(item.productId, dados.unitId, tx);
-      if (livre < item.quantity) {
+      pedido.set(item.productId, (pedido.get(item.productId) ?? 0) + item.quantity);
+    }
+    for (const [productId, quantidade] of pedido) {
+      const livre = saldos.get(productId) ?? 0;
+      if (livre < quantidade) {
         throw new AppError(
-          `Estoque insuficiente na ${unidade.name} para "${produto.name}". Dispon\xEDvel: ${livre} unidade(s).`
+          `Estoque insuficiente na ${unidade.name} para "${produtos.get(productId).name}". Dispon\xEDvel: ${livre} unidade(s).`
         );
       }
     }
     const nome = dados.customerName?.trim() || null;
-    let vendedorNome = dados.sellerName?.trim() || null;
-    if (!vendedorNome && dados.sellerId) {
-      const vendedor = await tx.user.findUnique({
-        where: { id: dados.sellerId },
-        select: { name: true }
-      });
-      vendedorNome = vendedor?.name ?? null;
-    }
+    const vendedorNome = dados.sellerName?.trim() || vendedorCadastrado?.name || null;
     let clienteId = dados.customerId ?? null;
     if (!clienteId && (nome || dados.customerPhone || dados.customerDocument)) {
       const existente = (dados.customerPhone ? await tx.customer.findFirst({ where: { phone: dados.customerPhone } }) : null) ?? (dados.customerDocument ? await tx.customer.findFirst({ where: { document: dados.customerDocument } }) : null) ?? (nome ? await tx.customer.findFirst({ where: { name: { equals: nome, mode: "insensitive" } } }) : null);
@@ -4850,7 +4868,6 @@ async function registrarVenda(dados) {
       (soma, i) => soma.add(i.costPrice.mul(i.quantity)),
       new Prisma3.Decimal(0)
     );
-    const tabela = await taxasDoCartao();
     const daTroca = new Prisma3.Decimal(dados.trocaNova?.valorAvaliado ?? dados.trocaValor ?? 0);
     const aReceber = total.minus(daTroca);
     const emDinheiro = dados.pagamentos?.length ? dados.pagamentos.map((p) => ({
@@ -4908,10 +4925,6 @@ async function registrarVenda(dados) {
       (maior, p) => !maior || p.amount.greaterThan(maior.amount) ? p : maior,
       null
     )?.method ?? "TROCA";
-    const turno = dados.cashierId ? await tx.cashRegister.findFirst({
-      where: { cashierId: dados.cashierId, status: "ABERTO" },
-      orderBy: { openedAt: "desc" }
-    }) : null;
     const venda = await tx.sale.create({
       data: {
         code: await proximoCodigo("venda", "VD", tx),

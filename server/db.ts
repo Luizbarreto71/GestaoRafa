@@ -79,6 +79,11 @@ function criarCliente(): PrismaClient | null {
     return new PrismaClient({
       log: process.env.NODE_ENV === 'production' ? ['error'] : ['error', 'warn'],
       datasources: { db: { url: endereco } },
+      // O padrão do Prisma é 5 segundos, contados da abertura da
+      // transação. Com o banco na nuvem, cada consulta lá dentro é uma ida
+      // e volta pela internet — uma venda de vários itens passava disso e
+      // era desfeita no meio, com a caixa vendo só "não foi possível".
+      transactionOptions: { timeout: 30_000, maxWait: 15_000 },
     });
   } catch (erro) {
     erroDoBanco = erro instanceof Error ? erro.message : String(erro);

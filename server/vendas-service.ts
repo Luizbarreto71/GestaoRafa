@@ -181,28 +181,61 @@ export async function registrarVenda(dados: DadosDaVenda) {
     }
   }
 
+  // Fora da transação de propósito. Cada consulta aqui dentro é uma ida ao
+  // banco, e o relógio da transação corre desde a primeira: com o banco na
+  // nuvem, meia dúzia de leituras que não precisam de trava estouravam o
+  // limite e derrubavam a venda inteira.
+  const [unidade, tabela, turno, vendedorCadastrado] = await Promise.all([
+    db.unit.findUnique({ where: { id: dados.unitId } }),
+    taxasDoCartao(),
+    dados.cashierId
+      ? db.cashRegister.findFirst({
+          where: { cashierId: dados.cashierId, status: 'ABERTO' },
+          orderBy: { openedAt: 'desc' },
+        })
+      : null,
+    !dados.sellerName?.trim() && dados.sellerId
+      ? db.user.findUnique({ where: { id: dados.sellerId }, select: { name: true } })
+      : null,
+  ]);
+
+  if (!unidade) throw naoEncontrado('Unidade');
+
   const resultado = await db.$transaction(async (tx) => {
-    const unidade = await tx.unit.findUnique({ where: { id: dados.unitId } });
-    if (!unidade) throw naoEncontrado('Unidade');
 
     await conferirIdentificadores(dados.itens, tx);
 
     // Confere tudo antes de mexer em qualquer saldo: melhor recusar a venda
     // inteira do que baixar metade dela.
-    const produtos = new Map<string, Prisma.ProductGetPayload<object>>();
+    // Todos de uma vez, e os saldos em paralelo: um por um, uma venda de
+    // cinco itens eram dez idas ao banco em fila, cada uma atravessando a
+    // internet.
+    const achados = await tx.product.findMany({
+      where: { id: { in: [...new Set(dados.itens.map((i) => i.productId))] } },
+    });
+    const produtos = new Map(achados.map((p) => [p.id, p]));
+    if (dados.itens.some((i) => !produtos.has(i.productId))) throw naoEncontrado('Produto');
 
+    const saldos = new Map(
+      await Promise.all(
+        [...produtos.keys()].map(
+          async (id) => [id, await disponivel(id, dados.unitId, tx)] as const,
+        ),
+      ),
+    );
+
+    // Duas linhas do mesmo produto na mesma venda disputam o mesmo saldo:
+    // conferir cada uma sozinha deixaria passar o dobro do que existe.
+    const pedido = new Map<string, number>();
     for (const item of dados.itens) {
-      const produto =
-        produtos.get(item.productId) ??
-        (await tx.product.findUnique({ where: { id: item.productId } }));
+      pedido.set(item.productId, (pedido.get(item.productId) ?? 0) + item.quantity);
+    }
 
-      if (!produto) throw naoEncontrado('Produto');
-      produtos.set(item.productId, produto);
-
-      const livre = await disponivel(item.productId, dados.unitId, tx);
-      if (livre < item.quantity) {
+    for (const [productId, quantidade] of pedido) {
+      const livre = saldos.get(productId) ?? 0;
+      if (livre < quantidade) {
         throw new AppError(
-          `Estoque insuficiente na ${unidade.name} para "${produto.name}". Disponível: ${livre} unidade(s).`,
+          `Estoque insuficiente na ${unidade.name} para "${produtos.get(productId)!.name}". Disponível: ${livre} unidade(s).`,
         );
       }
     }
@@ -217,14 +250,7 @@ export async function registrarVenda(dados: DadosDaVenda) {
 
 
     // Quem vendeu: o nome digitado manda; sem ele, o do usuário escolhido.
-    let vendedorNome = dados.sellerName?.trim() || null;
-    if (!vendedorNome && dados.sellerId) {
-      const vendedor = await tx.user.findUnique({
-        where: { id: dados.sellerId },
-        select: { name: true },
-      });
-      vendedorNome = vendedor?.name ?? null;
-    }
+    const vendedorNome = dados.sellerName?.trim() || vendedorCadastrado?.name || null;
     let clienteId = dados.customerId ?? null;
 
     if (!clienteId && (nome || dados.customerPhone || dados.customerDocument)) {
@@ -277,9 +303,8 @@ export async function registrarVenda(dados: DadosDaVenda) {
 
     // Toda venda guarda o rateio, mesmo com forma única: o fechamento soma
     // sempre da mesma tabela, sem caso especial.
-    // A taxa do crédito é buscada quando não vem da tela: assim o líquido
-    // fica certo mesmo na venda rápida, em que ninguém abre a calculadora.
-    const tabela = await taxasDoCartao();
+    // A taxa do crédito vem da tabela lida acima: assim o líquido fica
+    // certo mesmo na venda rápida, em que ninguém abre a calculadora.
 
     const daTroca = new Prisma.Decimal(dados.trocaNova?.valorAvaliado ?? dados.trocaValor ?? 0);
     // O que o cliente entrega em dinheiro: o resto vem no aparelho.
@@ -354,14 +379,6 @@ export async function registrarVenda(dados: DadosDaVenda) {
         (maior, p) => (!maior || p.amount.greaterThan(maior.amount) ? p : maior),
         null,
       )?.method ?? ('TROCA' as PaymentMethod);
-
-    // Vincula ao turno de caixa aberto, se houver.
-    const turno = dados.cashierId
-      ? await tx.cashRegister.findFirst({
-          where: { cashierId: dados.cashierId, status: 'ABERTO' },
-          orderBy: { openedAt: 'desc' },
-        })
-      : null;
 
     const venda = await tx.sale.create({
       data: {
