@@ -32,7 +32,7 @@ import { registrarVenda } from './vendas-service';
 export const rotasVendas = Router();
 rotasVendas.use(autenticar);
 
-const PAGAMENTOS = ['PIX', 'DINHEIRO', 'DEBITO', 'CREDITO', 'TRANSFERENCIA', 'OUTRO'] as const;
+const PAGAMENTOS = ['PIX', 'DINHEIRO', 'DEBITO', 'CREDITO', 'TRANSFERENCIA', 'EM_ABERTO', 'OUTRO'] as const;
 
 const COM_TUDO = {
   items: { include: { product: { select: { id: true, name: true, model: true, category: true } } } },

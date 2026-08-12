@@ -301,5 +301,6 @@ export const PAGAMENTO_LABEL: Record<string, string> = {
   CREDITO: 'Crédito',
   TRANSFERENCIA: 'Transferência',
   TROCA: 'Troca (aparelho)',
+  EM_ABERTO: 'Valor em aberto',
   OUTRO: 'Outro',
 };

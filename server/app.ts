@@ -14,6 +14,7 @@ import { rotasUnidades } from './unidades';
 import { rotasCaixa } from './caixa';
 import { rotasNotificacoes } from './notificacoes';
 import { rotasPreVendas } from './prevendas';
+import { rotasEmAberto } from './aberto';
 import { rotasTrocas } from './trocas';
 import { rotasVendas } from './vendas';
 
@@ -119,6 +120,7 @@ export function createApp(): Application {
   app.use('/api/sales', rotasVendas);
   app.use('/api/pre-sales', rotasPreVendas);
   app.use('/api/trocas', rotasTrocas);
+  app.use('/api/em-aberto', rotasEmAberto);
   app.use('/api/cash', rotasCaixa);
   app.use('/api/notifications', rotasNotificacoes);
   app.use('/api/movements', rotasMovimentacoes);

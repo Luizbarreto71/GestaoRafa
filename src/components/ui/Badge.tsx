@@ -88,6 +88,8 @@ const PAYMENT_TONE: Record<PaymentMethod, Tone> = {
   TRANSFERENCIA: 'neutral',
   // Cor própria: não é dinheiro entrando na gaveta.
   TROCA: 'purple',
+  // Não é dinheiro na gaveta: destaca como pendência.
+  EM_ABERTO: 'warning',
   OUTRO: 'neutral',
 };
 

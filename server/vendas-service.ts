@@ -100,6 +100,9 @@ function liquidoDaLinha(
   parcelas: number,
   informada: number | null | undefined,
 ): Prisma.Decimal {
+  // Fiado ainda não entrou: o líquido é zero até alguém dar baixa.
+  if (metodo === 'EM_ABERTO') return new Prisma.Decimal(0);
+
   const taxa = taxaDaLinha(tabela, metodo, parcelas, informada);
   return new Prisma.Decimal(taxa ? valor * (1 - Number(taxa) / 100) : valor);
 }
@@ -157,6 +160,18 @@ export async function conferirIdentificadores(
 export async function registrarVenda(dados: DadosDaVenda) {
   if (!dados.itens.length) throw new AppError('Inclua ao menos um produto na venda');
 
+  // Fiado sem saber de quem é não é fiado, é prejuízo. Conferido antes de
+  // tudo: avisar "falta o telefone" é mais útil do que um erro de estoque
+  // quando as duas coisas estão erradas.
+  if (dados.pagamentos?.some((p) => p.method === 'EM_ABERTO')) {
+    if (!dados.customerName?.trim()) {
+      throw new AppError('Para deixar valor em aberto, informe o nome de quem vai pagar.');
+    }
+    if (!dados.customerPhone?.trim()) {
+      throw new AppError('Para deixar valor em aberto, informe o telefone de quem vai pagar.');
+    }
+  }
+
   const resultado = await db.$transaction(async (tx) => {
     const unidade = await tx.unit.findUnique({ where: { id: dados.unitId } });
     if (!unidade) throw naoEncontrado('Unidade');
@@ -189,6 +204,7 @@ export async function registrarVenda(dados: DadosDaVenda) {
     // sem vínculo em vez de criar uma ficha vazia — um cadastro sem nome
     // suja a lista de clientes e não serve para nada depois.
     const nome = dados.customerName?.trim() || null;
+
 
 
     // Quem vendeu: o nome digitado manda; sem ele, o do usuário escolhido.

@@ -3,6 +3,7 @@ import { cn } from '@/lib/cn';
 import {
   BarChart3,
   ChevronLeft,
+  HandCoins,
   History,
   LayoutDashboard,
   LogOut,
@@ -32,6 +33,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard, permissao: 'dashboard' },
   { to: '/caixa', label: 'Caixa', icon: Receipt, permissao: 'pdv' },
   { to: '/pre-vendas', label: 'Pré-vendas', icon: ShoppingBag, permissao: 'prevenda.criar' },
+  { to: '/em-aberto', label: 'Valores em aberto', icon: HandCoins, permissao: 'prevenda.verTodas' },
   { to: '/trocas', label: 'Trocas', icon: Repeat2, permissao: 'troca.criar' },
   { to: '/estoque', label: 'Estoque', icon: Package, permissao: 'produtos.ver' },
   { to: '/vendas', label: 'Vendas', icon: ShoppingCart, permissao: 'prevenda.verTodas' },

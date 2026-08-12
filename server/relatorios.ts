@@ -892,7 +892,15 @@ rotasRelatorios.get(
           ...(unidade ? { unitId: unidade } : {}),
         },
       },
-      select: { method: true, amount: true, installments: true, saleId: true, feePercent: true, netAmount: true },
+      select: {
+        method: true,
+        amount: true,
+        installments: true,
+        saleId: true,
+        feePercent: true,
+        netAmount: true,
+        settledAt: true,
+      },
     });
 
     // Venda antiga não tem taxa gravada. Em vez de mostrar zero — que
@@ -902,6 +910,8 @@ rotasRelatorios.get(
 
     const liquidoDe = (p: (typeof pagamentos)[number]) => {
       if (p.netAmount != null) return numero(p.netAmount);
+      // Fiado só vira dinheiro quando alguém dá baixa.
+      if (p.method === 'EM_ABERTO') return p.settledAt ? numero(p.amount) : 0;
       if (p.method !== 'CREDITO') return numero(p.amount);
 
       const taxa = taxaDe(tabela, p.installments, 'padrao');
@@ -921,12 +931,25 @@ rotasRelatorios.get(
 
         const liquido = daForma.reduce((s, p) => s + liquidoDe(p), 0);
 
+        // "Taxa" é só o que a maquininha come. No fiado a diferença entre
+        // vendido e recebido é dívida, não custo — chamar as duas de taxa
+        // faria a loja achar que pagou uma comissão que não existe.
+        const taxa = daForma.reduce(
+          (s, p) => s + (p.method === 'CREDITO' ? numero(p.amount) - liquidoDe(p) : 0),
+          0,
+        );
+        const aReceber = daForma.reduce(
+          (s, p) => s + (p.method === 'EM_ABERTO' && !p.settledAt ? numero(p.amount) : 0),
+          0,
+        );
+
         return {
           payment: PAGAMENTO_LABEL[forma],
           sales: vendas,
           lancamentos: daForma.length,
           total: soma,
-          taxa: soma - liquido,
+          taxa,
+          aReceber,
           liquido,
           share: total > 0 ? (soma / total) * 100 : 0,
           ticket: vendas > 0 ? soma / vendas : 0,
@@ -939,6 +962,9 @@ rotasRelatorios.get(
       .filter((l) => l.lancamentos > 0)
       .sort((a, b) => b.total - a.total);
 
+    // Só a troca fica de fora: aparelho nunca vira dinheiro na conta. O
+    // fiado entra, e o próprio líquido resolve — zero enquanto está em
+    // aberto, valor cheio depois da baixa.
     const emDinheiro = linhas.filter((l) => l.payment !== PAGAMENTO_LABEL.TROCA);
 
     await exportar(res, q.format, {
@@ -949,8 +975,9 @@ rotasRelatorios.get(
         qtd('Vendas', 'sales', 10),
         qtd('Lançamentos', 'lancamentos', 12),
         money('Total', 'total', 15),
-        money('Taxa da maquininha', 'taxa', 15),
-        money('Líquido', 'liquido', 15),
+        money('Taxa da maquininha', 'taxa', 14),
+        money('A receber', 'aReceber', 13),
+        money('Na conta', 'liquido', 14),
         { header: '% do total', key: 'share', width: 10, align: 'right', format: (v) => `${Number(v).toFixed(1)}%` },
         money('Ticket médio', 'ticket', 13),
         { header: 'Parcelados', key: 'parcelado', width: 13 },
@@ -960,7 +987,8 @@ rotasRelatorios.get(
         { label: 'Formas usadas', value: String(linhas.length) },
         { label: 'Vendido em dinheiro', value: reais(emDinheiro.reduce((s, l) => s + l.total, 0)) },
         { label: 'Taxa da maquininha', value: reais(linhas.reduce((s, l) => s + l.taxa, 0)) },
-        { label: 'Cai na conta', value: reais(emDinheiro.reduce((s, l) => s + l.liquido, 0)) },
+        { label: 'Ainda a receber', value: reais(linhas.reduce((s, l) => s + l.aReceber, 0)) },
+        { label: 'Já está na conta', value: reais(emDinheiro.reduce((s, l) => s + l.liquido, 0)) },
         { label: 'Movimentado', value: reais(total) },
       ],
     });

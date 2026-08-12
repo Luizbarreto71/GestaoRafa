@@ -60,6 +60,7 @@ export type PaymentMethod =
   | 'CREDITO'
   | 'TRANSFERENCIA'
   | 'TROCA'
+  | 'EM_ABERTO'
   | 'OUTRO';
 export type UserRole = 'ADMIN' | 'GERENTE' | 'CAIXA' | 'VENDEDOR';
 

@@ -31,7 +31,7 @@ import { proximoCodigo, registrarVenda } from './vendas-service';
 export const rotasPreVendas = Router();
 rotasPreVendas.use(autenticar);
 
-const PAGAMENTOS = ['PIX', 'DINHEIRO', 'DEBITO', 'CREDITO', 'TRANSFERENCIA', 'OUTRO'] as const;
+const PAGAMENTOS = ['PIX', 'DINHEIRO', 'DEBITO', 'CREDITO', 'TRANSFERENCIA', 'EM_ABERTO', 'OUTRO'] as const;
 
 const STATUS_PRE_VENDA = [
   'AGUARDANDO_CAIXA',
