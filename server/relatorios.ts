@@ -201,6 +201,19 @@ rotasRelatorios.get(
       orderBy: { sale: { saleDate: 'desc' } },
     });
 
+    // Dentro de cada bloco, do menor para o maior — a mesma ordem do
+    // relatório de estoque, para procurar a peça no mesmo lugar nos dois.
+    // A data desempata, da mais recente para a mais antiga.
+    itens.sort((a, b) => {
+      const porProduto = compararProdutos(
+        { name: a.productName ?? a.product.name, capacity: a.product.capacity },
+        { name: b.productName ?? b.product.name, capacity: b.product.capacity },
+      );
+      return porProduto !== 0
+        ? porProduto
+        : b.sale.saleDate.getTime() - a.sale.saleDate.getTime();
+    });
+
     const linhas = itens.map((i) => {
       const total = numero(i.unitPrice) * i.quantity;
       return {
