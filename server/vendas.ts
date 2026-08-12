@@ -1,7 +1,7 @@
 import { Prisma } from '@prisma/client';
 import { Router } from 'express';
 import { z } from 'zod';
-import { autenticar } from './auth';
+import { autenticar, somenteAdmin } from './auth';
 import {
   AppError,
   contem,
@@ -377,5 +377,244 @@ rotasVendas.get(
         : null,
       total: numero(venda.totalAmount),
     });
+  }),
+);
+
+// -------------------------------------------------------------- Edição
+
+const edicaoSchema = z.object({
+  customerName: z.string().trim().max(180).optional().nullable(),
+  customerPhone: z.string().trim().max(30).optional().nullable(),
+  customerDocument: z.string().trim().max(30).optional().nullable(),
+  sellerName: z.string().trim().max(120).optional().nullable(),
+  notes: z.string().trim().max(1000).optional().nullable(),
+  saleDate: z.coerce.date().optional(),
+  /** Lista completa e definitiva dos itens. */
+  items: z
+    .array(
+      z.object({
+        productId: z.string().uuid(),
+        quantity: z.coerce.number().int().min(1),
+        unitPrice: z.coerce.number().min(0),
+        imei: z.string().trim().max(40).optional().nullable(),
+        serialNumber: z.string().trim().max(60).optional().nullable(),
+      }),
+    )
+    .min(1, 'A venda precisa de ao menos um produto')
+    .optional(),
+  paymentMethod: z.enum(PAGAMENTOS).optional(),
+  installments: z.coerce.number().int().min(1).max(24).optional(),
+  /** Lista completa e definitiva das formas de pagamento. */
+  payments: z
+    .array(
+      z.object({
+        method: z.enum([...PAGAMENTOS, 'TROCA'] as const),
+        amount: z.coerce.number().min(0.01),
+        installments: z.coerce.number().int().min(1).max(24).default(1),
+      }),
+    )
+    .max(6)
+    .optional(),
+});
+
+/**
+ * Corrige uma venda já registrada.
+ *
+ * Mudar item mexe em estoque, e mudar valor mexe no caixa — então tudo
+ * acontece numa transação só, ajustando a diferença em vez de refazer a
+ * venda: o histórico continua mostrando o que aconteceu de verdade.
+ */
+rotasVendas.put(
+  '/:id',
+  somenteAdmin,
+  rota(async (req, res) => {
+    const dados = validar(edicaoSchema, req.body);
+
+    const venda = await db.sale.findUnique({
+      where: { id: req.params.id },
+      include: { items: true, payments: true, tradeIn: true, unit: { select: { name: true } } },
+    });
+    if (!venda) throw naoEncontrado('Venda');
+    if (venda.status === 'CANCELADA') {
+      throw new AppError('Esta venda está cancelada. Registre uma nova em vez de editá-la.');
+    }
+
+    // Quem vendeu: mesma regra do balcão, para não haver dois caminhos.
+    let vendedorId = venda.sellerId;
+    if (dados.sellerName !== undefined) {
+      const nome = dados.sellerName?.trim();
+      vendedorId = nome
+        ? ((await db.user.findFirst({
+            where: { name: { equals: nome, mode: 'insensitive' } },
+            select: { id: true },
+          }))?.id ?? null)
+        : null;
+    }
+
+    const resultado = await db.$transaction(async (tx) => {
+      let total = numero(venda.totalAmount);
+      let custo = numero(venda.costAmount);
+      const ajustes: string[] = [];
+
+      if (dados.items) {
+        const produtos = await tx.product.findMany({
+          where: { id: { in: dados.items.map((i) => i.productId) } },
+          select: { id: true, name: true, costPrice: true },
+        });
+        if (produtos.length !== new Set(dados.items.map((i) => i.productId)).size) {
+          throw naoEncontrado('Produto');
+        }
+
+        // Ajusta pela diferença, produto a produto. Devolver tudo e baixar
+        // tudo de novo encheria o histórico de movimentos que não houve.
+        const antes = new Map<string, number>();
+        for (const i of venda.items) antes.set(i.productId, (antes.get(i.productId) ?? 0) + i.quantity);
+
+        const depois = new Map<string, number>();
+        for (const i of dados.items) depois.set(i.productId, (depois.get(i.productId) ?? 0) + i.quantity);
+
+        for (const produtoId of new Set([...antes.keys(), ...depois.keys()])) {
+          const diferenca = (depois.get(produtoId) ?? 0) - (antes.get(produtoId) ?? 0);
+          if (diferenca === 0) continue;
+
+          const nome =
+            produtos.find((p) => p.id === produtoId)?.name ??
+            venda.items.find((i) => i.productId === produtoId)?.productName ??
+            'Produto';
+
+          await movimentar({
+            produtoId,
+            produtoNome: nome,
+            unidadeId: venda.unitId,
+            tipo: diferenca > 0 ? 'SAIDA' : 'ENTRADA',
+            motivo: diferenca > 0 ? 'VENDA' : 'CANCELAMENTO',
+            quantidade: Math.abs(diferenca),
+            observacao: `Correção da venda ${venda.code}: ${nome} passou de ${antes.get(produtoId) ?? 0} para ${depois.get(produtoId) ?? 0}`,
+            vendaId: venda.id,
+            usuarioId: req.usuario?.id,
+            usuarioNome: req.usuario?.nome,
+            tx,
+          });
+
+          ajustes.push(`${nome} ${antes.get(produtoId) ?? 0} → ${depois.get(produtoId) ?? 0}`);
+        }
+
+        total = dados.items.reduce((s, i) => s + i.unitPrice * i.quantity, 0);
+        custo = dados.items.reduce(
+          (s, i) => s + numero(produtos.find((p) => p.id === i.productId)!.costPrice) * i.quantity,
+          0,
+        );
+
+        await tx.saleItem.deleteMany({ where: { saleId: venda.id } });
+        await tx.saleItem.createMany({
+          data: dados.items.map((i) => ({
+            saleId: venda.id,
+            productId: i.productId,
+            productName: produtos.find((p) => p.id === i.productId)!.name,
+            quantity: i.quantity,
+            unitPrice: new Prisma.Decimal(i.unitPrice),
+            costPrice: produtos.find((p) => p.id === i.productId)!.costPrice,
+            imei: i.imei?.trim() || null,
+            serialNumber: i.serialNumber?.trim() || null,
+          })),
+        });
+      }
+
+      // O rateio precisa fechar com o total, senão o caixa não bate.
+      const daTroca = venda.tradeIn ? numero(venda.tradeIn.valorAvaliado) : 0;
+      let rateio = dados.payments?.map((p) => ({
+        method: p.method,
+        amount: new Prisma.Decimal(p.amount),
+        installments: p.installments,
+        notes: null,
+      }));
+
+      if (!rateio && dados.items) {
+        // Mudou o valor e ninguém disse como pagar: mantém as formas e
+        // joga a diferença na maior, que é o comportamento previsível.
+        const semTroca = venda.payments.filter((p) => p.method !== 'TROCA');
+        const alvo = total - daTroca;
+        const somaAtual = semTroca.reduce((s, p) => s + numero(p.amount), 0);
+        const diferenca = alvo - somaAtual;
+
+        if (Math.abs(diferenca) >= 0.01 && semTroca.length) {
+          const maior = semTroca.reduce((m, p) => (numero(p.amount) > numero(m.amount) ? p : m));
+          rateio = venda.payments.map((p) => ({
+            method: p.method,
+            amount:
+              p.id === maior.id ? new Prisma.Decimal(numero(p.amount) + diferenca) : p.amount,
+            installments: p.installments,
+            notes: null,
+          }));
+        }
+      }
+
+      if (rateio) {
+        const soma = rateio.reduce((s, p) => s + numero(p.amount), 0);
+        if (Math.abs(soma - total) >= 0.01) {
+          throw new AppError(
+            `As formas de pagamento somam R$ ${soma.toFixed(2)}, mas a venda é de R$ ${total.toFixed(2)}.`,
+          );
+        }
+
+        await tx.salePayment.deleteMany({ where: { saleId: venda.id } });
+        await tx.salePayment.createMany({
+          data: rateio.map((p) => ({ ...p, saleId: venda.id })),
+        });
+      }
+
+      const principal = (rateio ?? venda.payments)
+        .filter((p) => p.method !== 'TROCA')
+        .reduce<{ method: string; amount: Prisma.Decimal } | null>(
+          (m, p) => (!m || p.amount.greaterThan(m.amount) ? p : m),
+          null,
+        )?.method;
+
+      const atualizada = await tx.sale.update({
+        where: { id: venda.id },
+        data: {
+          ...(dados.customerName !== undefined ? { customerName: dados.customerName?.trim() || null } : {}),
+          ...(dados.customerPhone !== undefined ? { customerPhone: dados.customerPhone?.trim() || null } : {}),
+          ...(dados.customerDocument !== undefined
+            ? { customerDocument: dados.customerDocument?.trim() || null }
+            : {}),
+          ...(dados.sellerName !== undefined
+            ? { sellerName: dados.sellerName?.trim() || null, sellerId: vendedorId }
+            : {}),
+          ...(dados.notes !== undefined ? { notes: dados.notes?.trim() || null } : {}),
+          ...(dados.saleDate ? { saleDate: dados.saleDate } : {}),
+          ...(dados.installments ? { installments: dados.installments } : {}),
+          ...(dados.paymentMethod ? { paymentMethod: dados.paymentMethod } : {}),
+          ...(principal && !dados.paymentMethod ? { paymentMethod: principal as never } : {}),
+          totalAmount: new Prisma.Decimal(total),
+          costAmount: new Prisma.Decimal(custo),
+        },
+        include: { items: true, payments: true },
+      });
+
+      return { atualizada, ajustes, total };
+    });
+
+    await registrarLog({
+      acao: 'EDITAR_VENDA',
+      entidade: 'Sale',
+      id: venda.id,
+      alteracoes: {
+        venda: venda.code,
+        totalAntes: numero(venda.totalAmount),
+        totalDepois: resultado.total,
+        estoque: resultado.ajustes,
+      },
+      req,
+    });
+
+    res.json(
+      limpar({
+        ...resultado.atualizada,
+        message:
+          `Venda ${venda.code} atualizada.` +
+          (resultado.ajustes.length ? ` Estoque ajustado: ${resultado.ajustes.join(', ')}.` : ''),
+      }),
+    );
   }),
 );

@@ -12,9 +12,10 @@ import { useCategories, useDeleteSale, useSales } from '@/hooks/queries';
 import { useDebounce } from '@/hooks/useDebounce';
 import { downloadFile } from '@/lib/api';
 import { formatCurrency, formatDateTime, formatPhone, PAYMENT_OPTIONS } from '@/lib/format';
+import { EditarVendaModal } from '@/components/vendas/EditarVendaModal';
 import { ReciboModal } from '@/components/vendas/ReciboModal';
 import type { Sale } from '@/types';
-import { Download, Package, Receipt, Search, Trash2, TrendingUp, X } from 'lucide-react';
+import { Download, Package, Pencil, Receipt, Search, Trash2, TrendingUp, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useUnit } from '@/contexts/UnitContext';
@@ -29,6 +30,7 @@ export default function SalesPage() {
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [deleting, setDeleting] = useState<Sale | null>(null);
   const [recibo, setRecibo] = useState<Sale | null>(null);
+  const [editando, setEditando] = useState<Sale | null>(null);
 
   const [filters, setFilters] = useState({
     categoryId: '',
@@ -231,18 +233,32 @@ export default function SalesPage() {
           </Button>
 
           {isAdmin && (
-            <Button
-              size="icon"
-              variant="ghost"
-              className="text-danger hover:bg-danger-bg dark:hover:bg-danger/15"
-              onClick={(e) => {
-                e.stopPropagation();
-                setDeleting(sale);
-              }}
-              title="Cancelar venda e devolver ao estoque"
-            >
-              <Trash2 className="h-4 w-4" />
-            </Button>
+            <>
+              <Button
+                size="icon"
+                variant="ghost"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setEditando(sale);
+                }}
+                title="Editar venda"
+              >
+                <Pencil className="h-4 w-4" />
+              </Button>
+
+              <Button
+                size="icon"
+                variant="ghost"
+                className="text-danger hover:bg-danger-bg dark:hover:bg-danger/15"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setDeleting(sale);
+                }}
+                title="Cancelar venda e devolver ao estoque"
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            </>
           )}
         </div>
       ),
@@ -444,6 +460,8 @@ export default function SalesPage() {
 
 
       <ReciboModal venda={recibo} aoFechar={() => setRecibo(null)} />
+
+      {editando && <EditarVendaModal venda={editando} aoFechar={() => setEditando(null)} />}
       <ConfirmDialog
         open={Boolean(deleting)}
         title="Cancelar venda"
