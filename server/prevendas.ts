@@ -1,4 +1,5 @@
 import { Prisma } from '@prisma/client';
+import { seminovosDaTroca } from './seminovos';
 import { Router } from 'express';
 import { z } from 'zod';
 import { autenticar } from './auth';
@@ -409,12 +410,15 @@ rotasPreVendas.post(
       data: { status: 'FINALIZADA', cashierId: req.usuario!.id },
     });
 
-    // A partir daqui o aparelho usado é da loja.
+    // A partir daqui o aparelho usado é da loja: vira estoque na hora, com
+    // o que o vendedor já anotou. Cadastrar depois, à mão, é onde peça de
+    // troca costuma sumir.
     if (preVenda.tradeIn) {
       await db.tradeIn.update({
         where: { id: preVenda.tradeIn.id },
         data: { status: 'ACEITA', saleId: venda.id },
       });
+      await seminovosDaTroca(preVenda.tradeIn.id, dados.unitId, req.usuario!.id);
     }
 
     await registrarLog({

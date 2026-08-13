@@ -1902,7 +1902,7 @@ rotasDashboard.get(
             unitName: unidades.find((u) => u.id === b.unitId)?.name ?? null
           };
         }),
-        outOfStock: zerados.map((z14) => ({ ...z14.product, unitName: z14.unit.name })),
+        outOfStock: zerados.map((z15) => ({ ...z15.product, unitName: z15.unit.name })),
         soldToday: vendasHoje,
         soldTodayCount: vendasHoje.reduce((s, v) => s + v.items.reduce((n, i) => n + i.quantity, 0), 0),
         revenueToday: vendasHoje.reduce((s, v) => s + numero(v.totalAmount), 0),
@@ -4819,15 +4819,234 @@ rotasRelatorios.get(
 );
 
 // server/caixa.ts
-import { Router as Router10 } from "express";
-import { z as z9 } from "zod";
+import { Router as Router11 } from "express";
+import { z as z10 } from "zod";
 
 // server/vendas-service.ts
-import { Prisma as Prisma3 } from "@prisma/client";
+import { Prisma as Prisma4 } from "@prisma/client";
 
-// server/notificacoes.ts
+// server/seminovos.ts
+import { Prisma as Prisma3 } from "@prisma/client";
 import { Router as Router9 } from "express";
 import { z as z8 } from "zod";
+var rotasSeminovos = Router9();
+rotasSeminovos.use(autenticar, exigir("produtos.ver"));
+async function categoriaDosSeminovos(cliente3) {
+  const existente = await cliente3.category.findFirst({
+    where: { OR: [{ slug: "seminovos" }, { name: { equals: "Seminovos", mode: "insensitive" } }] },
+    select: { id: true }
+  });
+  if (existente) return existente.id;
+  const nova = await cliente3.category.create({
+    data: { name: "Seminovos", slug: "seminovos", color: "#F59E0B" },
+    select: { id: true }
+  });
+  return nova.id;
+}
+var nomeDoAparelho = (modelo, armazenamento) => [modelo.trim(), armazenamento?.trim()].filter(Boolean).join(" ");
+async function seminovosDaTroca(tradeInId, unidadeId, usuarioId, cliente3 = db) {
+  const troca = await cliente3.tradeIn.findUnique({
+    where: { id: tradeInId },
+    include: { aparelhos: { include: { produto: { select: { id: true } } } } }
+  });
+  if (!troca) return 0;
+  const categoriaId = await categoriaDosSeminovos(cliente3);
+  let criados = 0;
+  for (const aparelho of troca.aparelhos) {
+    if (aparelho.produto) continue;
+    const produto = await cliente3.product.create({
+      data: {
+        name: nomeDoAparelho(aparelho.modelo, aparelho.armazenamento),
+        brand: aparelho.marca ?? null,
+        model: aparelho.modelo,
+        color: aparelho.cor ?? null,
+        capacity: aparelho.armazenamento ?? null,
+        imei: aparelho.imei ?? null,
+        categoryId: categoriaId,
+        costPrice: aparelho.valorAvaliado,
+        salePrice: new Prisma3.Decimal(0),
+        seminovo: true,
+        seminovoOrigem: `Troca ${troca.code} \xB7 ${troca.customerName}`,
+        tradeInAparelhoId: aparelho.id,
+        notes: aparelho.observacoes ?? null
+      }
+    });
+    await movimentar({
+      produtoId: produto.id,
+      produtoNome: produto.name,
+      unidadeId,
+      tipo: "ENTRADA",
+      motivo: "COMPRA",
+      quantidade: 1,
+      custoUnitario: numero(aparelho.valorAvaliado),
+      observacao: `Recebido na troca ${troca.code}`,
+      usuarioId: usuarioId ?? void 0,
+      tx: cliente3
+    });
+    criados += 1;
+  }
+  return criados;
+}
+var COM_ORIGEM = {
+  category: { select: { id: true, name: true } },
+  stock: { select: { unitId: true, quantity: true, unit: { select: { name: true } } } },
+  tradeInAparelho: {
+    select: {
+      id: true,
+      defeitos: true,
+      estado: true,
+      imeiSituacao: true,
+      tradeIn: { select: { id: true, code: true, customerName: true, createdAt: true } }
+    }
+  }
+};
+rotasSeminovos.get(
+  "/",
+  rota(async (req, res) => {
+    const q = validar(
+      z8.object({
+        page: z8.coerce.number().int().min(1).optional(),
+        pageSize: z8.coerce.number().int().min(1).max(100).optional(),
+        search: z8.string().trim().optional(),
+        unitId: z8.string().uuid().optional(),
+        /** De onde veio: da troca de um cliente ou de uma compra direta. */
+        origem: z8.enum(["troca", "compra"]).optional(),
+        /** Só os que ainda estão na prateleira. */
+        disponivel: z8.enum(["true", "false"]).optional()
+      }),
+      req.query
+    );
+    const unidade = unidadePermitida(req.usuario, q.unitId);
+    const p = paginacao(req.query, 30);
+    const onde = {
+      seminovo: true,
+      ...q.search ? {
+        OR: [
+          { name: { contains: q.search, mode: "insensitive" } },
+          { imei: { contains: q.search } },
+          { color: { contains: q.search, mode: "insensitive" } },
+          { seminovoOrigem: { contains: q.search, mode: "insensitive" } }
+        ]
+      } : {},
+      ...q.origem === "troca" ? { tradeInAparelhoId: { not: null } } : {},
+      ...q.origem === "compra" ? { tradeInAparelhoId: null } : {},
+      ...unidade || q.disponivel === "true" ? {
+        stock: {
+          some: {
+            ...unidade ? { unitId: unidade } : {},
+            ...q.disponivel === "true" ? { quantity: { gt: 0 } } : {}
+          }
+        }
+      } : {}
+    };
+    const [lista, total, emEstoque, investido] = await Promise.all([
+      db.product.findMany({
+        where: onde,
+        include: COM_ORIGEM,
+        skip: p.skip,
+        take: p.take,
+        orderBy: { createdAt: "desc" }
+      }),
+      db.product.count({ where: onde }),
+      db.stock.aggregate({ where: { product: { seminovo: true } }, _sum: { quantity: true } }),
+      db.product.aggregate({ where: { seminovo: true }, _sum: { costPrice: true } })
+    ]);
+    res.json({
+      ...paginado(
+        lista.map((s) => ({
+          ...limpar(s),
+          quantidade: s.stock.reduce((soma, l) => soma + l.quantity, 0),
+          origem: s.tradeInAparelho ? "troca" : "compra"
+        })),
+        total,
+        p
+      ),
+      resumo: {
+        pecas: emEstoque._sum.quantity ?? 0,
+        investido: numero(investido._sum.costPrice ?? 0)
+      }
+    });
+  })
+);
+var compraSchema = z8.object({
+  modelo: z8.string().trim().min(2, "Informe o modelo do aparelho").max(120),
+  marca: z8.string().trim().max(60).optional().nullable(),
+  armazenamento: z8.string().trim().max(20).optional().nullable(),
+  cor: z8.string().trim().max(40).optional().nullable(),
+  imei: z8.string().trim().transform((v) => v.replace(/\D/g, "")).refine((v) => v === "" || v.length === 15, "O IMEI tem 15 n\xFAmeros").optional().nullable(),
+  /** Quanto a loja pagou por ele. */
+  valorPago: z8.coerce.number().min(0, "Informe quanto a loja pagou"),
+  /** Por quanto pretende vender. Pode ficar para depois. */
+  salePrice: z8.coerce.number().min(0).optional(),
+  unitId: z8.string().uuid("Escolha a unidade onde o aparelho ficou"),
+  /** De quem foi comprado, para achar o dono se aparecer problema. */
+  vendedor: z8.string().trim().max(180).optional().nullable(),
+  observacoes: z8.string().trim().max(2e3).optional().nullable()
+});
+rotasSeminovos.post(
+  "/",
+  exigir("produtos.editar"),
+  rota(async (req, res) => {
+    const dados = validar(compraSchema, req.body);
+    if (dados.imei) {
+      const repetido = await db.product.findFirst({
+        where: { imei: dados.imei },
+        select: { name: true }
+      });
+      if (repetido) {
+        throw new AppError(`Esse IMEI j\xE1 est\xE1 cadastrado em "${repetido.name}".`);
+      }
+    }
+    const unidade = await db.unit.findUnique({ where: { id: dados.unitId }, select: { name: true } });
+    if (!unidade) throw new AppError("Unidade n\xE3o encontrada", 404);
+    const produto = await db.$transaction(async (tx) => {
+      const criado = await tx.product.create({
+        data: {
+          name: nomeDoAparelho(dados.modelo, dados.armazenamento),
+          brand: dados.marca ?? null,
+          model: dados.modelo,
+          color: dados.cor ?? null,
+          capacity: dados.armazenamento ?? null,
+          imei: dados.imei || null,
+          categoryId: await categoriaDosSeminovos(tx),
+          costPrice: new Prisma3.Decimal(dados.valorPago),
+          salePrice: new Prisma3.Decimal(dados.salePrice ?? 0),
+          seminovo: true,
+          seminovoOrigem: dados.vendedor?.trim() ? `Comprado de ${dados.vendedor.trim()}` : "Compra direta",
+          notes: dados.observacoes ?? null
+        }
+      });
+      await movimentar({
+        produtoId: criado.id,
+        produtoNome: criado.name,
+        unidadeId: dados.unitId,
+        tipo: "ENTRADA",
+        motivo: "COMPRA",
+        quantidade: 1,
+        custoUnitario: dados.valorPago,
+        observacao: dados.vendedor?.trim() ? `Comprado de ${dados.vendedor.trim()}` : "Compra de seminovo",
+        usuarioId: req.usuario.id,
+        tx
+      });
+      return criado;
+    });
+    await registrarLog({
+      acao: "CRIAR_SEMINOVO",
+      entidade: "Product",
+      id: produto.id,
+      alteracoes: { nome: produto.name, pago: dados.valorPago },
+      req
+    });
+    res.status(201).json({
+      ...limpar(produto),
+      message: `${produto.name} cadastrado como seminovo na ${unidade.name}.`
+    });
+  })
+);
+
+// server/notificacoes.ts
+import { Router as Router10 } from "express";
+import { z as z9 } from "zod";
 async function notificar(aviso) {
   try {
     await db.notification.create({ data: aviso });
@@ -4849,16 +5068,16 @@ async function notificarPerfil(papel, aviso) {
     console.error("[notifica\xE7\xE3o]", erro.message);
   }
 }
-var rotasNotificacoes = Router9();
+var rotasNotificacoes = Router10();
 rotasNotificacoes.use(autenticar);
 rotasNotificacoes.get(
   "/",
   rota(async (req, res) => {
     const q = validar(
-      z8.object({
-        page: z8.coerce.number().int().min(1).optional(),
-        pageSize: z8.coerce.number().int().min(1).max(100).optional(),
-        naoLidas: z8.enum(["true", "false"]).optional()
+      z9.object({
+        page: z9.coerce.number().int().min(1).optional(),
+        pageSize: z9.coerce.number().int().min(1).max(100).optional(),
+        naoLidas: z9.enum(["true", "false"]).optional()
       }),
       semVazios(req.query)
     );
@@ -4878,7 +5097,7 @@ rotasNotificacoes.get(
 rotasNotificacoes.post(
   "/ler",
   rota(async (req, res) => {
-    const { id } = validar(z8.object({ id: z8.string().uuid().optional() }), req.body ?? {});
+    const { id } = validar(z9.object({ id: z9.string().uuid().optional() }), req.body ?? {});
     await db.notification.updateMany({
       where: { userId: req.usuario.id, ...id ? { id } : { read: false } },
       data: { read: true }
@@ -4891,12 +5110,12 @@ rotasNotificacoes.post(
 function taxaDaLinha(tabela, metodo, parcelas, informada) {
   if (metodo !== "CREDITO") return null;
   const taxa = informada ?? taxaDe(tabela, parcelas, "padrao");
-  return taxa != null ? new Prisma3.Decimal(taxa) : null;
+  return taxa != null ? new Prisma4.Decimal(taxa) : null;
 }
 function liquidoDaLinha(tabela, metodo, valor, parcelas, informada) {
-  if (metodo === "EM_ABERTO") return new Prisma3.Decimal(0);
+  if (metodo === "EM_ABERTO") return new Prisma4.Decimal(0);
   const taxa = taxaDaLinha(tabela, metodo, parcelas, informada);
-  return new Prisma3.Decimal(taxa ? valor * (1 - Number(taxa) / 100) : valor);
+  return new Prisma4.Decimal(taxa ? valor * (1 - Number(taxa) / 100) : valor);
 }
 async function proximoCodigo(nome, prefixo, tx) {
   const cliente3 = tx ?? db;
@@ -4993,20 +5212,20 @@ async function registrarVenda(dados) {
       return {
         ...item,
         productName: produto.name,
-        costPrice: new Prisma3.Decimal(produto.costPrice)
+        costPrice: new Prisma4.Decimal(produto.costPrice)
       };
     });
     const somaDosItens = itensComCusto.reduce(
-      (soma, i) => soma.add(new Prisma3.Decimal(i.unitPrice).mul(i.quantity)),
-      new Prisma3.Decimal(0)
+      (soma, i) => soma.add(new Prisma4.Decimal(i.unitPrice).mul(i.quantity)),
+      new Prisma4.Decimal(0)
     );
-    const acrescimo = new Prisma3.Decimal(dados.acrescimo ?? 0);
+    const acrescimo = new Prisma4.Decimal(dados.acrescimo ?? 0);
     const total = somaDosItens.add(acrescimo);
     const custo = itensComCusto.reduce(
       (soma, i) => soma.add(i.costPrice.mul(i.quantity)),
-      new Prisma3.Decimal(0)
+      new Prisma4.Decimal(0)
     );
-    const daTroca = new Prisma3.Decimal(dados.trocaNova?.valorAvaliado ?? dados.trocaValor ?? 0);
+    const daTroca = new Prisma4.Decimal(dados.trocaNova?.valorAvaliado ?? dados.trocaValor ?? 0);
     const aReceber = total.minus(daTroca);
     const emDinheiro = dados.pagamentos?.length ? dados.pagamentos.map((p) => ({
       method: p.method,
@@ -5014,7 +5233,7 @@ async function registrarVenda(dados) {
       // — que aparece sozinho ao dividir por porcentagem — some na soma
       // do JavaScript, mas sobrevive na soma exata do banco e travaria a
       // venda dizendo que dois valores iguais são diferentes.
-      amount: new Prisma3.Decimal(p.amount.toFixed(2)),
+      amount: new Prisma4.Decimal(p.amount.toFixed(2)),
       installments: p.installments ?? 1,
       notes: null,
       /** Em qual conta caiu — o Pix da loja tem mais de uma. */
@@ -5041,7 +5260,7 @@ async function registrarVenda(dados) {
         )
       }
     ] : [];
-    const somaEmDinheiro = emDinheiro.reduce((s, p) => s.add(p.amount), new Prisma3.Decimal(0));
+    const somaEmDinheiro = emDinheiro.reduce((s, p) => s.add(p.amount), new Prisma4.Decimal(0));
     if (somaEmDinheiro.minus(aReceber).abs().greaterThan("0.005")) {
       throw new AppError(
         `As formas de pagamento somam R$ ${somaEmDinheiro.toFixed(2)}, mas o cliente tem a pagar R$ ${aReceber.toFixed(2)}.`
@@ -5094,7 +5313,7 @@ async function registrarVenda(dados) {
             productId: i.productId,
             productName: i.productName,
             quantity: i.quantity,
-            unitPrice: new Prisma3.Decimal(i.unitPrice),
+            unitPrice: new Prisma4.Decimal(i.unitPrice),
             costPrice: i.costPrice,
             imei: i.imei?.trim() || null,
             serialNumber: i.serialNumber?.trim() || null
@@ -5124,7 +5343,7 @@ async function registrarVenda(dados) {
       });
     }
     if (dados.trocaNova) {
-      await tx.tradeIn.create({
+      const troca = await tx.tradeIn.create({
         data: {
           code: await proximoCodigo("troca", "TR", tx),
           status: "ACEITA",
@@ -5139,9 +5358,23 @@ async function registrarVenda(dados) {
           sellerId: dados.sellerId ?? dados.cashierId,
           unitId: dados.unitId,
           saleId: venda.id,
-          defeitos: []
+          defeitos: [],
+          // A peça também vira linha da troca: é dela que nasce o seminovo.
+          aparelhos: {
+            create: [
+              {
+                ordem: 0,
+                modelo: dados.trocaNova.modelo,
+                cor: dados.trocaNova.cor ?? null,
+                armazenamento: dados.trocaNova.armazenamento ?? null,
+                valorAvaliado: daTroca,
+                defeitos: []
+              }
+            ]
+          }
         }
       });
+      await seminovosDaTroca(troca.id, dados.unitId, dados.cashierId ?? null, tx);
     }
     return venda;
   });
@@ -5157,7 +5390,7 @@ async function registrarVenda(dados) {
 }
 
 // server/caixa.ts
-var rotasCaixa = Router10();
+var rotasCaixa = Router11();
 rotasCaixa.use(autenticar);
 async function resumoDoTurno(where) {
   const [vendas, porPagamento, itens] = await Promise.all([
@@ -5236,9 +5469,9 @@ rotasCaixa.post(
   exigir("pdv"),
   rota(async (req, res) => {
     const { unitId, notes } = validar(
-      z9.object({
-        unitId: z9.string().uuid().optional().nullable(),
-        notes: z9.string().trim().max(300).optional().nullable()
+      z10.object({
+        unitId: z10.string().uuid().optional().nullable(),
+        notes: z10.string().trim().max(300).optional().nullable()
       }),
       req.body ?? {}
     );
@@ -5264,7 +5497,7 @@ rotasCaixa.post(
   exigir("caixa.fechar"),
   rota(async (req, res) => {
     const { notes } = validar(
-      z9.object({ notes: z9.string().trim().max(500).optional().nullable() }),
+      z10.object({ notes: z10.string().trim().max(500).optional().nullable() }),
       req.body ?? {}
     );
     const turno = await db.cashRegister.findFirst({
@@ -5305,9 +5538,9 @@ rotasCaixa.get(
   exigir("pdv"),
   rota(async (req, res) => {
     const q = validar(
-      z9.object({
-        cashierId: z9.string().uuid().optional(),
-        status: z9.enum(["ABERTO", "FECHADO"]).optional()
+      z10.object({
+        cashierId: z10.string().uuid().optional(),
+        status: z10.enum(["ABERTO", "FECHADO"]).optional()
       }),
       semVazios(req.query)
     );
@@ -5326,7 +5559,7 @@ rotasCaixa.get(
   exigir("pdv"),
   rota(async (req, res) => {
     const { format } = validar(
-      z9.object({ format: z9.enum(["json", "pdf", "xlsx", "csv"]).default("json") }),
+      z10.object({ format: z10.enum(["json", "pdf", "xlsx", "csv"]).default("json") }),
       semVazios(req.query)
     );
     const turno = await db.cashRegister.findUnique({
@@ -5401,9 +5634,9 @@ rotasCaixa.get(
 );
 
 // server/prevendas.ts
-import { Prisma as Prisma4 } from "@prisma/client";
-import { Router as Router11 } from "express";
-import { z as z10 } from "zod";
+import { Prisma as Prisma5 } from "@prisma/client";
+import { Router as Router12 } from "express";
+import { z as z11 } from "zod";
 
 // server/preco-minimo.ts
 async function exigirChaveSeAbaixoDoMinimo(itens, chave) {
@@ -5435,7 +5668,7 @@ async function exigirChaveSeAbaixoDoMinimo(itens, chave) {
 }
 
 // server/prevendas.ts
-var rotasPreVendas = Router11();
+var rotasPreVendas = Router12();
 rotasPreVendas.use(autenticar);
 var PAGAMENTOS = ["PIX", "DINHEIRO", "DEBITO", "CREDITO", "TRANSFERENCIA", "EM_ABERTO", "OUTRO"];
 var STATUS_PRE_VENDA = [
@@ -5481,27 +5714,27 @@ var COM_TUDO = {
   unit: { select: { id: true, name: true } },
   sale: { select: { id: true, code: true } }
 };
-var itemSchema = z10.object({
-  productId: z10.string().uuid("Selecione o produto"),
-  quantity: z10.coerce.number().int().min(1, "Quantidade m\xEDnima: 1"),
-  unitPrice: z10.coerce.number().min(0, "Informe o valor"),
-  imei: z10.string().trim().max(40).optional().nullable(),
-  serialNumber: z10.string().trim().max(60).optional().nullable()
+var itemSchema = z11.object({
+  productId: z11.string().uuid("Selecione o produto"),
+  quantity: z11.coerce.number().int().min(1, "Quantidade m\xEDnima: 1"),
+  unitPrice: z11.coerce.number().min(0, "Informe o valor"),
+  imei: z11.string().trim().max(40).optional().nullable(),
+  serialNumber: z11.string().trim().max(60).optional().nullable()
 });
-var preVendaSchema = z10.object({
-  customerName: z10.string().trim().min(2, "Informe o nome do cliente").max(180),
-  customerPhone: z10.string().trim().max(30).optional().nullable(),
-  customerDocument: z10.string().trim().max(30).optional().nullable(),
-  customerId: z10.string().uuid().optional().nullable(),
-  unitId: z10.string().uuid().optional().nullable(),
-  paymentMethod: z10.enum(PAGAMENTOS).optional().nullable(),
-  installments: z10.coerce.number().int().min(1).max(24).default(1),
-  notes: z10.string().trim().max(1e3).optional().nullable(),
-  items: z10.array(itemSchema).min(1, "Inclua ao menos um produto"),
+var preVendaSchema = z11.object({
+  customerName: z11.string().trim().min(2, "Informe o nome do cliente").max(180),
+  customerPhone: z11.string().trim().max(30).optional().nullable(),
+  customerDocument: z11.string().trim().max(30).optional().nullable(),
+  customerId: z11.string().uuid().optional().nullable(),
+  unitId: z11.string().uuid().optional().nullable(),
+  paymentMethod: z11.enum(PAGAMENTOS).optional().nullable(),
+  installments: z11.coerce.number().int().min(1).max(24).default(1),
+  notes: z11.string().trim().max(1e3).optional().nullable(),
+  items: z11.array(itemSchema).min(1, "Inclua ao menos um produto"),
   /** Aparelho usado que o cliente está dando como parte do pagamento. */
-  tradeInId: z10.string().uuid().optional().nullable(),
+  tradeInId: z11.string().uuid().optional().nullable(),
   /** Libera montar a pré-venda abaixo do preço de atacado. */
-  chaveDeAcesso: z10.string().trim().max(60).optional().nullable()
+  chaveDeAcesso: z11.string().trim().max(60).optional().nullable()
 });
 var podeVerTodas = (req) => podeFazer(req.usuario?.papel, "prevenda.verTodas");
 async function liberarTroca(preSaleId) {
@@ -5514,16 +5747,16 @@ rotasPreVendas.get(
   "/",
   rota(async (req, res) => {
     const q = validar(
-      z10.object({
-        page: z10.coerce.number().int().min(1).optional(),
-        pageSize: z10.coerce.number().int().min(1).max(100).optional(),
+      z11.object({
+        page: z11.coerce.number().int().min(1).optional(),
+        pageSize: z11.coerce.number().int().min(1).max(100).optional(),
         // Aceita mais de um status separado por vírgula: a fila do caixa
         // precisa das que aguardam e das que já estão sendo atendidas.
-        status: z10.string().optional().transform((v) => v ? v.split(",").map((s) => s.trim()).filter(Boolean) : void 0).pipe(z10.array(z10.enum(STATUS_PRE_VENDA)).min(1).optional()),
-        sellerId: z10.string().uuid().optional(),
-        search: z10.string().trim().optional(),
-        startDate: z10.coerce.date().optional(),
-        endDate: z10.coerce.date().optional()
+        status: z11.string().optional().transform((v) => v ? v.split(",").map((s) => s.trim()).filter(Boolean) : void 0).pipe(z11.array(z11.enum(STATUS_PRE_VENDA)).min(1).optional()),
+        sellerId: z11.string().uuid().optional(),
+        search: z11.string().trim().optional(),
+        startDate: z11.coerce.date().optional(),
+        endDate: z11.coerce.date().optional()
       }),
       semVazios(req.query)
     );
@@ -5616,7 +5849,7 @@ rotasPreVendas.post(
         paymentMethod: dados.paymentMethod ?? null,
         installments: dados.installments,
         notes: dados.notes ?? null,
-        totalAmount: new Prisma4.Decimal(total),
+        totalAmount: new Prisma5.Decimal(total),
         ...dados.tradeInId ? { tradeIn: { connect: { id: dados.tradeInId } } } : {},
         // Sem atendimento no mesmo dia, some da fila do caixa.
         expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1e3),
@@ -5625,7 +5858,7 @@ rotasPreVendas.post(
             productId: i.productId,
             productName: produtos.find((p) => p.id === i.productId)?.name,
             quantity: i.quantity,
-            unitPrice: new Prisma4.Decimal(i.unitPrice),
+            unitPrice: new Prisma5.Decimal(i.unitPrice),
             imei: i.imei?.trim() || null,
             serialNumber: i.serialNumber?.trim() || null
           }))
@@ -5668,28 +5901,28 @@ rotasPreVendas.post(
     res.json(limpar(atualizada));
   })
 );
-var finalizarSchema = z10.object({
-  unitId: z10.string().uuid("Informe de qual unidade o produto saiu"),
-  paymentMethod: z10.enum(PAGAMENTOS),
-  installments: z10.coerce.number().int().min(1).max(24).default(1),
+var finalizarSchema = z11.object({
+  unitId: z11.string().uuid("Informe de qual unidade o produto saiu"),
+  paymentMethod: z11.enum(PAGAMENTOS),
+  installments: z11.coerce.number().int().min(1).max(24).default(1),
   /** Pagamento dividido, igual ao do balcão. */
-  payments: z10.array(
-    z10.object({
-      method: z10.enum(PAGAMENTOS),
-      amount: z10.coerce.number().min(0.01, "Informe o valor desta forma"),
-      installments: z10.coerce.number().int().min(1).max(24).default(1),
-      notes: z10.string().trim().max(120).optional().nullable(),
+  payments: z11.array(
+    z11.object({
+      method: z11.enum(PAGAMENTOS),
+      amount: z11.coerce.number().min(0.01, "Informe o valor desta forma"),
+      installments: z11.coerce.number().int().min(1).max(24).default(1),
+      notes: z11.string().trim().max(120).optional().nullable(),
       /** Taxa da maquininha, em %. Guardada com a venda. */
-      feePercent: z10.coerce.number().min(0).max(99.99).optional().nullable(),
+      feePercent: z11.coerce.number().min(0).max(99.99).optional().nullable(),
       /** Em qual conta caiu — usado no Pix, que tem mais de uma. */
-      destino: z10.string().trim().max(60).optional().nullable()
+      destino: z11.string().trim().max(60).optional().nullable()
     })
   ).max(6, "No m\xE1ximo 6 formas na mesma venda").optional(),
-  notes: z10.string().trim().max(1e3).optional().nullable(),
+  notes: z11.string().trim().max(1e3).optional().nullable(),
   /** O caixa pode corrigir valor e identificadores antes de fechar. */
-  items: z10.array(itemSchema.extend({ id: z10.string().uuid().optional() })).optional(),
+  items: z11.array(itemSchema.extend({ id: z11.string().uuid().optional() })).optional(),
   /** Libera fechar abaixo do preço de atacado. */
-  chaveDeAcesso: z10.string().trim().max(60).optional().nullable()
+  chaveDeAcesso: z11.string().trim().max(60).optional().nullable()
 });
 rotasPreVendas.post(
   "/:id/finalizar",
@@ -5742,6 +5975,7 @@ rotasPreVendas.post(
         where: { id: preVenda.tradeIn.id },
         data: { status: "ACEITA", saleId: venda.id }
       });
+      await seminovosDaTroca(preVenda.tradeIn.id, dados.unitId, req.usuario.id);
     }
     await registrarLog({
       acao: "FINALIZAR_PREVENDA",
@@ -5769,7 +6003,7 @@ rotasPreVendas.post(
   exigir("venda.finalizar"),
   rota(async (req, res) => {
     const { motivo } = validar(
-      z10.object({ motivo: z10.string().trim().max(300).optional() }),
+      z11.object({ motivo: z11.string().trim().max(300).optional() }),
       req.body ?? {}
     );
     const preVenda = await db.preSale.findUnique({ where: { id: req.params.id } });
@@ -5813,10 +6047,10 @@ rotasPreVendas.delete(
 );
 
 // server/aberto.ts
-import { Prisma as Prisma5 } from "@prisma/client";
-import { Router as Router12 } from "express";
-import { z as z11 } from "zod";
-var rotasEmAberto = Router12();
+import { Prisma as Prisma6 } from "@prisma/client";
+import { Router as Router13 } from "express";
+import { z as z12 } from "zod";
+var rotasEmAberto = Router13();
 rotasEmAberto.use(autenticar);
 var COM_A_VENDA = {
   sale: {
@@ -5840,13 +6074,13 @@ rotasEmAberto.get(
   exigir("prevenda.verTodas"),
   rota(async (req, res) => {
     const q = validar(
-      z11.object({
-        page: z11.coerce.number().int().min(1).optional(),
-        pageSize: z11.coerce.number().int().min(1).max(200).optional(),
-        search: z11.string().trim().optional(),
-        unitId: z11.string().uuid().optional(),
+      z12.object({
+        page: z12.coerce.number().int().min(1).optional(),
+        pageSize: z12.coerce.number().int().min(1).max(200).optional(),
+        search: z12.string().trim().optional(),
+        unitId: z12.string().uuid().optional(),
         /** "abertos" (padrão), "quitados" ou "todos". */
-        situacao: z11.enum(["abertos", "quitados", "todos"]).default("abertos")
+        situacao: z12.enum(["abertos", "quitados", "todos"]).default("abertos")
       }),
       semVazios(req.query)
     );
@@ -5905,9 +6139,9 @@ rotasEmAberto.get(
     );
   })
 );
-var baixaSchema = z11.object({
+var baixaSchema = z12.object({
   /** Como o cliente pagou a dívida. */
-  method: z11.enum(["PIX", "DINHEIRO", "DEBITO", "CREDITO", "TRANSFERENCIA", "OUTRO"])
+  method: z12.enum(["PIX", "DINHEIRO", "DEBITO", "CREDITO", "TRANSFERENCIA", "OUTRO"])
 });
 rotasEmAberto.post(
   "/:id/receber",
@@ -5955,7 +6189,7 @@ rotasEmAberto.post(
         settledAt: null,
         settledMethod: null,
         settledById: null,
-        netAmount: new Prisma5.Decimal(0)
+        netAmount: new Prisma6.Decimal(0)
       }
     });
     await registrarLog({ acao: "REABRIR_EM_ABERTO", entidade: "SalePayment", id: cobranca.id, req });
@@ -5964,9 +6198,9 @@ rotasEmAberto.post(
 );
 
 // server/trocas.ts
-import { Prisma as Prisma6 } from "@prisma/client";
-import { Router as Router13 } from "express";
-import { z as z12 } from "zod";
+import { Prisma as Prisma7 } from "@prisma/client";
+import { Router as Router14 } from "express";
+import { z as z13 } from "zod";
 
 // shared/trocas.ts
 var DEFEITOS = [
@@ -6009,7 +6243,7 @@ function imeiValido(imei) {
 }
 
 // server/trocas.ts
-var rotasTrocas = Router13();
+var rotasTrocas = Router14();
 rotasTrocas.use(autenticar);
 var CHAVES_DEFEITO = DEFEITOS.map((d) => d.chave);
 var COM_TUDO2 = {
@@ -6034,51 +6268,51 @@ var paraJson = (t) => ({
   /** Quanto o cliente ainda precisa pagar. Negativo = a loja é que deve. */
   diferenca: Number(t.valorSaida) - Number(t.valorAvaliado)
 });
-var fotoSchema = z12.object({
-  tipo: z12.enum(["ANATEL", "DOCUMENTO", "APARELHO"]),
+var fotoSchema = z13.object({
+  tipo: z13.enum(["ANATEL", "DOCUMENTO", "APARELHO"]),
   /** data:image/jpeg;base64,… já reduzida pelo navegador. */
-  data: z12.string().max(4e6)
+  data: z13.string().max(4e6)
 });
-var imeiSchema = z12.string().trim().transform((v) => v.replace(/\D/g, "")).refine((v) => v === "" || v.length === 15, "O IMEI tem 15 n\xFAmeros").refine((v) => v === "" || imeiValido(v), "Esse IMEI n\xE3o passa na confer\xEAncia \u2014 confira os n\xFAmeros").optional().nullable();
-var aparelhoSchema = z12.object({
-  modelo: z12.string().trim().min(2, "Informe o modelo do aparelho").max(120),
-  marca: z12.string().trim().max(60).optional().nullable(),
-  armazenamento: z12.string().trim().max(20).optional().nullable(),
-  cor: z12.string().trim().max(40).optional().nullable(),
+var imeiSchema = z13.string().trim().transform((v) => v.replace(/\D/g, "")).refine((v) => v === "" || v.length === 15, "O IMEI tem 15 n\xFAmeros").refine((v) => v === "" || imeiValido(v), "Esse IMEI n\xE3o passa na confer\xEAncia \u2014 confira os n\xFAmeros").optional().nullable();
+var aparelhoSchema = z13.object({
+  modelo: z13.string().trim().min(2, "Informe o modelo do aparelho").max(120),
+  marca: z13.string().trim().max(60).optional().nullable(),
+  armazenamento: z13.string().trim().max(20).optional().nullable(),
+  cor: z13.string().trim().max(40).optional().nullable(),
   imei: imeiSchema,
-  imeiSituacao: z12.enum(["NAO_CONSULTADO", "REGULAR", "IRREGULAR", "BLOQUEADO"]).default("NAO_CONSULTADO"),
-  estado: z12.string().trim().max(40).optional().nullable(),
-  defeitos: z12.array(z12.enum(CHAVES_DEFEITO)).default([]),
-  observacoes: z12.string().trim().max(2e3).optional().nullable(),
-  valorAvaliado: z12.coerce.number().min(0, "Informe quanto vale o aparelho do cliente"),
+  imeiSituacao: z13.enum(["NAO_CONSULTADO", "REGULAR", "IRREGULAR", "BLOQUEADO"]).default("NAO_CONSULTADO"),
+  estado: z13.string().trim().max(40).optional().nullable(),
+  defeitos: z13.array(z13.enum(CHAVES_DEFEITO)).default([]),
+  observacoes: z13.string().trim().max(2e3).optional().nullable(),
+  valorAvaliado: z13.coerce.number().min(0, "Informe quanto vale o aparelho do cliente"),
   /** Fotos deste aparelho: as do documento do cliente ficam na troca. */
-  photos: z12.array(fotoSchema).max(8).optional()
+  photos: z13.array(fotoSchema).max(8).optional()
 });
-var trocaSchema = z12.object({
+var trocaSchema = z13.object({
   /**
    * A lista de aparelhos. Os campos soltos abaixo continuam aceitos para a
    * troca de um aparelho só — é assim que a tela do caixa manda.
    */
-  aparelhos: z12.array(aparelhoSchema).min(1).max(6).optional(),
-  modelo: z12.string().trim().min(2, "Informe o modelo do aparelho").max(120).optional(),
-  marca: z12.string().trim().max(60).optional().nullable(),
-  armazenamento: z12.string().trim().max(20).optional().nullable(),
-  cor: z12.string().trim().max(40).optional().nullable(),
+  aparelhos: z13.array(aparelhoSchema).min(1).max(6).optional(),
+  modelo: z13.string().trim().min(2, "Informe o modelo do aparelho").max(120).optional(),
+  marca: z13.string().trim().max(60).optional().nullable(),
+  armazenamento: z13.string().trim().max(20).optional().nullable(),
+  cor: z13.string().trim().max(40).optional().nullable(),
   imei: imeiSchema,
-  imeiSituacao: z12.enum(["NAO_CONSULTADO", "REGULAR", "IRREGULAR", "BLOQUEADO"]).default("NAO_CONSULTADO"),
-  estado: z12.string().trim().max(40).optional().nullable(),
-  defeitos: z12.array(z12.enum(CHAVES_DEFEITO)).default([]),
-  observacoes: z12.string().trim().max(2e3).optional().nullable(),
-  valorAvaliado: z12.coerce.number().min(0).optional(),
-  productId: z12.string().uuid().optional().nullable(),
-  saidaNome: z12.string().trim().max(180).optional().nullable(),
-  valorSaida: z12.coerce.number().min(0).default(0),
-  customerId: z12.string().uuid().optional().nullable(),
-  customerName: z12.string().trim().min(2, "Informe o nome do cliente").max(180),
-  customerPhone: z12.string().trim().max(30).optional().nullable(),
-  customerDocument: z12.string().trim().max(30).optional().nullable(),
-  unitId: z12.string().uuid().optional().nullable(),
-  photos: z12.array(fotoSchema).max(10).optional()
+  imeiSituacao: z13.enum(["NAO_CONSULTADO", "REGULAR", "IRREGULAR", "BLOQUEADO"]).default("NAO_CONSULTADO"),
+  estado: z13.string().trim().max(40).optional().nullable(),
+  defeitos: z13.array(z13.enum(CHAVES_DEFEITO)).default([]),
+  observacoes: z13.string().trim().max(2e3).optional().nullable(),
+  valorAvaliado: z13.coerce.number().min(0).optional(),
+  productId: z13.string().uuid().optional().nullable(),
+  saidaNome: z13.string().trim().max(180).optional().nullable(),
+  valorSaida: z13.coerce.number().min(0).default(0),
+  customerId: z13.string().uuid().optional().nullable(),
+  customerName: z13.string().trim().min(2, "Informe o nome do cliente").max(180),
+  customerPhone: z13.string().trim().max(30).optional().nullable(),
+  customerDocument: z13.string().trim().max(30).optional().nullable(),
+  unitId: z13.string().uuid().optional().nullable(),
+  photos: z13.array(fotoSchema).max(10).optional()
 });
 var podeVerTodas2 = (req) => podeFazer(req.usuario?.papel, "prevenda.verTodas");
 function aparelhosDaTroca(dados) {
@@ -6115,13 +6349,13 @@ rotasTrocas.get(
   exigir("troca.criar"),
   rota(async (req, res) => {
     const q = validar(
-      z12.object({
-        page: z12.coerce.number().int().min(1).optional(),
-        pageSize: z12.coerce.number().int().min(1).max(100).optional(),
-        status: z12.string().optional().transform((v) => v ? v.split(",").map((s) => s.trim()).filter(Boolean) : void 0).pipe(z12.array(z12.enum(["AVALIADA", "ACEITA", "RECUSADA"])).min(1).optional()),
-        search: z12.string().trim().optional(),
+      z13.object({
+        page: z13.coerce.number().int().min(1).optional(),
+        pageSize: z13.coerce.number().int().min(1).max(100).optional(),
+        status: z13.string().optional().transform((v) => v ? v.split(",").map((s) => s.trim()).filter(Boolean) : void 0).pipe(z13.array(z13.enum(["AVALIADA", "ACEITA", "RECUSADA"])).min(1).optional()),
+        search: z13.string().trim().optional(),
         /** Só as que ainda não foram amarradas a uma pré-venda. */
-        livres: z12.enum(["true", "false"]).optional()
+        livres: z13.enum(["true", "false"]).optional()
       }),
       semVazios(req.query)
     );
@@ -6228,10 +6462,10 @@ rotasTrocas.post(
         defeitos: aparelhos.length === 1 ? aparelhos[0].defeitos : [],
         observacoes: dados.observacoes ?? (aparelhos.length === 1 ? aparelhos[0].observacoes ?? null : null),
         // A soma é o que abate da compra do cliente.
-        valorAvaliado: new Prisma6.Decimal(avaliacao),
+        valorAvaliado: new Prisma7.Decimal(avaliacao),
         productId: dados.productId ?? null,
         saidaNome,
-        valorSaida: new Prisma6.Decimal(dados.valorSaida),
+        valorSaida: new Prisma7.Decimal(dados.valorSaida),
         customerId: dados.customerId ?? null,
         customerName: dados.customerName,
         customerPhone: dados.customerPhone ?? null,
@@ -6249,7 +6483,7 @@ rotasTrocas.post(
             estado: a.estado ?? null,
             defeitos: a.defeitos,
             observacoes: a.observacoes ?? null,
-            valorAvaliado: new Prisma6.Decimal(a.valorAvaliado)
+            valorAvaliado: new Prisma7.Decimal(a.valorAvaliado)
           }))
         },
         // As da troca são o documento do cliente: valem para o negócio
@@ -6278,10 +6512,10 @@ rotasTrocas.post(
     });
   })
 );
-var situacaoSchema = z12.object({
-  imeiSituacao: z12.enum(["NAO_CONSULTADO", "REGULAR", "IRREGULAR", "BLOQUEADO"]),
+var situacaoSchema = z13.object({
+  imeiSituacao: z13.enum(["NAO_CONSULTADO", "REGULAR", "IRREGULAR", "BLOQUEADO"]),
   /** Print da consulta, se veio junto. */
-  foto: z12.string().max(4e6).optional().nullable()
+  foto: z13.string().max(4e6).optional().nullable()
 });
 rotasTrocas.post(
   "/:id/anatel",
@@ -6349,9 +6583,9 @@ rotasTrocas.delete(
 );
 
 // server/vendas.ts
-import { Prisma as Prisma7 } from "@prisma/client";
-import { Router as Router14 } from "express";
-import { z as z13 } from "zod";
+import { Prisma as Prisma8 } from "@prisma/client";
+import { Router as Router15 } from "express";
+import { z as z14 } from "zod";
 
 // server/recibo.ts
 import PDFDocument2 from "pdfkit";
@@ -6594,7 +6828,7 @@ function enviarRecibo(res, r) {
 }
 
 // server/vendas.ts
-var rotasVendas = Router14();
+var rotasVendas = Router15();
 rotasVendas.use(autenticar);
 var PAGAMENTOS2 = ["PIX", "DINHEIRO", "DEBITO", "CREDITO", "TRANSFERENCIA", "EM_ABERTO", "OUTRO"];
 var COM_TUDO3 = {
@@ -6606,20 +6840,20 @@ var COM_TUDO3 = {
   preSale: { select: { id: true, code: true } },
   payments: { orderBy: { amount: "desc" } }
 };
-var filtrosSchema2 = z13.object({
-  page: z13.coerce.number().int().min(1).optional(),
-  pageSize: z13.coerce.number().int().min(1).max(200).optional(),
-  search: z13.string().trim().optional(),
-  productId: z13.string().uuid().optional(),
-  categoryId: z13.string().uuid().optional(),
-  paymentMethod: z13.enum(PAGAMENTOS2).optional(),
-  sellerId: z13.string().uuid().optional(),
-  cashierId: z13.string().uuid().optional(),
-  unitId: z13.string().uuid().optional(),
-  startDate: z13.coerce.date().optional(),
-  endDate: z13.coerce.date().optional(),
-  sortBy: z13.string().optional(),
-  sortOrder: z13.enum(["asc", "desc"]).optional()
+var filtrosSchema2 = z14.object({
+  page: z14.coerce.number().int().min(1).optional(),
+  pageSize: z14.coerce.number().int().min(1).max(200).optional(),
+  search: z14.string().trim().optional(),
+  productId: z14.string().uuid().optional(),
+  categoryId: z14.string().uuid().optional(),
+  paymentMethod: z14.enum(PAGAMENTOS2).optional(),
+  sellerId: z14.string().uuid().optional(),
+  cashierId: z14.string().uuid().optional(),
+  unitId: z14.string().uuid().optional(),
+  startDate: z14.coerce.date().optional(),
+  endDate: z14.coerce.date().optional(),
+  sortBy: z14.string().optional(),
+  sortOrder: z14.enum(["asc", "desc"]).optional()
 });
 async function filtrarVendas(q, unidadeId) {
   const cond = [{ status: "FINALIZADA" }];
@@ -6690,35 +6924,35 @@ rotasVendas.get(
     res.json(limpar(venda));
   })
 );
-var vendaSchema = z13.object({
-  items: z13.array(
-    z13.object({
-      productId: z13.string().uuid("Selecione o produto"),
-      quantity: z13.coerce.number().int().min(1, "Quantidade m\xEDnima: 1"),
-      unitPrice: z13.coerce.number().min(0, "Informe o valor"),
-      imei: z13.string().trim().max(40).optional().nullable(),
-      serialNumber: z13.string().trim().max(60).optional().nullable()
+var vendaSchema = z14.object({
+  items: z14.array(
+    z14.object({
+      productId: z14.string().uuid("Selecione o produto"),
+      quantity: z14.coerce.number().int().min(1, "Quantidade m\xEDnima: 1"),
+      unitPrice: z14.coerce.number().min(0, "Informe o valor"),
+      imei: z14.string().trim().max(40).optional().nullable(),
+      serialNumber: z14.string().trim().max(60).optional().nullable()
     })
   ).min(1, "Inclua ao menos um produto"),
-  unitId: z13.string().uuid("Informe de qual unidade o produto saiu"),
-  paymentMethod: z13.enum(PAGAMENTOS2),
-  installments: z13.coerce.number().int().min(1).max(24).default(1),
+  unitId: z14.string().uuid("Informe de qual unidade o produto saiu"),
+  paymentMethod: z14.enum(PAGAMENTOS2),
+  installments: z14.coerce.number().int().min(1).max(24).default(1),
   /**
    * Pagamento dividido: parte no PIX, parte no cartão, e por aí.
    *
    * Vazio = a venda inteira em `paymentMethod`. A soma tem de fechar com
    * o total, e isso é conferido dentro da transação.
    */
-  payments: z13.array(
-    z13.object({
-      method: z13.enum(PAGAMENTOS2),
-      amount: z13.coerce.number().min(0.01, "Informe o valor desta forma"),
-      installments: z13.coerce.number().int().min(1).max(24).default(1),
-      notes: z13.string().trim().max(120).optional().nullable(),
+  payments: z14.array(
+    z14.object({
+      method: z14.enum(PAGAMENTOS2),
+      amount: z14.coerce.number().min(0.01, "Informe o valor desta forma"),
+      installments: z14.coerce.number().int().min(1).max(24).default(1),
+      notes: z14.string().trim().max(120).optional().nullable(),
       /** Taxa da maquininha, em %. Guardada com a venda. */
-      feePercent: z13.coerce.number().min(0).max(99.99).optional().nullable(),
+      feePercent: z14.coerce.number().min(0).max(99.99).optional().nullable(),
       /** Em qual conta caiu — usado no Pix, que tem mais de uma. */
-      destino: z13.string().trim().max(60).optional().nullable()
+      destino: z14.string().trim().max(60).optional().nullable()
     })
   ).max(6, "No m\xE1ximo 6 formas na mesma venda").optional(),
   /**
@@ -6728,28 +6962,28 @@ var vendaSchema = z13.object({
    * atrasa todo mundo. A pré-venda continua pedindo: lá o caixa precisa
    * saber de quem é o pedido.
    */
-  customerName: z13.string().trim().max(180).optional().nullable(),
-  customerPhone: z13.string().trim().max(30).optional().nullable(),
-  customerDocument: z13.string().trim().max(30).optional().nullable(),
-  customerId: z13.string().uuid().optional().nullable(),
+  customerName: z14.string().trim().max(180).optional().nullable(),
+  customerPhone: z14.string().trim().max(30).optional().nullable(),
+  customerDocument: z14.string().trim().max(30).optional().nullable(),
+  customerId: z14.string().uuid().optional().nullable(),
   /** Cobrado além do preço dos produtos — o repasse da taxa do cartão. */
-  acrescimo: z13.coerce.number().min(0).max(999999).optional().nullable(),
+  acrescimo: z14.coerce.number().min(0).max(999999).optional().nullable(),
   /** Libera vender abaixo do preço de atacado. */
-  chaveDeAcesso: z13.string().trim().max(60).optional().nullable(),
+  chaveDeAcesso: z14.string().trim().max(60).optional().nullable(),
   /**
    * Aparelho que o cliente deixou como parte do pagamento.
    *
    * Versão de balcão: só o que dá para anotar com o cliente na frente.
    * O aparelho vira uma forma de pagamento e o cliente paga a diferença.
    */
-  tradeIn: z13.object({
-    modelo: z13.string().trim().min(2, "Informe o modelo do aparelho").max(120),
-    cor: z13.string().trim().max(40).optional().nullable(),
-    armazenamento: z13.string().trim().max(20).optional().nullable(),
-    valorAvaliado: z13.coerce.number().min(0.01, "Informe quanto vale o aparelho do cliente")
+  tradeIn: z14.object({
+    modelo: z14.string().trim().min(2, "Informe o modelo do aparelho").max(120),
+    cor: z14.string().trim().max(40).optional().nullable(),
+    armazenamento: z14.string().trim().max(20).optional().nullable(),
+    valorAvaliado: z14.coerce.number().min(0.01, "Informe quanto vale o aparelho do cliente")
   }).optional().nullable(),
   /** Vendedor que atendeu, para a comissão. Vazio = o próprio caixa. */
-  sellerId: z13.string().uuid().optional().nullable(),
+  sellerId: z14.string().uuid().optional().nullable(),
   /**
    * Nome digitado no balcão.
    *
@@ -6757,9 +6991,9 @@ var vendaSchema = z13.object({
    * no sistema. Sem isto, a venda ficaria no nome do caixa e a comissão
    * apontaria para a pessoa errada.
    */
-  sellerName: z13.string().trim().max(120).optional().nullable(),
-  notes: z13.string().trim().max(1e3).optional().nullable(),
-  saleDate: z13.coerce.date().optional()
+  sellerName: z14.string().trim().max(120).optional().nullable(),
+  notes: z14.string().trim().max(1e3).optional().nullable(),
+  saleDate: z14.coerce.date().optional()
 });
 rotasVendas.post(
   "/",
@@ -6897,31 +7131,31 @@ rotasVendas.get(
     });
   })
 );
-var edicaoSchema = z13.object({
-  customerName: z13.string().trim().max(180).optional().nullable(),
-  customerPhone: z13.string().trim().max(30).optional().nullable(),
-  customerDocument: z13.string().trim().max(30).optional().nullable(),
-  sellerName: z13.string().trim().max(120).optional().nullable(),
-  notes: z13.string().trim().max(1e3).optional().nullable(),
-  saleDate: z13.coerce.date().optional(),
+var edicaoSchema = z14.object({
+  customerName: z14.string().trim().max(180).optional().nullable(),
+  customerPhone: z14.string().trim().max(30).optional().nullable(),
+  customerDocument: z14.string().trim().max(30).optional().nullable(),
+  sellerName: z14.string().trim().max(120).optional().nullable(),
+  notes: z14.string().trim().max(1e3).optional().nullable(),
+  saleDate: z14.coerce.date().optional(),
   /** Lista completa e definitiva dos itens. */
-  items: z13.array(
-    z13.object({
-      productId: z13.string().uuid(),
-      quantity: z13.coerce.number().int().min(1),
-      unitPrice: z13.coerce.number().min(0),
-      imei: z13.string().trim().max(40).optional().nullable(),
-      serialNumber: z13.string().trim().max(60).optional().nullable()
+  items: z14.array(
+    z14.object({
+      productId: z14.string().uuid(),
+      quantity: z14.coerce.number().int().min(1),
+      unitPrice: z14.coerce.number().min(0),
+      imei: z14.string().trim().max(40).optional().nullable(),
+      serialNumber: z14.string().trim().max(60).optional().nullable()
     })
   ).min(1, "A venda precisa de ao menos um produto").optional(),
-  paymentMethod: z13.enum(PAGAMENTOS2).optional(),
-  installments: z13.coerce.number().int().min(1).max(24).optional(),
+  paymentMethod: z14.enum(PAGAMENTOS2).optional(),
+  installments: z14.coerce.number().int().min(1).max(24).optional(),
   /** Lista completa e definitiva das formas de pagamento. */
-  payments: z13.array(
-    z13.object({
-      method: z13.enum([...PAGAMENTOS2, "TROCA"]),
-      amount: z13.coerce.number().min(0.01),
-      installments: z13.coerce.number().int().min(1).max(24).default(1)
+  payments: z14.array(
+    z14.object({
+      method: z14.enum([...PAGAMENTOS2, "TROCA"]),
+      amount: z14.coerce.number().min(0.01),
+      installments: z14.coerce.number().int().min(1).max(24).default(1)
     })
   ).max(6).optional()
 });
@@ -6993,7 +7227,7 @@ rotasVendas.put(
             productId: i.productId,
             productName: produtos.find((p) => p.id === i.productId).name,
             quantity: i.quantity,
-            unitPrice: new Prisma7.Decimal(i.unitPrice),
+            unitPrice: new Prisma8.Decimal(i.unitPrice),
             costPrice: produtos.find((p) => p.id === i.productId).costPrice,
             imei: i.imei?.trim() || null,
             serialNumber: i.serialNumber?.trim() || null
@@ -7003,7 +7237,7 @@ rotasVendas.put(
       const daTroca = venda.tradeIn ? numero(venda.tradeIn.valorAvaliado) : 0;
       let rateio = dados.payments?.map((p) => ({
         method: p.method,
-        amount: new Prisma7.Decimal(p.amount),
+        amount: new Prisma8.Decimal(p.amount),
         installments: p.installments,
         notes: null
       }));
@@ -7016,7 +7250,7 @@ rotasVendas.put(
           const maior = semTroca.reduce((m, p) => numero(p.amount) > numero(m.amount) ? p : m);
           rateio = venda.payments.map((p) => ({
             method: p.method,
-            amount: p.id === maior.id ? new Prisma7.Decimal(numero(p.amount) + diferenca) : p.amount,
+            amount: p.id === maior.id ? new Prisma8.Decimal(numero(p.amount) + diferenca) : p.amount,
             installments: p.installments,
             notes: null
           }));
@@ -7050,8 +7284,8 @@ rotasVendas.put(
           ...dados.installments ? { installments: dados.installments } : {},
           ...dados.paymentMethod ? { paymentMethod: dados.paymentMethod } : {},
           ...principal && !dados.paymentMethod ? { paymentMethod: principal } : {},
-          totalAmount: new Prisma7.Decimal(total),
-          costAmount: new Prisma7.Decimal(custo)
+          totalAmount: new Prisma8.Decimal(total),
+          costAmount: new Prisma8.Decimal(custo)
         },
         include: { items: true, payments: true }
       });
@@ -7146,6 +7380,7 @@ function createApp() {
   app2.use("/api/sales", rotasVendas);
   app2.use("/api/pre-sales", rotasPreVendas);
   app2.use("/api/trocas", rotasTrocas);
+  app2.use("/api/seminovos", rotasSeminovos);
   app2.use("/api/em-aberto", rotasEmAberto);
   app2.use("/api/cash", rotasCaixa);
   app2.use("/api/notifications", rotasNotificacoes);

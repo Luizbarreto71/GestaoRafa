@@ -1,4 +1,5 @@
 import { PaymentMethod, Prisma } from '@prisma/client';
+import { seminovosDaTroca } from './seminovos';
 import { AppError, naoEncontrado } from './core';
 import { taxaDe, type TaxaDeCartao } from '../shared/taxas';
 import { taxasDoCartao } from './sistema';
@@ -448,7 +449,7 @@ export async function registrarVenda(dados: DadosDaVenda) {
     // A troca anotada no balcão vira registro junto com a venda: se a
     // venda falhar, não sobra aparelho fantasma esperando dono.
     if (dados.trocaNova) {
-      await tx.tradeIn.create({
+      const troca = await tx.tradeIn.create({
         data: {
           code: await proximoCodigo('troca', 'TR', tx),
           status: 'ACEITA',
@@ -464,8 +465,25 @@ export async function registrarVenda(dados: DadosDaVenda) {
           unitId: dados.unitId,
           saleId: venda.id,
           defeitos: [],
+          // A peça também vira linha da troca: é dela que nasce o seminovo.
+          aparelhos: {
+            create: [
+              {
+                ordem: 0,
+                modelo: dados.trocaNova.modelo,
+                cor: dados.trocaNova.cor ?? null,
+                armazenamento: dados.trocaNova.armazenamento ?? null,
+                valorAvaliado: daTroca,
+                defeitos: [],
+              },
+            ],
+          },
         },
       });
+
+      // O aparelho recebido entra no estoque na mesma transação: se a
+      // venda desfizer, ele não fica na prateleira sem dono.
+      await seminovosDaTroca(troca.id, dados.unitId, dados.cashierId ?? null, tx);
     }
 
     return venda;

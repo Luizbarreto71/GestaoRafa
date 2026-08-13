@@ -272,6 +272,13 @@ model Product {
   salePrice        Decimal       @default(0) @db.Decimal(12, 2)
   /// Preço para atacado. Vazio = o produto só é vendido no varejo.
   wholesalePrice   Decimal?      @db.Decimal(12, 2)
+  /// Aparelho usado que a loja recebeu — de troca ou comprado direto.
+  /// Continua sendo estoque normal; a marca só o faz aparecer na aba.
+  seminovo         Boolean       @default(false)
+  /// Quanto a loja pagou pelo usado, quando veio de compra direta. Na
+  /// troca é o valor avaliado, e ele já vira o custo.
+  seminovoOrigem   String?
+
   imei             String?
   serialNumber     String?
   barcode          String?
@@ -280,6 +287,11 @@ model Product {
   entryDate        DateTime      @default(now())
   createdAt        DateTime      @default(now())
   updatedAt        DateTime      @updatedAt
+
+  /// A peça da troca que virou este produto. Única: impede cadastrar o
+  /// mesmo aparelho duas vezes se a venda for corrigida.
+  tradeInAparelhoId String?          @unique
+  tradeInAparelho   TradeInAparelho? @relation(fields: [tradeInAparelhoId], references: [id], onDelete: SetNull)
 
   categoryId String
   category   Category @relation(fields: [categoryId], references: [id])
@@ -414,6 +426,9 @@ model TradeInAparelho {
   tradeIn   TradeIn @relation(fields: [tradeInId], references: [id], onDelete: Cascade)
 
   fotos TradeInPhoto[]
+
+  /// O produto de estoque criado a partir deste aparelho.
+  produto Product?
 
   @@index([tradeInId])
   @@map("trade_in_aparelhos")

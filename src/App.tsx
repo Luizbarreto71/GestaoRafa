@@ -18,6 +18,7 @@ const CaixaPage = lazy(() => import('./pages/CaixaPage'));
 const PreSalePage = lazy(() => import('./pages/PreSalePage'));
 const EmAbertoPage = lazy(() => import('./pages/EmAbertoPage'));
 const TrocasPage = lazy(() => import('./pages/TrocasPage'));
+const SeminovosPage = lazy(() => import('./pages/SeminovosPage'));
 
 function FullScreenLoader() {
   return (
@@ -112,6 +113,14 @@ export function App() {
           element={
             <Tela permissao="prevenda.verTodas">
               <EmAbertoPage />
+            </Tela>
+          }
+        />
+        <Route
+          path="/seminovos"
+          element={
+            <Tela permissao="produtos.ver">
+              <SeminovosPage />
             </Tela>
           }
         />
