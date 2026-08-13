@@ -42,6 +42,10 @@ export interface DadosDaVenda {
     notes?: string | null;
     /** Taxa da maquininha, em %. Só faz sentido no crédito. */
     feePercent?: number | null;
+    /** "padrao" (Visa/Master) ou "elo" (Elo/Amex, que cobram mais). */
+    bandeira?: string | null;
+    /** Código de autorização do comprovante da maquininha. */
+    autorizacao?: string | null;
     destino?: string | null;
   }[];
   /**
@@ -96,9 +100,13 @@ function taxaDaLinha(
   metodo: string,
   parcelas: number,
   informada: number | null | undefined,
+  bandeira?: string | null,
 ): Prisma.Decimal | null {
   if (metodo !== 'CREDITO') return null;
-  const taxa = informada ?? taxaDe(tabela, parcelas, 'padrao');
+  // A bandeira escolhida no balcão manda: Elo e Amex cobram mais, e gravar
+  // a taxa de Visa numa venda de Elo esconde a diferença justamente de
+  // quem paga por ela.
+  const taxa = informada ?? taxaDe(tabela, parcelas, bandeira === 'elo' ? 'elo' : 'padrao');
   return taxa != null ? new Prisma.Decimal(taxa) : null;
 }
 
@@ -109,11 +117,12 @@ function liquidoDaLinha(
   valor: number,
   parcelas: number,
   informada: number | null | undefined,
+  bandeira?: string | null,
 ): Prisma.Decimal {
   // Fiado ainda não entrou: o líquido é zero até alguém dar baixa.
   if (metodo === 'EM_ABERTO') return new Prisma.Decimal(0);
 
-  const taxa = taxaDaLinha(tabela, metodo, parcelas, informada);
+  const taxa = taxaDaLinha(tabela, metodo, parcelas, informada, bandeira);
   return new Prisma.Decimal(taxa ? valor * (1 - Number(taxa) / 100) : valor);
 }
 
@@ -326,8 +335,10 @@ export async function registrarVenda(dados: DadosDaVenda) {
           // O que a maquininha desconta fica gravado com a venda: a taxa
           // muda com o tempo, e o relatório de amanhã não pode recalcular
           // o passado com o preço de hoje.
-          feePercent: taxaDaLinha(tabela, p.method, p.installments ?? 1, p.feePercent),
-          netAmount: liquidoDaLinha(tabela, p.method, p.amount, p.installments ?? 1, p.feePercent),
+          bandeira: p.method === 'CREDITO' ? (p.bandeira === 'elo' ? 'elo' : 'padrao') : null,
+          autorizacao: p.autorizacao?.trim() || null,
+          feePercent: taxaDaLinha(tabela, p.method, p.installments ?? 1, p.feePercent, p.bandeira),
+          netAmount: liquidoDaLinha(tabela, p.method, p.amount, p.installments ?? 1, p.feePercent, p.bandeira),
         }))
       : aReceber.greaterThan(0)
         ? [

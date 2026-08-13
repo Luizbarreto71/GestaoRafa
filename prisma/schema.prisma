@@ -551,6 +551,13 @@ model SalePayment {
   feePercent Decimal? @db.Decimal(6, 2)
   /// O que sobra depois do desconto da maquininha — é o que cai na conta.
   netAmount  Decimal? @db.Decimal(12, 2)
+  /// Qual coluna da tabela de taxas valeu: "padrao" (Visa, Master e as
+  /// demais) ou "elo" (Elo e Amex, que cobram mais). Guardado porque a
+  /// taxa de hoje não pode reescrever o que a maquininha cobrou ontem.
+  bandeira   String?
+  /// Código de autorização impresso no comprovante da maquininha. É por
+  /// ele que se acha a venda no extrato quando um valor não bate.
+  autorizacao String?
 
   /// Quando o fiado foi quitado. Vazio = ainda em aberto.
   settledAt     DateTime?

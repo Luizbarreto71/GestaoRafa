@@ -758,12 +758,12 @@ rotasRelatorios.get(
 // ------------------------------------------------- Relatório do crédito
 
 /**
- * As taxas do crédito, venda por venda.
+ * As taxas do cartão, transação por transação.
  *
- * Três números que o extrato junta e a loja precisa separados: quanto o
- * cliente pagou a mais por parcelar, quanto a maquininha levou, e o que
- * sobrou da diferença. É a conta que diz se o repasse da taxa está
- * cobrindo o custo ou se a loja está bancando parte dele.
+ * É a folha que se põe ao lado do extrato da maquininha no fim do mês.
+ * Cada linha traz o que foi passado, em quantas vezes, em que bandeira, o
+ * que a máquina descontou e o que sobrou — e o total diz, de uma vez, se o
+ * repasse da taxa está cobrindo o custo ou se a loja está bancando.
  */
 rotasRelatorios.get(
   '/by-card',
@@ -775,7 +775,9 @@ rotasRelatorios.get(
 
     const pagamentos = await db.salePayment.findMany({
       where: {
-        method: 'CREDITO',
+        // Débito também passa na maquininha e também tem taxa quando a
+        // loja cadastra uma. Deixar de fora esconderia parte do custo.
+        method: { in: ['CREDITO', 'DEBITO'] },
         sale: {
           status: 'FINALIZADA',
           ...(quando ? { saleDate: quando } : {}),
@@ -789,7 +791,6 @@ rotasRelatorios.get(
             saleDate: true,
             customerName: true,
             surcharge: true,
-            sellerName: true,
             payments: { where: { method: 'CREDITO' }, select: { amount: true } },
           },
         },
@@ -800,57 +801,83 @@ rotasRelatorios.get(
     const tabela = await taxasDoCartao();
 
     const linhas = pagamentos.map((p) => {
-      const cobrado = numero(p.amount);
+      const bruto = numero(p.amount);
       const parcelas = p.installments || 1;
+      const ehCredito = p.method === 'CREDITO';
 
-      // Venda antiga não tem a taxa gravada: vale a tabela de hoje, que é
-      // melhor do que mostrar zero e contradizer a maquininha.
-      const percentual = p.feePercent != null ? numero(p.feePercent) : (taxaDe(tabela, parcelas, 'padrao') ?? 0);
-      const taxa = p.netAmount != null ? cobrado - numero(p.netAmount) : cobrado * (percentual / 100);
-      const liquido = cobrado - taxa;
+      // A taxa gravada na venda é a que vale. Ela muda com o tempo, e o
+      // relatório de hoje não pode recalcular o passado com o preço novo.
+      const percentual =
+        p.feePercent != null
+          ? numero(p.feePercent)
+          : ehCredito
+            ? (taxaDe(tabela, parcelas, p.bandeira === 'elo' ? 'elo' : 'padrao') ?? 0)
+            : 0;
+
+      const taxa = p.netAmount != null ? bruto - numero(p.netAmount) : bruto * (percentual / 100);
+      const final = bruto - taxa;
 
       // O acréscimo é da venda inteira. Com mais de uma linha de crédito,
       // cada uma leva a sua parte — senão o lucro apareceria dobrado.
-      const totalNoCredito = p.sale.payments.reduce((s, x) => s + numero(x.amount), 0) || cobrado;
-      const repasse = numero(p.sale.surcharge) * (cobrado / totalNoCredito);
+      const totalNoCredito = p.sale.payments.reduce((s, x) => s + numero(x.amount), 0) || bruto;
+      const repasse = ehCredito ? numero(p.sale.surcharge) * (bruto / totalNoCredito) : 0;
 
       return {
         data: dataBR(p.sale.saleDate),
         code: p.sale.code,
-        // O parcelamento carrega a taxa: assim ela aparece no título do
-        // bloco e não precisa de uma coluna repetindo o mesmo número em
-        // todas as linhas.
-        parcelas: `${parcelas === 1 ? 'À vista' : `${parcelas}x`} · ${percentual.toFixed(2).replace('.', ',')}%`,
-        valor: cobrado,
+        autorizacao: p.autorizacao ?? '—',
+        cliente: p.sale.customerName ?? 'Consumidor',
+        bruto,
+        parcelas: ehCredito ? (parcelas === 1 ? '1x' : `${parcelas}x`) : '—',
+        bandeira: ehCredito
+          ? p.bandeira === 'elo'
+            ? 'ELO / AMEX'
+            : 'VISA / MASTER'
+          : 'DÉBITO',
+        percentual,
         repasse,
         taxa,
+        final,
         lucro: repasse - taxa,
       };
     });
 
-    const soma = (campo: keyof (typeof linhas)[number]) =>
-      linhas.reduce((s, l) => s + (typeof l[campo] === 'number' ? (l[campo] as number) : 0), 0);
+    const soma = (campo: 'bruto' | 'repasse' | 'taxa' | 'final' | 'lucro') =>
+      linhas.reduce((s, l) => s + l[campo], 0);
+
+    const bruto = soma('bruto');
+    const taxaTotal = soma('taxa');
 
     await exportar(res, q.format, {
       title: 'Relatório de Taxas',
       subtitle: periodo(q),
-      // Agrupado por parcelamento: a taxa muda com o número de parcelas, e
-      // é aí que dá para ver em quantas vezes a loja está perdendo.
-      group: { key: 'parcelas', totals: ['valor', 'repasse', 'taxa', 'lucro'] },
+      // Por bandeira e parcelamento juntos: é assim que a taxa é cobrada, e
+      // é o corte que mostra onde o dinheiro está indo.
+      group: { key: 'bandeira', totals: ['bruto', 'repasse', 'taxa', 'final', 'lucro'] },
       columns: [
-        { header: 'Data', key: 'data', width: 12 },
-        { header: 'Venda', key: 'code', width: 13 },
-        money('Valor', 'valor', 15),
-        money('Taxa do cliente', 'repasse', 16),
-        money('Minha taxa', 'taxa', 15),
-        money('Lucro na taxa', 'lucro', 15),
+        { header: 'Data', key: 'data', width: 11 },
+        { header: 'Venda', key: 'code', width: 12 },
+        { header: 'Autorização', key: 'autorizacao', width: 13 },
+        money('Valor bruto', 'bruto', 13),
+        { header: 'Parcelas', key: 'parcelas', width: 9, align: 'right' as const },
+        { header: 'Taxa %', key: 'percentual', width: 8, align: 'right' as const,
+          format: (v: unknown) => `${decimal(v)}%` },
+        money('Taxa do cliente', 'repasse', 14),
+        money('Minha taxa', 'taxa', 12),
+        money('Valor final', 'final', 13),
+        money('Lucro', 'lucro', 12),
       ],
       rows: linhas,
       summary: [
-        { label: 'Vendas no crédito', value: String(linhas.length) },
-        { label: 'Valor', value: reais(soma('valor')) },
-        { label: 'Taxa do cliente', value: reais(soma('repasse')) },
-        { label: 'Minha taxa', value: reais(soma('taxa')) },
+        { label: 'Transações', value: String(linhas.length) },
+        { label: 'Valor bruto', value: reais(bruto) },
+        { label: 'Taxa paga pelo cliente', value: reais(soma('repasse')) },
+        { label: 'Minha taxa', value: reais(taxaTotal) },
+        {
+          label: 'Taxa média',
+          value: bruto > 0 ? `${((taxaTotal / bruto) * 100).toFixed(2).replace('.', ',')}%` : '—',
+        },
+        { label: 'Valor final (cai na conta)', value: reais(soma('final')) },
         { label: 'Lucro na taxa', value: reais(soma('lucro')) },
       ],
     });

@@ -43,6 +43,10 @@ export function CalculadoraDeCartao({
   aoMudarParcelas,
   cobrado: cobradoFora,
   aoMudarCobrado,
+  bandeira: bandeiraFora,
+  aoMudarBandeira,
+  autorizacao,
+  aoMudarAutorizacao,
 }: {
   taxas: TaxaDeCartao[];
   /** Leva o valor fechado para o campo do pagamento. */
@@ -54,15 +58,23 @@ export function CalculadoraDeCartao({
   /** O valor que o vendedor anotou, já com a taxa embutida. */
   cobrado?: string;
   aoMudarCobrado?: (v: string) => void;
+  /** A bandeira escolhida. Sobe para a venda porque muda a taxa gravada. */
+  bandeira?: Bandeira;
+  aoMudarBandeira?: (b: Bandeira) => void;
+  /** Código do comprovante. Só aparece quando a tela quer guardá-lo. */
+  autorizacao?: string;
+  aoMudarAutorizacao?: (v: string) => void;
 }) {
   const [parcelasLocal, setParcelasLocal] = useState('1');
   const [cobradoLocal, setCobradoLocal] = useState('');
-  const [bandeira, setBandeira] = useState<Bandeira>('padrao');
+  const [bandeiraLocal, setBandeiraLocal] = useState<Bandeira>('padrao');
 
   const parcelas = parcelasFora ?? parcelasLocal;
   const definirParcelas = aoMudarParcelas ?? setParcelasLocal;
   const cobrado = cobradoFora ?? cobradoLocal;
   const definirCobrado = aoMudarCobrado ?? setCobradoLocal;
+  const bandeira = bandeiraFora ?? bandeiraLocal;
+  const definirBandeira = aoMudarBandeira ?? setBandeiraLocal;
 
   const nParcelas = Number(parcelas) || 1;
   const taxa = taxaDe(taxas, nParcelas, bandeira);
@@ -109,13 +121,28 @@ export function CalculadoraDeCartao({
         <Select
           label="Bandeira"
           value={bandeira}
-          onChange={(e) => setBandeira(e.target.value as Bandeira)}
+          onChange={(e) => definirBandeira(e.target.value as Bandeira)}
           options={[
             { value: 'padrao', label: 'Visa / Master / outras' },
             { value: 'elo', label: 'Elo / Amex' },
           ]}
         />
       </div>
+
+      {/* Opcional de propósito: a fila do balcão não pode parar por causa
+          de um código. Mas é ele que acha a venda no extrato quando um
+          valor não bate no fim do mês. */}
+      {aoMudarAutorizacao && (
+        <div className="mt-3">
+          <Input
+            label="Autorização da maquininha"
+            value={autorizacao ?? ''}
+            onChange={(e) => aoMudarAutorizacao(e.target.value)}
+            placeholder="opcional — o código do comprovante"
+            hint="Serve para achar esta venda no extrato depois"
+          />
+        </div>
+      )}
 
       {valorCobrado > 0 && taxa != null && (
         <div className="mt-3 space-y-1.5 rounded-lg bg-white px-3 py-2.5 dark:bg-navy-900">

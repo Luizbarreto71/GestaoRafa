@@ -4662,7 +4662,9 @@ rotasRelatorios.get(
     const quando = intervalo(q.startDate, q.endDate);
     const pagamentos = await db.salePayment.findMany({
       where: {
-        method: "CREDITO",
+        // Débito também passa na maquininha e também tem taxa quando a
+        // loja cadastra uma. Deixar de fora esconderia parte do custo.
+        method: { in: ["CREDITO", "DEBITO"] },
         sale: {
           status: "FINALIZADA",
           ...quando ? { saleDate: quando } : {},
@@ -4676,7 +4678,6 @@ rotasRelatorios.get(
             saleDate: true,
             customerName: true,
             surcharge: true,
-            sellerName: true,
             payments: { where: { method: "CREDITO" }, select: { amount: true } }
           }
         }
@@ -4685,47 +4686,67 @@ rotasRelatorios.get(
     });
     const tabela = await taxasDoCartao();
     const linhas = pagamentos.map((p) => {
-      const cobrado = numero(p.amount);
+      const bruto2 = numero(p.amount);
       const parcelas = p.installments || 1;
-      const percentual = p.feePercent != null ? numero(p.feePercent) : taxaDe(tabela, parcelas, "padrao") ?? 0;
-      const taxa = p.netAmount != null ? cobrado - numero(p.netAmount) : cobrado * (percentual / 100);
-      const liquido = cobrado - taxa;
-      const totalNoCredito = p.sale.payments.reduce((s, x) => s + numero(x.amount), 0) || cobrado;
-      const repasse = numero(p.sale.surcharge) * (cobrado / totalNoCredito);
+      const ehCredito = p.method === "CREDITO";
+      const percentual = p.feePercent != null ? numero(p.feePercent) : ehCredito ? taxaDe(tabela, parcelas, p.bandeira === "elo" ? "elo" : "padrao") ?? 0 : 0;
+      const taxa = p.netAmount != null ? bruto2 - numero(p.netAmount) : bruto2 * (percentual / 100);
+      const final = bruto2 - taxa;
+      const totalNoCredito = p.sale.payments.reduce((s, x) => s + numero(x.amount), 0) || bruto2;
+      const repasse = ehCredito ? numero(p.sale.surcharge) * (bruto2 / totalNoCredito) : 0;
       return {
         data: dataBR(p.sale.saleDate),
         code: p.sale.code,
-        // O parcelamento carrega a taxa: assim ela aparece no título do
-        // bloco e não precisa de uma coluna repetindo o mesmo número em
-        // todas as linhas.
-        parcelas: `${parcelas === 1 ? "\xC0 vista" : `${parcelas}x`} \xB7 ${percentual.toFixed(2).replace(".", ",")}%`,
-        valor: cobrado,
+        autorizacao: p.autorizacao ?? "\u2014",
+        cliente: p.sale.customerName ?? "Consumidor",
+        bruto: bruto2,
+        parcelas: ehCredito ? parcelas === 1 ? "1x" : `${parcelas}x` : "\u2014",
+        bandeira: ehCredito ? p.bandeira === "elo" ? "ELO / AMEX" : "VISA / MASTER" : "D\xC9BITO",
+        percentual,
         repasse,
         taxa,
+        final,
         lucro: repasse - taxa
       };
     });
-    const soma = (campo) => linhas.reduce((s, l) => s + (typeof l[campo] === "number" ? l[campo] : 0), 0);
+    const soma = (campo) => linhas.reduce((s, l) => s + l[campo], 0);
+    const bruto = soma("bruto");
+    const taxaTotal = soma("taxa");
     await exportar(res, q.format, {
       title: "Relat\xF3rio de Taxas",
       subtitle: periodo(q),
-      // Agrupado por parcelamento: a taxa muda com o número de parcelas, e
-      // é aí que dá para ver em quantas vezes a loja está perdendo.
-      group: { key: "parcelas", totals: ["valor", "repasse", "taxa", "lucro"] },
+      // Por bandeira e parcelamento juntos: é assim que a taxa é cobrada, e
+      // é o corte que mostra onde o dinheiro está indo.
+      group: { key: "bandeira", totals: ["bruto", "repasse", "taxa", "final", "lucro"] },
       columns: [
-        { header: "Data", key: "data", width: 12 },
-        { header: "Venda", key: "code", width: 13 },
-        money("Valor", "valor", 15),
-        money("Taxa do cliente", "repasse", 16),
-        money("Minha taxa", "taxa", 15),
-        money("Lucro na taxa", "lucro", 15)
+        { header: "Data", key: "data", width: 11 },
+        { header: "Venda", key: "code", width: 12 },
+        { header: "Autoriza\xE7\xE3o", key: "autorizacao", width: 13 },
+        money("Valor bruto", "bruto", 13),
+        { header: "Parcelas", key: "parcelas", width: 9, align: "right" },
+        {
+          header: "Taxa %",
+          key: "percentual",
+          width: 8,
+          align: "right",
+          format: (v) => `${decimal(v)}%`
+        },
+        money("Taxa do cliente", "repasse", 14),
+        money("Minha taxa", "taxa", 12),
+        money("Valor final", "final", 13),
+        money("Lucro", "lucro", 12)
       ],
       rows: linhas,
       summary: [
-        { label: "Vendas no cr\xE9dito", value: String(linhas.length) },
-        { label: "Valor", value: reais(soma("valor")) },
-        { label: "Taxa do cliente", value: reais(soma("repasse")) },
-        { label: "Minha taxa", value: reais(soma("taxa")) },
+        { label: "Transa\xE7\xF5es", value: String(linhas.length) },
+        { label: "Valor bruto", value: reais(bruto) },
+        { label: "Taxa paga pelo cliente", value: reais(soma("repasse")) },
+        { label: "Minha taxa", value: reais(taxaTotal) },
+        {
+          label: "Taxa m\xE9dia",
+          value: bruto > 0 ? `${(taxaTotal / bruto * 100).toFixed(2).replace(".", ",")}%` : "\u2014"
+        },
+        { label: "Valor final (cai na conta)", value: reais(soma("final")) },
         { label: "Lucro na taxa", value: reais(soma("lucro")) }
       ]
     });
@@ -5121,14 +5142,14 @@ rotasNotificacoes.post(
 );
 
 // server/vendas-service.ts
-function taxaDaLinha(tabela, metodo, parcelas, informada) {
+function taxaDaLinha(tabela, metodo, parcelas, informada, bandeira) {
   if (metodo !== "CREDITO") return null;
-  const taxa = informada ?? taxaDe(tabela, parcelas, "padrao");
+  const taxa = informada ?? taxaDe(tabela, parcelas, bandeira === "elo" ? "elo" : "padrao");
   return taxa != null ? new Prisma4.Decimal(taxa) : null;
 }
-function liquidoDaLinha(tabela, metodo, valor, parcelas, informada) {
+function liquidoDaLinha(tabela, metodo, valor, parcelas, informada, bandeira) {
   if (metodo === "EM_ABERTO") return new Prisma4.Decimal(0);
-  const taxa = taxaDaLinha(tabela, metodo, parcelas, informada);
+  const taxa = taxaDaLinha(tabela, metodo, parcelas, informada, bandeira);
   return new Prisma4.Decimal(taxa ? valor * (1 - Number(taxa) / 100) : valor);
 }
 async function proximoCodigo(nome, prefixo, tx) {
@@ -5255,8 +5276,10 @@ async function registrarVenda(dados) {
       // O que a maquininha desconta fica gravado com a venda: a taxa
       // muda com o tempo, e o relatório de amanhã não pode recalcular
       // o passado com o preço de hoje.
-      feePercent: taxaDaLinha(tabela, p.method, p.installments ?? 1, p.feePercent),
-      netAmount: liquidoDaLinha(tabela, p.method, p.amount, p.installments ?? 1, p.feePercent)
+      bandeira: p.method === "CREDITO" ? p.bandeira === "elo" ? "elo" : "padrao" : null,
+      autorizacao: p.autorizacao?.trim() || null,
+      feePercent: taxaDaLinha(tabela, p.method, p.installments ?? 1, p.feePercent, p.bandeira),
+      netAmount: liquidoDaLinha(tabela, p.method, p.amount, p.installments ?? 1, p.feePercent, p.bandeira)
     })) : aReceber.greaterThan(0) ? [
       {
         method: dados.paymentMethod,
@@ -5928,6 +5951,10 @@ var finalizarSchema = z11.object({
       notes: z11.string().trim().max(120).optional().nullable(),
       /** Taxa da maquininha, em %. Guardada com a venda. */
       feePercent: z11.coerce.number().min(0).max(99.99).optional().nullable(),
+      /** Qual coluna da tabela de taxas vale: Visa/Master ou Elo/Amex. */
+      bandeira: z11.enum(["padrao", "elo"]).optional().nullable(),
+      /** Código de autorização do comprovante da maquininha. */
+      autorizacao: z11.string().trim().max(30).optional().nullable(),
       /** Em qual conta caiu — usado no Pix, que tem mais de uma. */
       destino: z11.string().trim().max(60).optional().nullable()
     })
@@ -6965,6 +6992,10 @@ var vendaSchema = z14.object({
       notes: z14.string().trim().max(120).optional().nullable(),
       /** Taxa da maquininha, em %. Guardada com a venda. */
       feePercent: z14.coerce.number().min(0).max(99.99).optional().nullable(),
+      /** Qual coluna da tabela de taxas vale: Visa/Master ou Elo/Amex. */
+      bandeira: z14.enum(["padrao", "elo"]).optional().nullable(),
+      /** Código de autorização do comprovante da maquininha. */
+      autorizacao: z14.string().trim().max(30).optional().nullable(),
       /** Em qual conta caiu — usado no Pix, que tem mais de uma. */
       destino: z14.string().trim().max(60).optional().nullable()
     })

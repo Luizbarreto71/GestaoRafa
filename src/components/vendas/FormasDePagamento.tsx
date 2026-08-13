@@ -15,6 +15,10 @@ export type FormaDePagamento = {
   destino?: string;
   /** Taxa da maquininha desta linha, em %. Vem da calculadora. */
   feePercent?: number | null;
+  /** Visa/Master ou Elo/Amex: muda a taxa que a maquininha cobra. */
+  bandeira?: 'padrao' | 'elo';
+  /** Código de autorização do comprovante, para achar no extrato. */
+  autorizacao?: string;
 };
 
 export const formaVazia = (method = 'PIX'): FormaDePagamento => ({
@@ -123,6 +127,10 @@ export function FormasDePagamento({
   aoMudarParcelas,
   cobrado = '',
   aoMudarCobrado,
+  bandeira = 'padrao',
+  aoMudarBandeira,
+  autorizacao = '',
+  aoMudarAutorizacao,
   entrada = '',
   aoMudarEntrada,
   formaDaEntrada = 'PIX',
@@ -143,6 +151,12 @@ export function FormasDePagamento({
   /** O valor combinado no crédito, já com a taxa. */
   cobrado?: string;
   aoMudarCobrado?: (v: string) => void;
+  /** Visa/Master ou Elo/Amex — muda a taxa que a maquininha cobra. */
+  bandeira?: 'padrao' | 'elo';
+  aoMudarBandeira?: (b: 'padrao' | 'elo') => void;
+  /** Código do comprovante da maquininha. */
+  autorizacao?: string;
+  aoMudarAutorizacao?: (v: string) => void;
   /** Quanto o cliente adianta quando o resto fica em aberto. */
   entrada?: string;
   aoMudarEntrada?: (v: string) => void;
@@ -202,6 +216,10 @@ export function FormasDePagamento({
             aoMudarParcelas={aoMudarParcelas}
             cobrado={cobrado}
             aoMudarCobrado={aoMudarCobrado}
+            bandeira={bandeira}
+            aoMudarBandeira={aoMudarBandeira}
+            autorizacao={autorizacao}
+            aoMudarAutorizacao={aoMudarAutorizacao}
           />
         )}
 
@@ -350,6 +368,13 @@ export function FormasDePagamento({
           <CalculadoraDeCartao
             taxas={taxas}
             valorSugerido={total}
+            bandeira={bandeira}
+            aoMudarBandeira={(b) => {
+              aoMudarBandeira?.(b);
+              // A bandeira muda a taxa da linha que já está preenchida.
+              const i = formas.map((f) => f.method).lastIndexOf('CREDITO');
+              if (i >= 0) alterar(i, { bandeira: b });
+            }}
             aoUsar={(valor, parcelasDoCartao, taxa) => {
               // Preenche a última linha de crédito: é a que a pessoa
               // acabou de mexer na prática.
@@ -359,6 +384,7 @@ export function FormasDePagamento({
                   amount: valor.toFixed(2),
                   installments: String(parcelasDoCartao),
                   feePercent: taxa,
+                  bandeira,
                 });
               }
             }}
@@ -483,5 +509,7 @@ export function paraApi(dividido: boolean, formas: FormaDePagamento[]) {
       destino: f.destino?.trim() || null,
       // Só o crédito tem taxa; nas outras formas o líquido é o próprio valor.
       feePercent: f.method === 'CREDITO' ? (f.feePercent ?? null) : null,
+      bandeira: f.method === 'CREDITO' ? (f.bandeira ?? 'padrao') : null,
+      autorizacao: f.autorizacao?.trim() || null,
     }));
 }

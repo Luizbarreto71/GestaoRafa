@@ -617,6 +617,8 @@ function VendaDireta() {
     destino: '',
     installments: '1',
     cobrado: '',
+    bandeira: 'padrao' as 'padrao' | 'elo',
+    autorizacao: '',
     entrada: '',
     formaDaEntrada: 'PIX',
     vendedor: '',
@@ -632,13 +634,17 @@ function VendaDireta() {
   function pagamentoNoCredito() {
     if (form.paymentMethod !== 'CREDITO' || !cobradoNoCartao) return undefined;
 
-    const t = taxaDe(taxas, Number(form.installments) || 1, 'padrao');
+    // A bandeira escolhida manda: Elo e Amex custam mais, e gravar a taxa
+    // de Visa numa venda de Elo esconde a diferença de quem paga por ela.
+    const t = taxaDe(taxas, Number(form.installments) || 1, form.bandeira);
     return [
       {
         method: 'CREDITO',
         amount: cobradoNoCartao,
         installments: Number(form.installments) || 1,
         feePercent: t,
+        bandeira: form.bandeira,
+        autorizacao: form.autorizacao.trim() || null,
       },
     ];
   }
@@ -797,7 +803,7 @@ function VendaDireta() {
       setForm((f) => ({ ...f, customerName: '', customerPhone: '', customerDocument: '', notes: '' }));
       setDividido(false);
       setFormas([]);
-      setForm((f) => ({ ...f, paymentMethod: 'PIX', destino: '', cobrado: '', entrada: '', formaDaEntrada: 'PIX' }));
+      setForm((f) => ({ ...f, paymentMethod: 'PIX', destino: '', cobrado: '', bandeira: 'padrao', autorizacao: '', entrada: '', formaDaEntrada: 'PIX' }));
       setComTroca(false);
       setTroca(trocaVazia());
     } catch (erro) {
@@ -847,6 +853,10 @@ function VendaDireta() {
             aoMudarParcelas={(v) => setForm((f) => ({ ...f, installments: v }))}
             cobrado={form.cobrado}
             aoMudarCobrado={(v) => setForm((f) => ({ ...f, cobrado: v }))}
+            bandeira={form.bandeira}
+            aoMudarBandeira={(b) => setForm((f) => ({ ...f, bandeira: b }))}
+            autorizacao={form.autorizacao}
+            aoMudarAutorizacao={(v) => setForm((f) => ({ ...f, autorizacao: v }))}
             entrada={form.entrada}
             aoMudarEntrada={(v) => setForm((f) => ({ ...f, entrada: v }))}
             formaDaEntrada={form.formaDaEntrada}

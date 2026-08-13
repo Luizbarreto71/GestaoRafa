@@ -339,6 +339,10 @@ const finalizarSchema = z.object({
         notes: z.string().trim().max(120).optional().nullable(),
         /** Taxa da maquininha, em %. Guardada com a venda. */
         feePercent: z.coerce.number().min(0).max(99.99).optional().nullable(),
+        /** Qual coluna da tabela de taxas vale: Visa/Master ou Elo/Amex. */
+        bandeira: z.enum(['padrao', 'elo']).optional().nullable(),
+        /** Código de autorização do comprovante da maquininha. */
+        autorizacao: z.string().trim().max(30).optional().nullable(),
         /** Em qual conta caiu — usado no Pix, que tem mais de uma. */
         destino: z.string().trim().max(60).optional().nullable(),
       }),
