@@ -758,7 +758,7 @@ rotasRelatorios.get(
 // ------------------------------------------------- Relatório do crédito
 
 /**
- * O que a venda no crédito rendeu, linha por linha.
+ * As taxas do crédito, venda por venda.
  *
  * Três números que o extrato junta e a loja precisa separados: quanto o
  * cliente pagou a mais por parcelar, quanto a maquininha levou, e o que
@@ -817,14 +817,13 @@ rotasRelatorios.get(
       return {
         data: dataBR(p.sale.saleDate),
         code: p.sale.code,
-        cliente: p.sale.customerName ?? 'Consumidor',
-        vendedor: p.sale.sellerName ?? '—',
-        parcelas: parcelas === 1 ? 'À vista' : `${parcelas}x`,
-        cobrado,
+        // O parcelamento carrega a taxa: assim ela aparece no título do
+        // bloco e não precisa de uma coluna repetindo o mesmo número em
+        // todas as linhas.
+        parcelas: `${parcelas === 1 ? 'À vista' : `${parcelas}x`} · ${percentual.toFixed(2).replace('.', ',')}%`,
+        valor: cobrado,
         repasse,
-        percentual,
         taxa,
-        liquido,
         lucro: repasse - taxa,
       };
     });
@@ -833,32 +832,26 @@ rotasRelatorios.get(
       linhas.reduce((s, l) => s + (typeof l[campo] === 'number' ? (l[campo] as number) : 0), 0);
 
     await exportar(res, q.format, {
-      title: 'Relatório do Cartão de Crédito',
+      title: 'Relatório de Taxas',
       subtitle: periodo(q),
       // Agrupado por parcelamento: a taxa muda com o número de parcelas, e
       // é aí que dá para ver em quantas vezes a loja está perdendo.
-      group: { key: 'parcelas', totals: ['cobrado', 'repasse', 'taxa', 'liquido', 'lucro'] },
+      group: { key: 'parcelas', totals: ['valor', 'repasse', 'taxa', 'lucro'] },
       columns: [
-        { header: 'Data', key: 'data', width: 11 },
-        { header: 'Venda', key: 'code', width: 12 },
-        { header: 'Cliente', key: 'cliente', width: 20 },
-        { header: 'Parcelas', key: 'parcelas', width: 10 },
-        money('Cobrado', 'cobrado', 12),
-        money('Taxa do cliente', 'repasse', 14),
-        { header: 'Taxa %', key: 'percentual', width: 9, align: 'right' as const,
-          format: (v: unknown) => `${decimal(v)}%` },
-        money('Taxa da máquina', 'taxa', 14),
-        money('Cai na conta', 'liquido', 13),
-        money('Lucro na taxa', 'lucro', 13),
+        { header: 'Data', key: 'data', width: 12 },
+        { header: 'Venda', key: 'code', width: 13 },
+        money('Valor', 'valor', 15),
+        money('Taxa do cliente', 'repasse', 16),
+        money('Minha taxa', 'taxa', 15),
+        money('Lucro na taxa', 'lucro', 15),
       ],
       rows: linhas,
       summary: [
         { label: 'Vendas no crédito', value: String(linhas.length) },
-        { label: 'Cobrado dos clientes', value: reais(soma('cobrado')) },
-        { label: 'Taxa paga pelos clientes', value: reais(soma('repasse')) },
-        { label: 'Taxa da maquininha', value: reais(soma('taxa')) },
-        { label: 'Caiu na conta', value: reais(soma('liquido')) },
-        { label: 'Lucro no repasse', value: reais(soma('lucro')) },
+        { label: 'Valor', value: reais(soma('valor')) },
+        { label: 'Taxa do cliente', value: reais(soma('repasse')) },
+        { label: 'Minha taxa', value: reais(soma('taxa')) },
+        { label: 'Lucro na taxa', value: reais(soma('lucro')) },
       ],
     });
   }),

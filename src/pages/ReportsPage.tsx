@@ -100,8 +100,8 @@ const REPORTS: ReportDefinition[] = [
   {
     key: 'by-card',
     endpoint: '/reports/by-card',
-    title: 'Relatório do cartão de crédito',
-    description: 'A taxa que o cliente pagou, a que a maquininha levou e o que sobrou de lucro.',
+    title: 'Relatório de taxas',
+    description: 'Valor da venda, a taxa que o cliente pagou, a sua taxa e o lucro que sobrou.',
     icon: CreditCard,
     tone: 'bg-accent/10 text-accent',
     fields: ['period'],
