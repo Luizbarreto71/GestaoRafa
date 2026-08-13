@@ -317,7 +317,10 @@ var publico = (u) => ({
   name: u.name,
   email: u.email,
   role: u.role,
-  unitId: u.unitId ?? null
+  unitId: u.unitId ?? null,
+  // O endereço carrega a data da última troca: sem isso o navegador
+  // continuaria mostrando a foto antiga, que fica em cache para sempre.
+  foto: u.fotoMimeType ? `/api/fotos/usuario/${u.id}?v=${u.updatedAt?.getTime() ?? 0}` : null
 });
 function autenticar(req, _res, next) {
   const cabecalho = req.headers.authorization;
@@ -392,6 +395,38 @@ rotasAuth.get(
     const usuario = await db.user.findUnique({ where: { id: req.usuario.id } });
     if (!usuario) throw new AppError("N\xE3o autorizado", 401);
     res.json(publico(usuario));
+  })
+);
+rotasAuth.put(
+  "/me/foto",
+  autenticar,
+  rota(async (req, res) => {
+    const { foto: foto2 } = validar(
+      z.object({ foto: z.string().min(30).max(4e6) }),
+      req.body
+    );
+    const partes = foto2.match(/^data:(image\/[a-z+]+);base64,(.+)$/i);
+    if (!partes) throw new AppError("Envie uma imagem (JPG, PNG ou WEBP).");
+    const dados = Buffer.from(partes[2], "base64");
+    if (dados.length > 2 * 1024 * 1024) {
+      throw new AppError("A imagem passou de 2 MB. Tire uma menor ou corte antes de enviar.");
+    }
+    const usuario = await db.user.update({
+      where: { id: req.usuario.id },
+      data: { foto: dados, fotoMimeType: partes[1] }
+    });
+    res.json({ ...publico(usuario), message: "Foto atualizada." });
+  })
+);
+rotasAuth.delete(
+  "/me/foto",
+  autenticar,
+  rota(async (req, res) => {
+    const usuario = await db.user.update({
+      where: { id: req.usuario.id },
+      data: { foto: null, fotoMimeType: null }
+    });
+    res.json({ ...publico(usuario), message: "Foto removida." });
   })
 );
 var senhaSchema = z.object({
@@ -957,8 +992,15 @@ var campos = {
   role: true,
   active: true,
   createdAt: true,
+  updatedAt: true,
   unitId: true,
-  unit: { select: { id: true, name: true } }
+  unit: { select: { id: true, name: true } },
+  // Só se existe: os bytes da imagem não passeiam pela listagem.
+  fotoMimeType: true
+};
+var comFoto = (u) => {
+  const { fotoMimeType, ...resto } = u;
+  return { ...resto, foto: fotoMimeType ? `/api/fotos/usuario/${u.id}?v=${u.updatedAt?.getTime() ?? 0}` : null };
 };
 var usuarioSchema = z2.object({
   name: z2.string().trim().min(2, "Informe o nome").max(120),
@@ -984,7 +1026,7 @@ rotasUsuarios.get(
       db.user.findMany({ select: campos, skip: p.skip, take: p.take, orderBy: { createdAt: "asc" } }),
       db.user.count()
     ]);
-    res.json(paginado(lista, total, p));
+    res.json(paginado(lista.map(comFoto), total, p));
   })
 );
 rotasUsuarios.get(
@@ -2793,6 +2835,19 @@ rotasProdutos.delete(
 );
 var rotasFotos = Router6();
 rotasFotos.get(
+  "/usuario/:id",
+  rota(async (req, res) => {
+    const usuario = await db.user.findUnique({
+      where: { id: req.params.id },
+      select: { foto: true, fotoMimeType: true }
+    });
+    if (!usuario?.foto || !usuario.fotoMimeType) throw naoEncontrado("Foto");
+    res.setHeader("Content-Type", usuario.fotoMimeType);
+    res.setHeader("Cache-Control", "private, max-age=300");
+    res.send(Buffer.from(usuario.foto));
+  })
+);
+rotasFotos.get(
   "/:id",
   rota(async (req, res) => {
     const foto2 = await db.productPhoto.findUnique({ where: { id: req.params.id } });
@@ -4585,6 +4640,96 @@ rotasRelatorios.get(
   })
 );
 rotasRelatorios.get(
+  "/by-card",
+  exigir("relatorios"),
+  rota(async (req, res) => {
+    const q = validar(base, semVazios(req.query));
+    const unidade = unidadePermitida(req.usuario, q.unitId);
+    const quando = intervalo(q.startDate, q.endDate);
+    const pagamentos = await db.salePayment.findMany({
+      where: {
+        method: "CREDITO",
+        sale: {
+          status: "FINALIZADA",
+          ...quando ? { saleDate: quando } : {},
+          ...unidade ? { unitId: unidade } : {}
+        }
+      },
+      include: {
+        sale: {
+          select: {
+            code: true,
+            saleDate: true,
+            customerName: true,
+            surcharge: true,
+            sellerName: true,
+            payments: { where: { method: "CREDITO" }, select: { amount: true } }
+          }
+        }
+      },
+      orderBy: { sale: { saleDate: "asc" } }
+    });
+    const tabela = await taxasDoCartao();
+    const linhas = pagamentos.map((p) => {
+      const cobrado = numero(p.amount);
+      const parcelas = p.installments || 1;
+      const percentual = p.feePercent != null ? numero(p.feePercent) : taxaDe(tabela, parcelas, "padrao") ?? 0;
+      const taxa = p.netAmount != null ? cobrado - numero(p.netAmount) : cobrado * (percentual / 100);
+      const liquido = cobrado - taxa;
+      const totalNoCredito = p.sale.payments.reduce((s, x) => s + numero(x.amount), 0) || cobrado;
+      const repasse = numero(p.sale.surcharge) * (cobrado / totalNoCredito);
+      return {
+        data: dataBR(p.sale.saleDate),
+        code: p.sale.code,
+        cliente: p.sale.customerName ?? "Consumidor",
+        vendedor: p.sale.sellerName ?? "\u2014",
+        parcelas: parcelas === 1 ? "\xC0 vista" : `${parcelas}x`,
+        cobrado,
+        repasse,
+        percentual,
+        taxa,
+        liquido,
+        lucro: repasse - taxa
+      };
+    });
+    const soma = (campo) => linhas.reduce((s, l) => s + (typeof l[campo] === "number" ? l[campo] : 0), 0);
+    await exportar(res, q.format, {
+      title: "Relat\xF3rio do Cart\xE3o de Cr\xE9dito",
+      subtitle: periodo(q),
+      // Agrupado por parcelamento: a taxa muda com o número de parcelas, e
+      // é aí que dá para ver em quantas vezes a loja está perdendo.
+      group: { key: "parcelas", totals: ["cobrado", "repasse", "taxa", "liquido", "lucro"] },
+      columns: [
+        { header: "Data", key: "data", width: 11 },
+        { header: "Venda", key: "code", width: 12 },
+        { header: "Cliente", key: "cliente", width: 20 },
+        { header: "Parcelas", key: "parcelas", width: 10 },
+        money("Cobrado", "cobrado", 12),
+        money("Taxa do cliente", "repasse", 14),
+        {
+          header: "Taxa %",
+          key: "percentual",
+          width: 9,
+          align: "right",
+          format: (v) => `${decimal(v)}%`
+        },
+        money("Taxa da m\xE1quina", "taxa", 14),
+        money("Cai na conta", "liquido", 13),
+        money("Lucro na taxa", "lucro", 13)
+      ],
+      rows: linhas,
+      summary: [
+        { label: "Vendas no cr\xE9dito", value: String(linhas.length) },
+        { label: "Cobrado dos clientes", value: reais(soma("cobrado")) },
+        { label: "Taxa paga pelos clientes", value: reais(soma("repasse")) },
+        { label: "Taxa da maquininha", value: reais(soma("taxa")) },
+        { label: "Caiu na conta", value: reais(soma("liquido")) },
+        { label: "Lucro no repasse", value: reais(soma("lucro")) }
+      ]
+    });
+  })
+);
+rotasRelatorios.get(
   "/by-payment",
   exigir("relatorios"),
   rota(async (req, res) => {
@@ -5880,6 +6025,10 @@ var rotasTrocas = Router13();
 rotasTrocas.use(autenticar);
 var CHAVES_DEFEITO = DEFEITOS.map((d) => d.chave);
 var COM_TUDO2 = {
+  aparelhos: {
+    orderBy: { ordem: "asc" },
+    include: { fotos: { select: { id: true, tipo: true }, orderBy: { createdAt: "asc" } } }
+  },
   photos: { select: { id: true, tipo: true }, orderBy: { createdAt: "asc" } },
   seller: { select: { id: true, name: true } },
   unit: { select: { id: true, name: true } },
@@ -5890,6 +6039,10 @@ var COM_TUDO2 = {
 var paraJson = (t) => ({
   ...limpar(t),
   photos: t.photos.map((f) => ({ id: f.id, tipo: f.tipo, url: `/api/trocas/fotos/${f.id}` })),
+  aparelhos: t.aparelhos.map((a) => ({
+    ...limpar(a),
+    fotos: a.fotos.map((f) => ({ id: f.id, tipo: f.tipo, url: `/api/trocas/fotos/${f.id}` }))
+  })),
   /** Quanto o cliente ainda precisa pagar. Negativo = a loja é que deve. */
   diferenca: Number(t.valorSaida) - Number(t.valorAvaliado)
 });
@@ -5898,23 +6051,37 @@ var fotoSchema = z12.object({
   /** data:image/jpeg;base64,… já reduzida pelo navegador. */
   data: z12.string().max(4e6)
 });
-var trocaSchema = z12.object({
+var imeiSchema = z12.string().trim().transform((v) => v.replace(/\D/g, "")).refine((v) => v === "" || v.length === 15, "O IMEI tem 15 n\xFAmeros").refine((v) => v === "" || imeiValido(v), "Esse IMEI n\xE3o passa na confer\xEAncia \u2014 confira os n\xFAmeros").optional().nullable();
+var aparelhoSchema = z12.object({
   modelo: z12.string().trim().min(2, "Informe o modelo do aparelho").max(120),
   marca: z12.string().trim().max(60).optional().nullable(),
   armazenamento: z12.string().trim().max(20).optional().nullable(),
   cor: z12.string().trim().max(40).optional().nullable(),
-  /**
-   * Opcional porque o balcão não para.
-   *
-   * Quando vem, é conferido de verdade: erro de digitação vira problema
-   * depois que o cliente já foi embora.
-   */
-  imei: z12.string().trim().transform((v) => v.replace(/\D/g, "")).refine((v) => v === "" || v.length === 15, "O IMEI tem 15 n\xFAmeros").refine((v) => v === "" || imeiValido(v), "Esse IMEI n\xE3o passa na confer\xEAncia \u2014 confira os n\xFAmeros").optional().nullable(),
+  imei: imeiSchema,
   imeiSituacao: z12.enum(["NAO_CONSULTADO", "REGULAR", "IRREGULAR", "BLOQUEADO"]).default("NAO_CONSULTADO"),
   estado: z12.string().trim().max(40).optional().nullable(),
   defeitos: z12.array(z12.enum(CHAVES_DEFEITO)).default([]),
   observacoes: z12.string().trim().max(2e3).optional().nullable(),
   valorAvaliado: z12.coerce.number().min(0, "Informe quanto vale o aparelho do cliente"),
+  /** Fotos deste aparelho: as do documento do cliente ficam na troca. */
+  photos: z12.array(fotoSchema).max(8).optional()
+});
+var trocaSchema = z12.object({
+  /**
+   * A lista de aparelhos. Os campos soltos abaixo continuam aceitos para a
+   * troca de um aparelho só — é assim que a tela do caixa manda.
+   */
+  aparelhos: z12.array(aparelhoSchema).min(1).max(6).optional(),
+  modelo: z12.string().trim().min(2, "Informe o modelo do aparelho").max(120).optional(),
+  marca: z12.string().trim().max(60).optional().nullable(),
+  armazenamento: z12.string().trim().max(20).optional().nullable(),
+  cor: z12.string().trim().max(40).optional().nullable(),
+  imei: imeiSchema,
+  imeiSituacao: z12.enum(["NAO_CONSULTADO", "REGULAR", "IRREGULAR", "BLOQUEADO"]).default("NAO_CONSULTADO"),
+  estado: z12.string().trim().max(40).optional().nullable(),
+  defeitos: z12.array(z12.enum(CHAVES_DEFEITO)).default([]),
+  observacoes: z12.string().trim().max(2e3).optional().nullable(),
+  valorAvaliado: z12.coerce.number().min(0).optional(),
   productId: z12.string().uuid().optional().nullable(),
   saidaNome: z12.string().trim().max(180).optional().nullable(),
   valorSaida: z12.coerce.number().min(0).default(0),
@@ -5926,6 +6093,28 @@ var trocaSchema = z12.object({
   photos: z12.array(fotoSchema).max(10).optional()
 });
 var podeVerTodas2 = (req) => podeFazer(req.usuario?.papel, "prevenda.verTodas");
+function aparelhosDaTroca(dados) {
+  if (dados.aparelhos?.length) return dados.aparelhos;
+  if (!dados.modelo) {
+    throw new AppError("Informe ao menos um aparelho na troca.");
+  }
+  return [
+    {
+      modelo: dados.modelo,
+      marca: dados.marca,
+      armazenamento: dados.armazenamento,
+      cor: dados.cor,
+      imei: dados.imei,
+      imeiSituacao: dados.imeiSituacao,
+      estado: dados.estado,
+      defeitos: dados.defeitos,
+      observacoes: dados.observacoes,
+      valorAvaliado: dados.valorAvaliado ?? 0,
+      photos: void 0
+    }
+  ];
+}
+var resumoDosAparelhos = (aparelhos) => aparelhos.length === 1 ? aparelhos[0].modelo : `${aparelhos[0].modelo} + ${aparelhos.length - 1} aparelho${aparelhos.length > 2 ? "s" : ""}`;
 function separarFotos2(fotos) {
   return (fotos ?? []).flatMap((f) => {
     const base64 = f.data.match(/^data:(image\/[a-z+]+);base64,(.+)$/i);
@@ -5996,20 +6185,37 @@ rotasTrocas.post(
   exigir("troca.criar"),
   rota(async (req, res) => {
     const dados = validar(trocaSchema, req.body);
-    const repetido = dados.imei ? await db.tradeIn.findFirst({
-      where: { imei: dados.imei, status: { not: "RECUSADA" } },
-      select: { code: true, createdAt: true }
-    }) : null;
-    if (repetido) {
-      throw new AppError(
-        `Esse IMEI j\xE1 foi recebido na troca ${repetido.code}. Se for outro aparelho, confira os n\xFAmeros.`
-      );
+    const aparelhos = aparelhosDaTroca(dados);
+    const repetidosAqui = aparelhos.map((a) => a.imei).filter((imei, i, todos) => Boolean(imei) && todos.indexOf(imei) !== i);
+    if (repetidosAqui.length) {
+      throw new AppError(`O IMEI ${repetidosAqui[0]} foi informado duas vezes nesta troca.`);
     }
-    if (dados.imeiSituacao === "BLOQUEADO") {
-      throw new AppError(
-        "A Anatel aponta este aparelho como roubado, furtado ou bloqueado. N\xE3o \xE9 poss\xEDvel receb\xEA-lo."
-      );
+    for (const aparelho of aparelhos) {
+      if (aparelho.imei) {
+        const [naTroca, noAparelho] = await Promise.all([
+          db.tradeIn.findFirst({
+            where: { imei: aparelho.imei, status: { not: "RECUSADA" } },
+            select: { code: true }
+          }),
+          db.tradeInAparelho.findFirst({
+            where: { imei: aparelho.imei, tradeIn: { status: { not: "RECUSADA" } } },
+            select: { tradeIn: { select: { code: true } } }
+          })
+        ]);
+        const repetido = naTroca?.code ?? noAparelho?.tradeIn.code;
+        if (repetido) {
+          throw new AppError(
+            `Esse IMEI j\xE1 foi recebido na troca ${repetido}. Se for outro aparelho, confira os n\xFAmeros.`
+          );
+        }
+      }
+      if (aparelho.imeiSituacao === "BLOQUEADO") {
+        throw new AppError(
+          `A Anatel aponta o ${aparelho.modelo} como roubado, furtado ou bloqueado. N\xE3o \xE9 poss\xEDvel receb\xEA-lo.`
+        );
+      }
     }
+    const avaliacao = aparelhos.reduce((soma, a) => soma + a.valorAvaliado, 0);
     let saidaNome = dados.saidaNome ?? null;
     if (dados.productId) {
       const produto = await db.product.findUnique({ where: { id: dados.productId }, select: { name: true } });
@@ -6021,17 +6227,20 @@ rotasTrocas.post(
         code: await proximoCodigo("troca", "TR"),
         sellerId: req.usuario.id,
         unitId: dados.unitId ?? req.usuario.unidadeId ?? null,
-        modelo: dados.modelo,
-        marca: dados.marca ?? null,
-        armazenamento: dados.armazenamento ?? null,
-        cor: dados.cor ?? null,
-        imei: dados.imei || null,
-        imeiSituacao: dados.imeiSituacao,
-        imeiCheckedAt: dados.imeiSituacao === "NAO_CONSULTADO" ? null : /* @__PURE__ */ new Date(),
-        estado: dados.estado ?? null,
-        defeitos: dados.defeitos,
-        observacoes: dados.observacoes ?? null,
-        valorAvaliado: new Prisma6.Decimal(dados.valorAvaliado),
+        // O resumo continua na troca para as telas que mostram uma linha
+        // só; a verdade de cada peça está em `aparelhos`.
+        modelo: resumoDosAparelhos(aparelhos),
+        marca: aparelhos.length === 1 ? aparelhos[0].marca ?? null : null,
+        armazenamento: aparelhos.length === 1 ? aparelhos[0].armazenamento ?? null : null,
+        cor: aparelhos.length === 1 ? aparelhos[0].cor ?? null : null,
+        imei: aparelhos.length === 1 ? aparelhos[0].imei || null : null,
+        imeiSituacao: aparelhos.length === 1 ? aparelhos[0].imeiSituacao : "NAO_CONSULTADO",
+        imeiCheckedAt: aparelhos.length === 1 && aparelhos[0].imeiSituacao !== "NAO_CONSULTADO" ? /* @__PURE__ */ new Date() : null,
+        estado: aparelhos.length === 1 ? aparelhos[0].estado ?? null : null,
+        defeitos: aparelhos.length === 1 ? aparelhos[0].defeitos : [],
+        observacoes: dados.observacoes ?? (aparelhos.length === 1 ? aparelhos[0].observacoes ?? null : null),
+        // A soma é o que abate da compra do cliente.
+        valorAvaliado: new Prisma6.Decimal(avaliacao),
         productId: dados.productId ?? null,
         saidaNome,
         valorSaida: new Prisma6.Decimal(dados.valorSaida),
@@ -6039,20 +6248,45 @@ rotasTrocas.post(
         customerName: dados.customerName,
         customerPhone: dados.customerPhone ?? null,
         customerDocument: dados.customerDocument ?? null,
+        aparelhos: {
+          create: aparelhos.map((a, i) => ({
+            ordem: i,
+            modelo: a.modelo,
+            marca: a.marca ?? null,
+            armazenamento: a.armazenamento ?? null,
+            cor: a.cor ?? null,
+            imei: a.imei || null,
+            imeiSituacao: a.imeiSituacao,
+            imeiCheckedAt: a.imeiSituacao === "NAO_CONSULTADO" ? null : /* @__PURE__ */ new Date(),
+            estado: a.estado ?? null,
+            defeitos: a.defeitos,
+            observacoes: a.observacoes ?? null,
+            valorAvaliado: new Prisma6.Decimal(a.valorAvaliado)
+          }))
+        },
+        // As da troca são o documento do cliente: valem para o negócio
+        // inteiro, não para uma peça.
         photos: { create: separarFotos2(dados.photos) }
       },
       include: COM_TUDO2
     });
+    const comFoto2 = aparelhos.flatMap((a, i) => {
+      const fotos = separarFotos2(a.photos);
+      if (!fotos.length) return [];
+      const criado = troca.aparelhos.find((x) => x.ordem === i);
+      return criado ? fotos.map((f) => ({ ...f, tradeInId: troca.id, aparelhoId: criado.id })) : [];
+    });
+    if (comFoto2.length) await db.tradeInPhoto.createMany({ data: comFoto2 });
     await registrarLog({
       acao: "CRIAR_TROCA",
       entidade: "TradeIn",
       id: troca.id,
-      alteracoes: { codigo: troca.code, imei: troca.imei, valor: dados.valorAvaliado },
+      alteracoes: { codigo: troca.code, aparelhos: aparelhos.length, valor: avaliacao },
       req
     });
     res.status(201).json({
       ...paraJson(troca),
-      message: `Troca ${troca.code} registrada \u2014 ${dados.modelo} avaliado em R$ ${dados.valorAvaliado.toFixed(2)}.`
+      message: aparelhos.length === 1 ? `Troca ${troca.code} registrada \u2014 ${aparelhos[0].modelo} avaliado em R$ ${avaliacao.toFixed(2)}.` : `Troca ${troca.code} registrada \u2014 ${aparelhos.length} aparelhos avaliados em R$ ${avaliacao.toFixed(2)}.`
     });
   })
 );

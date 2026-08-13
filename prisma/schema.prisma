@@ -164,6 +164,11 @@ model User {
   unitId String?
   unit   Unit?   @relation(fields: [unitId], references: [id], onDelete: SetNull)
 
+  /// Foto de perfil. Guardada aqui e não num arquivo à parte porque é uma
+  /// por pessoa e some junto com a conta — não vale uma tabela.
+  foto         Bytes?
+  fotoMimeType String?
+
   movements StockMovement[]
   auditLogs AuditLog[]
 
@@ -349,6 +354,8 @@ model TradeIn {
   customerPhone    String?
   customerDocument String?
 
+  aparelhos TradeInAparelho[]
+
   sellerId String
   seller   User   @relation("vendedorTroca", fields: [sellerId], references: [id])
 
@@ -376,6 +383,42 @@ model TradeIn {
   @@map("trade_ins")
 }
 
+/// Cada aparelho que o cliente deixou na troca.
+///
+/// O cliente às vezes entrega dois ou três de uma vez, e cada um tem IMEI,
+/// estado e avaliação próprios. O total da troca é a soma deles — é isso
+/// que abate do que ele tem a pagar.
+model TradeInAparelho {
+  id String @id @default(uuid())
+
+  modelo        String
+  marca         String?
+  armazenamento String?
+  cor           String?
+  imei          String?
+  imeiSituacao  ImeiSituacao @default(NAO_CONSULTADO)
+  imeiCheckedAt DateTime?
+
+  estado      String?
+  /// Chaves de shared/trocas.ts — bateria, tela, traseira…
+  defeitos    String[]
+  observacoes String?
+
+  /// Quanto a loja aceitou pagar por este aparelho.
+  valorAvaliado Decimal @db.Decimal(12, 2)
+
+  /// Ordem em que foram anotados, para a tela não embaralhar.
+  ordem Int @default(0)
+
+  tradeInId String
+  tradeIn   TradeIn @relation(fields: [tradeInId], references: [id], onDelete: Cascade)
+
+  fotos TradeInPhoto[]
+
+  @@index([tradeInId])
+  @@map("trade_in_aparelhos")
+}
+
 model TradeInPhoto {
   id        String          @id @default(uuid())
   tipo      TradeInFotoTipo @default(APARELHO)
@@ -386,7 +429,13 @@ model TradeInPhoto {
   tradeInId String
   tradeIn   TradeIn @relation(fields: [tradeInId], references: [id], onDelete: Cascade)
 
+  /// De qual aparelho é a foto. Vazio = documento do cliente, que é da
+  /// troca inteira e não de uma peça.
+  aparelhoId String?
+  aparelho   TradeInAparelho? @relation(fields: [aparelhoId], references: [id], onDelete: Cascade)
+
   @@index([tradeInId])
+  @@index([aparelhoId])
   @@map("trade_in_photos")
 }
 

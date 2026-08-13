@@ -404,8 +404,17 @@ const campos = {
   role: true,
   active: true,
   createdAt: true,
+  updatedAt: true,
   unitId: true,
   unit: { select: { id: true, name: true } },
+  // Só se existe: os bytes da imagem não passeiam pela listagem.
+  fotoMimeType: true,
+};
+
+/** Troca o "tem foto?" pelo endereço dela, como o front espera. */
+const comFoto = <T extends { id: string; fotoMimeType?: string | null; updatedAt?: Date }>(u: T) => {
+  const { fotoMimeType, ...resto } = u;
+  return { ...resto, foto: fotoMimeType ? `/api/fotos/usuario/${u.id}?v=${u.updatedAt?.getTime() ?? 0}` : null };
 };
 
 const usuarioSchema = z.object({
@@ -438,7 +447,7 @@ rotasUsuarios.get(
       db.user.findMany({ select: campos, skip: p.skip, take: p.take, orderBy: { createdAt: 'asc' } }),
       db.user.count(),
     ]);
-    res.json(paginado(lista, total, p));
+    res.json(paginado(lista.map(comFoto), total, p));
   }),
 );
 

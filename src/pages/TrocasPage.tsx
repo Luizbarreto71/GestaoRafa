@@ -231,48 +231,93 @@ function DetalheDaTroca({ troca, aoFechar }: { troca: Troca | null; aoFechar: ()
       {troca && (
         <div className="space-y-4 text-sm">
           <div className="grid grid-cols-2 gap-x-4 gap-y-2">
-            <Linha rotulo="Modelo" valor={troca.modelo} />
-            <Linha rotulo="Marca" valor={troca.marca ?? '—'} />
-            <Linha rotulo="Armazenamento" valor={troca.armazenamento ?? '—'} />
-            <Linha rotulo="Cor" valor={troca.cor ?? '—'} />
-            <Linha rotulo="IMEI" valor={troca.imei} />
-            <Linha rotulo="Estado" valor={troca.estado ?? '—'} />
             <Linha rotulo="Vendedor" valor={troca.seller?.name ?? '—'} />
             <Linha rotulo="Unidade" valor={troca.unit?.name ?? '—'} />
             <Linha rotulo="CPF" valor={troca.customerDocument ?? '—'} />
             <Linha rotulo="Telefone" valor={troca.customerPhone ?? '—'} />
           </div>
 
-          <div className="flex items-center gap-2">
-            <EscudoImei situacao={troca.imeiSituacao} />
-            {troca.imeiCheckedAt && (
-              <span className="text-xs text-slate-500">
-                consultado em {formatDateTime(troca.imeiCheckedAt)}
-              </span>
-            )}
-          </div>
+          {/* Um bloco por peça. Trocas antigas guardavam o aparelho na
+              própria troca — a lista vem vazia e o de fora é o que existe. */}
+          {(troca.aparelhos?.length
+            ? troca.aparelhos
+            : [
+                {
+                  id: troca.id,
+                  ordem: 0,
+                  modelo: troca.modelo,
+                  marca: troca.marca,
+                  armazenamento: troca.armazenamento,
+                  cor: troca.cor,
+                  imei: troca.imei,
+                  imeiSituacao: troca.imeiSituacao,
+                  estado: troca.estado,
+                  defeitos: troca.defeitos,
+                  observacoes: troca.observacoes,
+                  valorAvaliado: troca.valorAvaliado,
+                  fotos: troca.photos,
+                },
+              ]
+          ).map((a, i, todos) => (
+            <div key={a.id} className="rounded-lg border border-slate-200 p-3 dark:border-navy-700">
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <p className="font-bold text-navy-900 dark:text-slate-100">
+                  {todos.length > 1 && (
+                    <span className="mr-1.5 text-xs font-semibold text-slate-400">{i + 1}/{todos.length}</span>
+                  )}
+                  {a.modelo}
+                </p>
+                <strong className="text-success">{formatCurrency(a.valorAvaliado)}</strong>
+              </div>
 
-          {troca.defeitos.length > 0 && (
-            <div>
-              <p className="mb-1 text-xs font-semibold text-slate-500">O que o aparelho tem</p>
-              <ul className="list-inside list-disc space-y-0.5 text-slate-600 dark:text-slate-400">
-                {troca.defeitos.map((d) => (
-                  <li key={d}>{DEFEITO_ROTULO[d] ?? d}</li>
-                ))}
-              </ul>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+                <Linha rotulo="Marca" valor={a.marca ?? '—'} />
+                <Linha rotulo="Armazenamento" valor={a.armazenamento ?? '—'} />
+                <Linha rotulo="Cor" valor={a.cor ?? '—'} />
+                <Linha rotulo="Estado" valor={a.estado ?? '—'} />
+                <Linha rotulo="IMEI" valor={a.imei ?? '—'} />
+              </div>
+
+              <div className="mt-2 flex items-center gap-2">
+                <EscudoImei situacao={a.imeiSituacao} />
+                {i === 0 && troca.imeiCheckedAt && (
+                  <span className="text-xs text-slate-500">
+                    consultado em {formatDateTime(troca.imeiCheckedAt)}
+                  </span>
+                )}
+              </div>
+
+              {a.defeitos.length > 0 && (
+                <ul className="mt-2 list-inside list-disc space-y-0.5 text-slate-600 dark:text-slate-400">
+                  {a.defeitos.map((d) => (
+                    <li key={d}>{DEFEITO_ROTULO[d] ?? d}</li>
+                  ))}
+                </ul>
+              )}
+
+              {a.observacoes && (
+                <p className="mt-2 whitespace-pre-wrap text-slate-600 dark:text-slate-400">{a.observacoes}</p>
+              )}
+
+              {a.fotos.length > 0 && (
+                <div className="mt-2 grid grid-cols-4 gap-2">
+                  {a.fotos.map((f) => (
+                    <FotoProtegida
+                      key={f.id}
+                      url={f.url}
+                      alt={ROTULO_FOTO[f.tipo] ?? f.tipo}
+                      className="aspect-square rounded-lg border border-slate-200 dark:border-navy-700"
+                    />
+                  ))}
+                </div>
+              )}
             </div>
-          )}
+          ))}
 
-          {troca.observacoes && (
+          {/* O documento do cliente é do negócio, não de uma peça. */}
+          {troca.aparelhos?.length > 0 && troca.photos.length > 0 && (
             <div>
-              <p className="mb-1 text-xs font-semibold text-slate-500">Observações</p>
-              <p className="whitespace-pre-wrap text-slate-600 dark:text-slate-400">{troca.observacoes}</p>
-            </div>
-          )}
-
-          {troca.photos.length > 0 && (
-            <div>
-              <p className="mb-1.5 text-xs font-semibold text-slate-500">Fotos</p>
+              <p className="mb-1.5 text-xs font-semibold text-slate-500">Documento do cliente</p>
               <div className="grid grid-cols-4 gap-2">
                 {troca.photos.map((f) => (
                   <FotoProtegida

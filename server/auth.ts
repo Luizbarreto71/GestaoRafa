@@ -98,12 +98,17 @@ const publico = (u: {
   email: string;
   role: string;
   unitId?: string | null;
+  fotoMimeType?: string | null;
+  updatedAt?: Date;
 }) => ({
   id: u.id,
   name: u.name,
   email: u.email,
   role: u.role,
   unitId: u.unitId ?? null,
+  // O endereço carrega a data da última troca: sem isso o navegador
+  // continuaria mostrando a foto antiga, que fica em cache para sempre.
+  foto: u.fotoMimeType ? `/api/fotos/usuario/${u.id}?v=${u.updatedAt?.getTime() ?? 0}` : null,
 });
 
 // -------------------------------------------------------------- Middlewares
@@ -217,6 +222,52 @@ rotasAuth.get(
     const usuario = await db.user.findUnique({ where: { id: req.usuario!.id } });
     if (!usuario) throw new AppError('Não autorizado', 401);
     res.json(publico(usuario));
+  }),
+);
+
+/**
+ * A foto de perfil de quem está logado.
+ *
+ * Fica em `/auth` e não em `/users` porque cada um troca a sua — a rota de
+ * usuários é do administrador, e a caixa não passa por lá.
+ */
+rotasAuth.put(
+  '/me/foto',
+  autenticar,
+  rota(async (req, res) => {
+    const { foto } = validar(
+      z.object({ foto: z.string().min(30).max(4_000_000) }),
+      req.body,
+    );
+
+    const partes = foto.match(/^data:(image\/[a-z+]+);base64,(.+)$/i);
+    if (!partes) throw new AppError('Envie uma imagem (JPG, PNG ou WEBP).');
+
+    const dados = Buffer.from(partes[2], 'base64');
+    // 2 MB já é foto de sobra para um círculo de 40 pixels, e o banco não
+    // é lugar para guardar retrato em tamanho de câmera.
+    if (dados.length > 2 * 1024 * 1024) {
+      throw new AppError('A imagem passou de 2 MB. Tire uma menor ou corte antes de enviar.');
+    }
+
+    const usuario = await db.user.update({
+      where: { id: req.usuario!.id },
+      data: { foto: dados, fotoMimeType: partes[1] },
+    });
+
+    res.json({ ...publico(usuario), message: 'Foto atualizada.' });
+  }),
+);
+
+rotasAuth.delete(
+  '/me/foto',
+  autenticar,
+  rota(async (req, res) => {
+    const usuario = await db.user.update({
+      where: { id: req.usuario!.id },
+      data: { foto: null, fotoMimeType: null },
+    });
+    res.json({ ...publico(usuario), message: 'Foto removida.' });
   }),
 );
 

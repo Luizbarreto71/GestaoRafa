@@ -1,7 +1,9 @@
+import { Avatar, FotoDePerfil } from '@/components/layout/FotoDePerfil';
 import { useAuth } from '@/contexts/AuthContext';
 import { cn } from '@/lib/cn';
 import {
   BarChart3,
+  Camera,
   ChevronLeft,
   HandCoins,
   History,
@@ -19,6 +21,7 @@ import {
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { pode, type Permissao } from '@/lib/permissoes';
+import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
 
 interface NavItem {
@@ -53,6 +56,7 @@ interface SidebarProps {
 
 export function Sidebar({ collapsed, onToggleCollapse, mobileOpen, onCloseMobile }: SidebarProps) {
   const { user, logout } = useAuth();
+  const [trocandoFoto, setTrocandoFoto] = useState(false);
 
   const content = (
     <>
@@ -109,19 +113,34 @@ export function Sidebar({ collapsed, onToggleCollapse, mobileOpen, onCloseMobile
 
       {/* Usuário */}
       <div className="shrink-0 border-t border-navy-700/60 p-3">
-        <div className={cn('flex items-center gap-3 rounded-lg px-2 py-2', collapsed && 'lg:justify-center')}>
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent/20 text-sm font-bold text-accent-soft">
-            {user?.name?.charAt(0).toUpperCase() ?? '?'}
-          </div>
-          {!collapsed && (
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-semibold text-white">{user?.name}</p>
-              <p className="truncate text-[11px] text-slate-400">
-                {user?.role === 'ADMIN' ? 'Administrador' : 'Operador'}
-              </p>
-            </div>
+        {/* A própria foto é o botão: um item a mais no menu para trocar de
+            retrato não se justifica. */}
+        <button
+          type="button"
+          onClick={() => setTrocandoFoto(true)}
+          title="Trocar sua foto"
+          className={cn(
+            'group flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left transition-colors hover:bg-white/10',
+            collapsed && 'lg:justify-center',
           )}
-        </div>
+        >
+          <span className="relative">
+            <Avatar nome={user?.name} foto={user?.foto} tamanho={36} className="text-sm" />
+            <span className="absolute -bottom-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-navy-800 opacity-0 transition-opacity group-hover:opacity-100">
+              <Camera className="h-2.5 w-2.5 text-slate-300" />
+            </span>
+          </span>
+          {!collapsed && (
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-sm font-semibold text-white">{user?.name}</span>
+              <span className="block truncate text-[11px] text-slate-400">
+                {user?.role === 'ADMIN' ? 'Administrador' : 'Operador'}
+              </span>
+            </span>
+          )}
+        </button>
+
+        <FotoDePerfil aberto={trocandoFoto} aoFechar={() => setTrocandoFoto(false)} />
 
         <button
           type="button"

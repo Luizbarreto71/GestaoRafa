@@ -29,6 +29,7 @@ type ReportKey =
   | 'by-supplier'
   | 'by-period'
   | 'by-payment'
+  | 'by-card'
   | 'movements';
 
 interface ReportDefinition {
@@ -92,6 +93,15 @@ const REPORTS: ReportDefinition[] = [
     endpoint: '/reports/by-payment',
     title: 'Vendas por forma de pagamento',
     description: 'Quanto entrou em Pix, dinheiro, cartão e troca, com ticket médio.',
+    icon: CreditCard,
+    tone: 'bg-accent/10 text-accent',
+    fields: ['period'],
+  },
+  {
+    key: 'by-card',
+    endpoint: '/reports/by-card',
+    title: 'Relatório do cartão de crédito',
+    description: 'A taxa que o cliente pagou, a que a maquininha levou e o que sobrou de lucro.',
     icon: CreditCard,
     tone: 'bg-accent/10 text-accent',
     fields: ['period'],

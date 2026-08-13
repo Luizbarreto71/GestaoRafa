@@ -77,9 +77,16 @@ function reduzirImagem(arquivo: File): Promise<string> {
 export function FotosDaTroca({
   valor,
   aoMudar,
+  tipos,
 }: {
   valor: Foto[];
   aoMudar: (fotos: Foto[]) => void;
+  /**
+   * Quais grupos aparecem. O documento do cliente é da troca inteira, e
+   * repetir a caixinha dele em cada aparelho faria o vendedor anexar o
+   * mesmo RG três vezes.
+   */
+  tipos?: Tipo[];
 }) {
   const [processando, setProcessando] = useState<Tipo | null>(null);
   const refs = useRef<Record<string, HTMLInputElement | null>>({});
@@ -109,7 +116,7 @@ export function FotosDaTroca({
 
   return (
     <div className="space-y-3">
-      {GRUPOS.map((grupo) => {
+      {GRUPOS.filter((g) => !tipos || tipos.includes(g.tipo)).map((grupo) => {
         const minhas = valor.filter((f) => f.tipo === grupo.tipo);
 
         return (

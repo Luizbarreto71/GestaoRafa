@@ -755,6 +755,115 @@ rotasRelatorios.get(
   }),
 );
 
+// ------------------------------------------------- Relatório do crédito
+
+/**
+ * O que a venda no crédito rendeu, linha por linha.
+ *
+ * Três números que o extrato junta e a loja precisa separados: quanto o
+ * cliente pagou a mais por parcelar, quanto a maquininha levou, e o que
+ * sobrou da diferença. É a conta que diz se o repasse da taxa está
+ * cobrindo o custo ou se a loja está bancando parte dele.
+ */
+rotasRelatorios.get(
+  '/by-card',
+  exigir('relatorios'),
+  rota(async (req, res) => {
+    const q = validar(base, semVazios(req.query));
+    const unidade = unidadePermitida(req.usuario, q.unitId);
+    const quando = intervalo(q.startDate, q.endDate);
+
+    const pagamentos = await db.salePayment.findMany({
+      where: {
+        method: 'CREDITO',
+        sale: {
+          status: 'FINALIZADA',
+          ...(quando ? { saleDate: quando } : {}),
+          ...(unidade ? { unitId: unidade } : {}),
+        },
+      },
+      include: {
+        sale: {
+          select: {
+            code: true,
+            saleDate: true,
+            customerName: true,
+            surcharge: true,
+            sellerName: true,
+            payments: { where: { method: 'CREDITO' }, select: { amount: true } },
+          },
+        },
+      },
+      orderBy: { sale: { saleDate: 'asc' } },
+    });
+
+    const tabela = await taxasDoCartao();
+
+    const linhas = pagamentos.map((p) => {
+      const cobrado = numero(p.amount);
+      const parcelas = p.installments || 1;
+
+      // Venda antiga não tem a taxa gravada: vale a tabela de hoje, que é
+      // melhor do que mostrar zero e contradizer a maquininha.
+      const percentual = p.feePercent != null ? numero(p.feePercent) : (taxaDe(tabela, parcelas, 'padrao') ?? 0);
+      const taxa = p.netAmount != null ? cobrado - numero(p.netAmount) : cobrado * (percentual / 100);
+      const liquido = cobrado - taxa;
+
+      // O acréscimo é da venda inteira. Com mais de uma linha de crédito,
+      // cada uma leva a sua parte — senão o lucro apareceria dobrado.
+      const totalNoCredito = p.sale.payments.reduce((s, x) => s + numero(x.amount), 0) || cobrado;
+      const repasse = numero(p.sale.surcharge) * (cobrado / totalNoCredito);
+
+      return {
+        data: dataBR(p.sale.saleDate),
+        code: p.sale.code,
+        cliente: p.sale.customerName ?? 'Consumidor',
+        vendedor: p.sale.sellerName ?? '—',
+        parcelas: parcelas === 1 ? 'À vista' : `${parcelas}x`,
+        cobrado,
+        repasse,
+        percentual,
+        taxa,
+        liquido,
+        lucro: repasse - taxa,
+      };
+    });
+
+    const soma = (campo: keyof (typeof linhas)[number]) =>
+      linhas.reduce((s, l) => s + (typeof l[campo] === 'number' ? (l[campo] as number) : 0), 0);
+
+    await exportar(res, q.format, {
+      title: 'Relatório do Cartão de Crédito',
+      subtitle: periodo(q),
+      // Agrupado por parcelamento: a taxa muda com o número de parcelas, e
+      // é aí que dá para ver em quantas vezes a loja está perdendo.
+      group: { key: 'parcelas', totals: ['cobrado', 'repasse', 'taxa', 'liquido', 'lucro'] },
+      columns: [
+        { header: 'Data', key: 'data', width: 11 },
+        { header: 'Venda', key: 'code', width: 12 },
+        { header: 'Cliente', key: 'cliente', width: 20 },
+        { header: 'Parcelas', key: 'parcelas', width: 10 },
+        money('Cobrado', 'cobrado', 12),
+        money('Taxa do cliente', 'repasse', 14),
+        { header: 'Taxa %', key: 'percentual', width: 9, align: 'right' as const,
+          format: (v: unknown) => `${decimal(v)}%` },
+        money('Taxa da máquina', 'taxa', 14),
+        money('Cai na conta', 'liquido', 13),
+        money('Lucro na taxa', 'lucro', 13),
+      ],
+      rows: linhas,
+      summary: [
+        { label: 'Vendas no crédito', value: String(linhas.length) },
+        { label: 'Cobrado dos clientes', value: reais(soma('cobrado')) },
+        { label: 'Taxa paga pelos clientes', value: reais(soma('repasse')) },
+        { label: 'Taxa da maquininha', value: reais(soma('taxa')) },
+        { label: 'Caiu na conta', value: reais(soma('liquido')) },
+        { label: 'Lucro no repasse', value: reais(soma('lucro')) },
+      ],
+    });
+  }),
+);
+
 // -------------------------------------------- Relatório por forma de pagamento
 
 rotasRelatorios.get(

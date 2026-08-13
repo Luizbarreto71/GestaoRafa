@@ -73,6 +73,8 @@ export interface User {
   unitId?: string | null;
   unit?: { id: string; name: string } | null;
   createdAt?: string;
+  /** Endereço da foto de perfil, ou nulo para quem ainda não pôs uma. */
+  foto?: string | null;
 }
 
 export interface Category {
@@ -236,12 +238,33 @@ export interface TrocaFoto {
   url: string;
 }
 
+/** Um dos aparelhos deixados numa troca. */
+export interface TrocaAparelho {
+  id: string;
+  ordem: number;
+  modelo: string;
+  marca?: string | null;
+  armazenamento?: string | null;
+  cor?: string | null;
+  imei?: string | null;
+  imeiSituacao: SituacaoImei;
+  estado?: string | null;
+  defeitos: string[];
+  observacoes?: string | null;
+  valorAvaliado: number;
+  fotos: TrocaFoto[];
+}
+
 /** Aparelho usado recebido como parte do pagamento. */
 export interface Troca {
   id: string;
   code: string;
   status: TrocaStatus;
 
+  /** Um por peça deixada. Vazio só em trocas antigas, de antes da lista. */
+  aparelhos: TrocaAparelho[];
+
+  /** Resumo do primeiro aparelho — "iPhone 12 + 2 aparelhos". */
   modelo: string;
   marca?: string | null;
   armazenamento?: string | null;

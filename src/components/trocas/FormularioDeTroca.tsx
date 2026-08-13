@@ -1,6 +1,6 @@
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
-import { Input, Select, Textarea } from '@/components/ui/Field';
+import { Input } from '@/components/ui/Field';
 import { Modal } from '@/components/ui/Modal';
 import { useToast } from '@/contexts/ToastContext';
 import { useProducts, useTroca } from '@/hooks/queries';
@@ -8,29 +8,19 @@ import { useDebounce } from '@/hooks/useDebounce';
 import { useUnit } from '@/contexts/UnitContext';
 import { cn } from '@/lib/cn';
 import { formatCurrency } from '@/lib/format';
-import {
-  ANATEL_URL,
-  ARMAZENAMENTOS,
-  DEFEITOS,
-  ESTADOS,
-  SITUACOES_IMEI,
-  imeiValido,
-} from '@shared/trocas';
 import type { Troca } from '@/types';
-import { Check, Copy, ExternalLink, Search, ShieldAlert, X } from 'lucide-react';
-import { useState, type FormEvent } from 'react';
+import { Check, Plus, Search, X } from 'lucide-react';
 import { FotosDaTroca } from './FotosDaTroca';
+import { useState, type FormEvent } from 'react';
+import {
+  AparelhoDaTroca,
+  aparelhoVazio,
+  imeiDe,
+  problemaNoAparelho,
+  type AparelhoEmEdicao,
+} from './AparelhoDaTroca';
 
 const VAZIO = {
-  modelo: '',
-  marca: '',
-  armazenamento: '',
-  cor: '',
-  imei: '',
-  imeiSituacao: 'NAO_CONSULTADO',
-  estado: 'Bom',
-  observacoes: '',
-  valorAvaliado: '',
   valorSaida: '',
   customerName: '',
   customerPhone: '',
@@ -55,8 +45,10 @@ export function FormularioDeTroca({
   aoCriar?: (troca: Troca) => void;
 }) {
   const [form, setForm] = useState(VAZIO);
-  const [defeitos, setDefeitos] = useState<string[]>([]);
-  const [fotos, setFotos] = useState<{ tipo: 'ANATEL' | 'DOCUMENTO' | 'APARELHO'; data: string }[]>([]);
+  const [aparelhos, setAparelhos] = useState<AparelhoEmEdicao[]>([aparelhoVazio()]);
+  const [fotosDoCliente, setFotosDoCliente] = useState<
+    { tipo: 'ANATEL' | 'DOCUMENTO' | 'APARELHO'; data: string }[]
+  >([]);
   const [buscaSaida, setBuscaSaida] = useState('');
   const [saida, setSaida] = useState<{ id: string; name: string } | null>(null);
 
@@ -70,22 +62,20 @@ export function FormularioDeTroca({
   const alterar = (campo: keyof typeof VAZIO, valor: string) =>
     setForm((f) => ({ ...f, [campo]: valor }));
 
-  const imeiLimpo = form.imei.replace(/\D/g, '');
-  const imeiCompleto = imeiLimpo.length === 15;
-  const imeiOk = imeiCompleto && imeiValido(imeiLimpo);
-  const bloqueado = form.imeiSituacao === 'BLOQUEADO';
+  const mudarAparelho = (indice: number, mudanca: Partial<AparelhoEmEdicao>) =>
+    setAparelhos((atual) => atual.map((a, i) => (i === indice ? { ...a, ...mudanca } : a)));
 
-  const avaliado = Number(form.valorAvaliado) || 0;
+  // A troca vale a soma: é isso que abate do que o cliente tem a pagar.
+  const avaliado = aparelhos.reduce((soma, a) => soma + (Number(a.valorAvaliado) || 0), 0);
   const valorSaida = Number(form.valorSaida) || 0;
   const diferenca = valorSaida - avaliado;
 
-  const temDocumento = fotos.some((f) => f.tipo === 'DOCUMENTO');
-  const temAnatel = fotos.some((f) => f.tipo === 'ANATEL');
+  const bloqueado = aparelhos.some((a) => a.imeiSituacao === 'BLOQUEADO');
 
   function limpar() {
     setForm(VAZIO);
-    setDefeitos([]);
-    setFotos([]);
+    setAparelhos([aparelhoVazio()]);
+    setFotosDoCliente([]);
     setSaida(null);
     setBuscaSaida('');
   }
@@ -93,34 +83,45 @@ export function FormularioDeTroca({
   async function enviar(evento: FormEvent) {
     evento.preventDefault();
 
-    if (!imeiOk) return toast.warning('Confira o IMEI', 'Os 15 números não fecham a conferência.');
-    if (bloqueado) {
-      return toast.error(
-        'Aparelho bloqueado',
-        'A Anatel aponta roubo, furto ou bloqueio. Não receba este aparelho.',
-      );
+    // Aponta o aparelho pelo número: com três na tela, "confira o IMEI" sem
+    // dizer qual manda o vendedor procurar.
+    for (const [i, aparelho] of aparelhos.entries()) {
+      const problema = problemaNoAparelho(aparelho);
+      if (problema) {
+        return toast.warning(`Aparelho ${i + 1}: ${aparelho.modelo.trim() || 'sem modelo'}`, problema);
+      }
     }
-    if (!avaliado) return toast.warning('Informe quanto vale o aparelho do cliente');
+
+    const digitados = aparelhos.map(imeiDe);
+    const repetido = digitados.find((imei, i) => digitados.indexOf(imei) !== i);
+    if (repetido) {
+      return toast.warning('IMEI repetido', `O número ${repetido} foi informado em dois aparelhos.`);
+    }
 
     try {
       const r = await criar.mutateAsync({
         dados: {
           ...form,
-          imei: imeiLimpo,
-          marca: form.marca || null,
-          armazenamento: form.armazenamento || null,
-          cor: form.cor || null,
-          estado: form.estado || null,
-          observacoes: form.observacoes || null,
-          valorAvaliado: avaliado,
           valorSaida,
           productId: saida?.id ?? null,
           saidaNome: saida?.name ?? null,
           customerPhone: form.customerPhone || null,
           customerDocument: form.customerDocument || null,
           unitId: form.unitId || unidades[0]?.id || null,
-          defeitos,
-          photos: fotos,
+          photos: fotosDoCliente,
+          aparelhos: aparelhos.map((a) => ({
+            modelo: a.modelo,
+            marca: a.marca || null,
+            armazenamento: a.armazenamento || null,
+            cor: a.cor || null,
+            imei: imeiDe(a),
+            imeiSituacao: a.imeiSituacao,
+            estado: a.estado || null,
+            observacoes: a.observacoes || null,
+            valorAvaliado: Number(a.valorAvaliado) || 0,
+            defeitos: a.defeitos,
+            photos: a.fotos,
+          })),
         },
       });
 
@@ -132,16 +133,6 @@ export function FormularioDeTroca({
       toast.error('Não foi possível registrar', erro instanceof Error ? erro.message : undefined);
     }
   }
-
-  const consultarAnatel = async () => {
-    try {
-      await navigator.clipboard.writeText(imeiLimpo);
-      toast.info('IMEI copiado', 'Cole no campo da Anatel e resolva o "não sou um robô".');
-    } catch {
-      /* sem área de transferência: a página abre do mesmo jeito */
-    }
-    window.open(ANATEL_URL, '_blank', 'noopener');
-  };
 
   return (
     <Modal
@@ -168,183 +159,39 @@ export function FormularioDeTroca({
       }
     >
       <form id="form-troca" onSubmit={enviar} className="space-y-6">
-        {/* ---------------------------------------------- aparelho que entra */}
-        <section>
-          <p className="label-base">Aparelho que está entrando</p>
-
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <Input
-              label="Modelo"
-              required
-              value={form.modelo}
-              onChange={(e) => alterar('modelo', e.target.value)}
-              placeholder="iPhone 12, Redmi Note 13…"
-              autoFocus
-            />
-            <Input
-              label="Marca"
-              value={form.marca}
-              onChange={(e) => alterar('marca', e.target.value)}
-              placeholder="Apple, Xiaomi…"
-            />
-          </div>
-
-          <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
-            <div>
-              <Input
-                label="Armazenamento"
-                value={form.armazenamento}
-                onChange={(e) => alterar('armazenamento', e.target.value)}
-                placeholder="128GB"
-                list="gigas-troca"
-              />
-              <datalist id="gigas-troca">
-                {ARMAZENAMENTOS.map((g) => (
-                  <option key={g} value={g} />
-                ))}
-              </datalist>
-            </div>
-            <Input
-              label="Cor"
-              value={form.cor}
-              onChange={(e) => alterar('cor', e.target.value)}
-              placeholder="Preto, Azul…"
-            />
-            <Select
-              label="Estado geral"
-              value={form.estado}
-              onChange={(e) => alterar('estado', e.target.value)}
-              options={ESTADOS.map((e) => ({ value: e, label: e }))}
-            />
-          </div>
-        </section>
-
-        {/* ------------------------------------------------------------ IMEI */}
-        <section>
-          <p className="label-base">IMEI e situação na Anatel</p>
-
-          <Input
-            label="IMEI"
-            required
-            inputMode="numeric"
-            value={form.imei}
-            onChange={(e) => alterar('imei', e.target.value)}
-            placeholder="15 números"
-            hint={`${imeiLimpo.length}/15`}
-            error={imeiCompleto && !imeiOk ? 'Esses 15 números não fecham — confira a digitação' : undefined}
-          />
-
-          {imeiOk && (
-            <>
-              <button
-                type="button"
-                onClick={() => void consultarAnatel()}
-                className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-accent bg-accent/5 px-4 py-2.5 text-sm font-semibold text-accent transition hover:bg-accent/10"
-              >
-                <ExternalLink className="h-4 w-4" />
-                Copiar o IMEI e abrir a consulta da Anatel
-                <Copy className="h-3.5 w-3.5 opacity-60" />
-              </button>
-
-              <p className="mt-1.5 text-xs leading-relaxed text-slate-500 dark:text-slate-400">
-                A consulta não pode ser feita pelo sistema: a página da Anatel exige o “não sou um
-                robô”. Consulte, marque abaixo o que apareceu e anexe o print.
-              </p>
-
-              <div className="mt-3 grid grid-cols-2 gap-2">
-                {SITUACOES_IMEI.map((s) => (
-                  <button
-                    key={s.chave}
-                    type="button"
-                    onClick={() => alterar('imeiSituacao', s.chave)}
-                    className={cn(
-                      'rounded-lg border px-3 py-2 text-sm font-semibold transition',
-                      form.imeiSituacao === s.chave
-                        ? s.tom === 'danger'
-                          ? 'border-danger bg-danger/10 text-danger'
-                          : s.tom === 'success'
-                            ? 'border-success bg-success/10 text-success'
-                            : s.tom === 'warning'
-                              ? 'border-warning bg-warning/10 text-warning'
-                              : 'border-accent bg-accent/10 text-accent'
-                        : 'border-slate-300 text-slate-600 hover:bg-slate-50 dark:border-navy-600 dark:text-slate-400 dark:hover:bg-navy-800',
-                    )}
-                  >
-                    {s.rotulo}
-                  </button>
-                ))}
-              </div>
-            </>
-          )}
-
-          {bloqueado && (
-            <div className="mt-3 flex gap-2.5 rounded-lg bg-danger-bg px-4 py-3 text-sm dark:bg-danger/10">
-              <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-danger" />
-              <p className="font-medium text-danger">
-                Não receba este aparelho. A Anatel aponta roubo, furto ou bloqueio — o sistema não
-                deixa registrar a troca.
-              </p>
-            </div>
-          )}
-        </section>
-
-        {/* -------------------------------------------------------- defeitos */}
-        <section>
-          <p className="label-base">O que o aparelho tem</p>
-          <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
-            {DEFEITOS.map((d) => {
-              const marcado = defeitos.includes(d.chave);
-              return (
-                <label
-                  key={d.chave}
-                  className={cn(
-                    'flex cursor-pointer items-center gap-2.5 rounded-lg border px-3 py-2 text-sm transition',
-                    marcado
-                      ? 'border-warning bg-warning-bg/60 dark:bg-warning/10'
-                      : 'border-slate-200 hover:bg-slate-50 dark:border-navy-700 dark:hover:bg-navy-800',
-                  )}
-                >
-                  <input
-                    type="checkbox"
-                    checked={marcado}
-                    onChange={(e) =>
-                      setDefeitos((atual) =>
-                        e.target.checked ? [...atual, d.chave] : atual.filter((c) => c !== d.chave),
-                      )
-                    }
-                    className="h-4 w-4 rounded border-slate-300 accent-warning"
-                  />
-                  <span className={marcado ? 'font-medium text-warning' : 'text-slate-600 dark:text-slate-400'}>
-                    {d.rotulo}
-                  </span>
-                </label>
-              );
-            })}
-          </div>
-
-          <div className="mt-3">
-            <Textarea
-              label="Observações"
-              value={form.observacoes}
-              onChange={(e) => alterar('observacoes', e.target.value)}
-              placeholder="Riscos na lateral, acompanha carregador, caixa original…"
-            />
-          </div>
-        </section>
-
-        {/* ----------------------------------------------------------- fotos */}
-        <section>
-          <p className="label-base">Fotos</p>
-          <FotosDaTroca valor={fotos} aoMudar={setFotos} />
-
-          {(!temDocumento || !temAnatel) && (
-            <p className="mt-2 text-xs text-warning">
-              Faltando:{' '}
-              {[!temDocumento && 'documento do cliente', !temAnatel && 'print da Anatel']
-                .filter(Boolean)
-                .join(' e ')}
-              . Dá para registrar sem, mas é o que protege a loja depois.
+        {/* --------------------------------------------- aparelhos que entram */}
+        <section className="space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <p className="label-base mb-0">
+              {aparelhos.length === 1 ? 'Aparelho que está entrando' : `${aparelhos.length} aparelhos entrando`}
             </p>
+            {aparelhos.length > 1 && (
+              <span className="text-sm font-bold text-success">{formatCurrency(avaliado)}</span>
+            )}
+          </div>
+
+          {aparelhos.map((aparelho, i) => (
+            <AparelhoDaTroca
+              key={i}
+              aparelho={aparelho}
+              indice={i}
+              total={aparelhos.length}
+              aoMudar={(mudanca) => mudarAparelho(i, mudanca)}
+              aoRemover={() => setAparelhos((atual) => atual.filter((_, x) => x !== i))}
+            />
+          ))}
+
+          {/* Até seis: mais que isso não é troca, é compra de lote — e essa
+              tem outro caminho, pela entrada de mercadoria. */}
+          {aparelhos.length < 6 && (
+            <button
+              type="button"
+              onClick={() => setAparelhos((atual) => [...atual, aparelhoVazio()])}
+              className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-slate-300 px-4 py-3 text-sm font-semibold text-slate-600 transition hover:border-accent hover:text-accent dark:border-navy-600 dark:text-slate-400"
+            >
+              <Plus className="h-4 w-4" />
+              O cliente deixou mais um aparelho
+            </button>
           )}
         </section>
 
@@ -370,6 +217,16 @@ export function FormularioDeTroca({
               onChange={(e) => alterar('customerPhone', e.target.value)}
               placeholder="(11) 90000-0000"
             />
+          </div>
+
+          {/* Uma vez só: o RG é da pessoa, não de cada aparelho. */}
+          <div className="mt-3">
+            <FotosDaTroca valor={fotosDoCliente} aoMudar={setFotosDoCliente} tipos={['DOCUMENTO']} />
+            {!fotosDoCliente.length && (
+              <p className="mt-1 text-xs text-warning">
+                Sem o documento do cliente, a loja fica sem prova de quem entregou os aparelhos.
+              </p>
+            )}
           </div>
         </section>
 
@@ -434,16 +291,18 @@ export function FormularioDeTroca({
         <section>
           <p className="label-base">A conta</p>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <Input
-              label="Valor do aparelho do cliente"
-              type="number"
-              min={0}
-              step="0.01"
-              required
-              value={form.valorAvaliado}
-              onChange={(e) => alterar('valorAvaliado', e.target.value)}
-              hint="Quanto a loja aceita pagar pelo usado"
-            />
+            {/* A avaliação não se digita aqui: é a soma do que foi anotado em
+                cada aparelho, e um segundo lugar para mexer no mesmo número
+                seria um lugar para os dois discordarem. */}
+            <div>
+              <p className="label-base">O que a loja paga pela troca</p>
+              <div className="flex h-[42px] items-center justify-between rounded-lg bg-slate-50 px-3 dark:bg-navy-800">
+                <span className="text-sm text-slate-500 dark:text-slate-400">
+                  {aparelhos.length === 1 ? '1 aparelho' : `${aparelhos.length} aparelhos`}
+                </span>
+                <strong className="text-base font-bold text-success">{formatCurrency(avaliado)}</strong>
+              </div>
+            </div>
             <Input
               label="Valor do aparelho que sai"
               type="number"

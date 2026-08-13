@@ -581,6 +581,29 @@ rotasProdutos.delete(
 
 export const rotasFotos = Router();
 
+/**
+ * Foto de perfil de um usuário.
+ *
+ * Vem antes da rota genérica: `/usuario/:id` bateria em `/:id` se ficasse
+ * depois, e o Express procuraria uma foto de produto chamada "usuario".
+ */
+rotasFotos.get(
+  '/usuario/:id',
+  rota(async (req, res) => {
+    const usuario = await db.user.findUnique({
+      where: { id: req.params.id },
+      select: { foto: true, fotoMimeType: true },
+    });
+    if (!usuario?.foto || !usuario.fotoMimeType) throw naoEncontrado('Foto');
+
+    res.setHeader('Content-Type', usuario.fotoMimeType);
+    // Cache curto: o endereço muda quando a pessoa troca a foto, mas quem
+    // já tem a página aberta não precisa ficar preso à antiga por um ano.
+    res.setHeader('Cache-Control', 'private, max-age=300');
+    res.send(Buffer.from(usuario.foto));
+  }),
+);
+
 /** Serve a imagem guardada no banco. O id nunca muda, então pode cachear. */
 rotasFotos.get(
   '/:id',
