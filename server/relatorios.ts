@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { autenticar } from './auth';
-import { AppError, dataBR, dataDoFiltro, dataHoraCurta, intervalo, numero, PAGAMENTO_LABEL, rota, semVazios, validar } from './core';
+import { AppError, PAGAMENTO_LABEL, dataBR, dataDoFiltro, dataHoraCurta, fimDoDia, intervalo, numero, rota, semVazios, validar } from './core';
 import { exigir } from './permissoes';
 import { db } from './db';
 import { decimal, exportar, reais, type Coluna } from './exportar';
@@ -72,7 +72,43 @@ rotasRelatorios.get(
   rota(async (req, res) => {
     const q = validar(base, semVazios(req.query));
     const unidade = unidadePermitida(req.usuario, q.unitId);
-    const entrada = intervalo(q.startDate, q.endDate);
+
+    /**
+     * A data do filtro é "o estoque como estava nesse dia".
+     *
+     * Antes ela filtrava a data de cadastro do produto, e "puxar o estoque
+     * de hoje" vinha vazio — ninguém cadastrou nada hoje. Um relatório de
+     * estoque é uma fotografia, e a data escolhe quando ela foi tirada.
+     */
+    const corte = q.endDate ?? q.startDate ?? null;
+    const naData = corte ? fimDoDia(corte) : null;
+
+    // Cada movimentação guarda o saldo que ficou depois dela. O estoque de
+    // uma data é, então, o da última movimentação até ali — sem somar
+    // entradas e saídas de novo, e sem errar o sinal de transferência.
+    const [saldosNaData, comHistorico] = naData
+      ? await Promise.all([
+          db.$queryRaw<{ productId: string; unitId: string; newQuantity: number }[]>`
+            SELECT DISTINCT ON ("productId", "unitId")
+                   "productId", "unitId", "newQuantity"
+            FROM "stock_movements"
+            WHERE "createdAt" <= ${naData}
+              AND "productId" IS NOT NULL
+              AND "unitId" IS NOT NULL
+              AND "newQuantity" IS NOT NULL
+            ORDER BY "productId", "unitId", "createdAt" DESC
+          `,
+          // Quem nunca teve movimentação nenhuma não pode ser tratado como
+          // "ainda não existia": é mercadoria que entrou por importação,
+          // antes do histórico. Some do relatório sem ter saído da loja.
+          db.stockMovement
+            .groupBy({
+              by: ['productId', 'unitId'],
+              where: { productId: { not: null }, unitId: { not: null } },
+            })
+            .then((linhas) => new Set(linhas.map((l) => `${l.productId}|${l.unitId}`))),
+        ])
+      : [null, null];
 
     // Uma linha por produto em cada unidade: é assim que se vê onde está
     // cada peça, em vez de um total que não diz nada.
@@ -80,14 +116,15 @@ rotasRelatorios.get(
       where: {
         // Zerado não é estoque. A linha continua no banco depois que a
         // última peça sai, e listá-la faz o relatório da Hermes mostrar
-        // mercadoria que só existe em outra unidade.
-        quantity: { gt: 0 },
+        // mercadoria que só existe em outra unidade. Com data, quem decide
+        // é o saldo daquele dia — a peça vendida ontem tem de aparecer no
+        // relatório de anteontem.
+        ...(naData ? {} : { quantity: { gt: 0 } }),
         ...(unidade ? { unitId: unidade } : {}),
         product: {
           ...(q.categoryId ? { categoryId: { in: await comAsFilhas(q.categoryId) } } : {}),
           ...(q.supplierId ? { supplierId: q.supplierId } : {}),
           ...(q.status ? { status: q.status } : {}),
-          ...(entrada ? { entryDate: entrada } : {}),
         },
       },
       include: {
@@ -109,11 +146,26 @@ rotasRelatorios.get(
     // de cabeça para saber quanto a loja tem.
     const agrupadas = new Map<string, { product: (typeof linhasDeEstoque)[number]['product']; quantity: number }>();
 
+    const saldoDe = (produtoId: string, unidadeId: string, agora: number) => {
+      if (!saldosNaData) return agora;
+
+      const achou = saldosNaData.find((m) => m.productId === produtoId && m.unitId === unidadeId);
+      if (achou) return Number(achou.newQuantity);
+
+      // Movimentação existe, mas toda depois da data: a peça ainda não
+      // estava ali. Sem nenhuma movimentação, o saldo de hoje é o melhor
+      // que se sabe — e é melhor que sumir com a mercadoria.
+      return comHistorico?.has(`${produtoId}|${unidadeId}`) ? 0 : agora;
+    };
+
     for (const linha of linhasDeEstoque) {
+      const quantidade = saldoDe(linha.productId, linha.unitId, linha.quantity);
+      if (quantidade <= 0) continue;
+
       const chave = linha.productId;
       const atual = agrupadas.get(chave);
-      if (atual) atual.quantity += linha.quantity;
-      else agrupadas.set(chave, { product: linha.product, quantity: linha.quantity });
+      if (atual) atual.quantity += quantidade;
+      else agrupadas.set(chave, { product: linha.product, quantity: quantidade });
     }
 
     const linhas = [...agrupadas.values()].map(({ product: p, quantity }) => ({
@@ -142,7 +194,7 @@ rotasRelatorios.get(
       title: 'Relatório de Estoque',
       // A unidade sai do rodapé de cada linha e vai para o cabeçalho: ela é
       // a mesma no relatório inteiro.
-      subtitle: `${nomeDaUnidade ?? 'Todas as unidades'} · ${periodo(q)}`,
+      subtitle: `${nomeDaUnidade ?? 'Todas as unidades'} · ${corte ? `Estoque em ${dataDoFiltro(corte)}` : 'Estoque de hoje'}`,
       // Separado por condição: lacrado e vitrine são mercadorias
       // diferentes, com preço diferente, e misturá-las esconde o que a
       // loja tem de cada uma.

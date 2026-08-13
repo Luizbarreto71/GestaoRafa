@@ -47,7 +47,8 @@ const REPORTS: ReportDefinition[] = [
     key: 'stock',
     endpoint: '/reports/stock',
     title: 'Relatório de estoque',
-    description: 'Todos os produtos com quantidade, custo, venda e valor total imobilizado.',
+    description:
+      'Quantidade, custo, venda e valor imobilizado. Com data, mostra o estoque como estava naquele dia.',
     icon: Boxes,
     tone: 'bg-accent/10 text-accent',
     fields: ['category', 'supplier', 'status', 'period'],
