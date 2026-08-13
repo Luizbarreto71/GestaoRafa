@@ -5,7 +5,7 @@ import { rotasAuth } from './auth';
 import { rotasCategorias, rotasClientes, rotasFornecedores, rotasUsuarios } from './cadastros';
 import { rota, tratarErros } from './core';
 import { rotasDashboard } from './dashboard';
-import { bancoConfigurado, bancoIniciado, db, erroDoBanco } from './db';
+import { bancoConfigurado, bancoIniciado, db, erroDoBanco, comoConectamos } from './db';
 import { rotasMovimentacoes } from './movimentacoes';
 import { rotasFotos, rotasProdutos } from './produtos';
 import { rotasRelatorios } from './relatorios';
@@ -90,14 +90,14 @@ export function createApp(): Application {
       try {
         await db.$queryRaw`SELECT 1`;
         const [produtos, usuarios] = await Promise.all([db.product.count(), db.user.count()]);
-        res.json({ status: 'ok', database: 'conectado', produtos, usuarios, ambiente });
+        res.json({ status: 'ok', database: 'conectado', produtos, usuarios, banco: comoConectamos(), ambiente });
       } catch (erro) {
         res.status(503).json({
           status: 'degradado',
           problema: 'Conectou o cliente, mas a consulta ao banco falhou.',
           detalhe: (erro as Error).message,
           comoResolver:
-            'Confira a DATABASE_URL: use a URL do Session pooler (porta 5432) e codifique caracteres especiais da senha (@ vira %40, # vira %23).',
+            'Confira a DATABASE_URL: em produção use a URL do Transaction pooler (porta 6543), que aguenta muita função ao mesmo tempo, e codifique caracteres especiais da senha (@ vira %40, # vira %23). O Session pooler (5432) esgota as conexões.',
           ambiente,
         });
       }

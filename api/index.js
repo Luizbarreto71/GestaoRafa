@@ -195,6 +195,20 @@ import { PrismaClient } from "@prisma/client";
 import dotenv from "dotenv";
 dotenv.config();
 var bancoConfigurado = Boolean(process.env.DATABASE_URL);
+function comoConectamos() {
+  try {
+    const u = new URL(process.env.DATABASE_URL ?? "");
+    const porta = u.port ? Number(u.port) : null;
+    return {
+      host: u.hostname || null,
+      porta,
+      modo: porta === 6543 ? "transaction pooler" : porta === 5432 && u.hostname.includes("pooler") ? "session pooler" : "conex\xE3o direta",
+      limiteDeConexoes: u.searchParams.get("connection_limit")
+    };
+  } catch {
+    return { host: null, porta: null, modo: "desconhecido", limiteDeConexoes: null };
+  }
+}
 if (!bancoConfigurado) {
   console.error(
     "[banco] DATABASE_URL n\xE3o est\xE1 definida. Local: copie .env.example para .env. Na Vercel: Settings \u2192 Environment Variables."
@@ -7355,13 +7369,13 @@ function createApp() {
       try {
         await db.$queryRaw`SELECT 1`;
         const [produtos, usuarios] = await Promise.all([db.product.count(), db.user.count()]);
-        res.json({ status: "ok", database: "conectado", produtos, usuarios, ambiente: ambiente2 });
+        res.json({ status: "ok", database: "conectado", produtos, usuarios, banco: comoConectamos(), ambiente: ambiente2 });
       } catch (erro) {
         res.status(503).json({
           status: "degradado",
           problema: "Conectou o cliente, mas a consulta ao banco falhou.",
           detalhe: erro.message,
-          comoResolver: "Confira a DATABASE_URL: use a URL do Session pooler (porta 5432) e codifique caracteres especiais da senha (@ vira %40, # vira %23).",
+          comoResolver: "Confira a DATABASE_URL: em produ\xE7\xE3o use a URL do Transaction pooler (porta 6543), que aguenta muita fun\xE7\xE3o ao mesmo tempo, e codifique caracteres especiais da senha (@ vira %40, # vira %23). O Session pooler (5432) esgota as conex\xF5es.",
           ambiente: ambiente2
         });
       }
