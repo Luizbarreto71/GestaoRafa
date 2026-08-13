@@ -17,6 +17,7 @@ import {
   ShoppingBag,
   ShoppingCart,
   Smartphone,
+  Target,
   Users,
   X,
 } from 'lucide-react';
@@ -42,6 +43,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: '/seminovos', label: 'Seminovos', icon: Smartphone, permissao: 'estoque.tela' },
   { to: '/estoque', label: 'Estoque', icon: Package, permissao: 'estoque.tela' },
   { to: '/vendas', label: 'Vendas', icon: ShoppingCart, permissao: 'prevenda.verTodas' },
+  { to: '/metas', label: 'Metas', icon: Target, permissao: 'relatorios' },
   { to: '/movimentacao', label: 'Movimentação', icon: PackagePlus, permissao: 'estoque.movimentar' },
   { to: '/movimentacoes', label: 'Histórico', icon: History, permissao: 'estoque.ver' },
   { to: '/clientes', label: 'Clientes', icon: Users, permissao: 'prevenda.verTodas' },

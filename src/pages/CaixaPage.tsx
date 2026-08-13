@@ -36,7 +36,8 @@ import {
   useUnidadeDeVenda,
   useUsers,
 } from '@/hooks/queries';
-import { downloadFile } from '@/lib/api';
+import { api, downloadFile } from '@/lib/api';
+import { useQuery } from '@tanstack/react-query';
 import { cn } from '@/lib/cn';
 import { DEFEITO_ROTULO, SITUACAO_IMEI_ROTULO } from '@shared/trocas';
 import { caixaService } from '@/services';
@@ -599,6 +600,14 @@ function VendaDireta() {
   const { data: usuarios } = useUsers({ pageSize: 100 }, true);
   const { data: unidadeDeVenda } = useUnidadeDeVenda();
   const contasPix = useContasDePix();
+  const { data: nomesDeVendedor } = useQuery({
+    queryKey: ['nomes-de-vendedor'],
+    queryFn: async () => {
+      const { data } = await api.get<{ nomes: string[] }>('/metas/lista/nomes');
+      return data.nomes;
+    },
+    staleTime: 5 * 60_000,
+  });
   const taxas = useTaxasDeCartao();
 
   const [itens, setItens] = useState<ItemVenda[]>([]);
@@ -687,9 +696,13 @@ function VendaDireta() {
 
   /** O que o cliente vai pagar de fato — com o repasse, quando há. */
   const totalCobrado = total + acrescimo;
-  // Sugestão, não restrição: quem vende no salão muitas vezes não tem login,
-  // e filtrar por perfil deixava a lista praticamente vazia.
-  const sugestoes = (usuarios?.data ?? []).map((u) => u.name).sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  // Sugestão, não restrição: quem vende no salão muitas vezes não tem login.
+  // Os nomes vêm das vendas já registradas — é a digitação livre que cria
+  // "RODRIGO" e "Rodrigo" como duas pessoas e parte a meta de quem vendeu
+  // onze aparelhos em duas de cinco e seis.
+  const sugestoes = [
+    ...new Set([...(nomesDeVendedor ?? []), ...(usuarios?.data ?? []).map((u) => u.name)]),
+  ].sort((a, b) => a.localeCompare(b, 'pt-BR'));
 
   /** Liga a venda ao usuário quando o nome digitado bate com um cadastrado. */
   const usuarioDoNome = (nome: string) =>

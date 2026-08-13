@@ -32,6 +32,7 @@ const LEITURA_LIBERADA = new Set([
   '/contas-pix',
   '/chave-de-acesso',
   '/emojis-categoria',
+  '/meta-de-vendas',
 ]);
 
 rotasSistema.use(autenticar, (req, res, next) => {
@@ -764,5 +765,49 @@ rotasSistema.put(
 
     await registrarLog({ acao: 'EMOJIS_CATEGORIA', entidade: 'Setting', id: CHAVE_EMOJIS, req });
     res.json({ emojis: limpos, message: 'Emojis da lista salvos.' });
+  }),
+);
+
+// ------------------------------------------------- Meta dos vendedores
+
+const CHAVE_META = 'meta_de_vendas';
+
+/**
+ * Quantos aparelhos cada vendedor precisa vender por dia.
+ *
+ * Uma regra só, igual para todos — é assim que a loja combina hoje. Fica
+ * em configuração porque número de meta muda, e um número cravado no
+ * código viraria pedido de suporte todo trimestre.
+ */
+export async function metaDeVendas(): Promise<number> {
+  const guardado = await db.setting.findUnique({ where: { key: CHAVE_META } });
+  const n = Number(guardado?.value);
+  return Number.isFinite(n) && n > 0 ? n : 10;
+}
+
+rotasSistema.get(
+  '/meta-de-vendas',
+  rota(async (_req, res) => {
+    res.json({ meta: await metaDeVendas() });
+  }),
+);
+
+rotasSistema.put(
+  '/meta-de-vendas',
+  somenteAdmin,
+  rota(async (req, res) => {
+    const { meta } = validar(
+      z.object({ meta: z.coerce.number().int().min(1, 'A meta é de pelo menos 1 aparelho').max(999) }),
+      req.body,
+    );
+
+    await db.setting.upsert({
+      where: { key: CHAVE_META },
+      update: { value: String(meta) },
+      create: { key: CHAVE_META, value: String(meta) },
+    });
+
+    await registrarLog({ acao: 'META_DE_VENDAS', entidade: 'Setting', id: CHAVE_META, req });
+    res.json({ meta, message: `Meta de ${meta} aparelhos por dia, por vendedor.` });
   }),
 );

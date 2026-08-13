@@ -1726,7 +1726,7 @@ rotasDashboard.get(
       produtosBaixos,
       semEstoque,
       ultimasVendas,
-      vendasDoPeriodo,
+      vendasDoPeriodo2,
       movimentosDoPeriodo,
       linhasDeEstoque,
       categorias,
@@ -1802,7 +1802,7 @@ rotasDashboard.get(
       const chave = dia(somarDias(inicioGrafico, i));
       baldes.set(chave, { date: chave, vendas: 0, faturamento: 0, entradas: 0, saidas: 0 });
     }
-    for (const venda of vendasDoPeriodo) {
+    for (const venda of vendasDoPeriodo2) {
       const balde = baldes.get(dia(venda.saleDate));
       if (!balde) continue;
       balde.vendas += venda.items.reduce((n, i) => n + i.quantity, 0);
@@ -1916,7 +1916,7 @@ rotasDashboard.get(
             unitName: unidades.find((u) => u.id === b.unitId)?.name ?? null
           };
         }),
-        outOfStock: zerados.map((z15) => ({ ...z15.product, unitName: z15.unit.name })),
+        outOfStock: zerados.map((z16) => ({ ...z16.product, unitName: z16.unit.name })),
         soldToday: vendasHoje,
         soldTodayCount: vendasHoje.reduce((s, v) => s + v.items.reduce((n, i) => n + i.quantity, 0), 0),
         revenueToday: vendasHoje.reduce((s, v) => s + numero(v.totalAmount), 0),
@@ -3491,7 +3491,8 @@ var LEITURA_LIBERADA = /* @__PURE__ */ new Set([
   "/unidade-de-venda",
   "/contas-pix",
   "/chave-de-acesso",
-  "/emojis-categoria"
+  "/emojis-categoria",
+  "/meta-de-vendas"
 ]);
 rotasSistema.use(autenticar, (req, res, next) => {
   if (req.method === "GET" && LEITURA_LIBERADA.has(req.path)) return next();
@@ -4049,6 +4050,35 @@ rotasSistema.put(
     });
     await registrarLog({ acao: "EMOJIS_CATEGORIA", entidade: "Setting", id: CHAVE_EMOJIS, req });
     res.json({ emojis: limpos, message: "Emojis da lista salvos." });
+  })
+);
+var CHAVE_META = "meta_de_vendas";
+async function metaDeVendas() {
+  const guardado = await db.setting.findUnique({ where: { key: CHAVE_META } });
+  const n = Number(guardado?.value);
+  return Number.isFinite(n) && n > 0 ? n : 10;
+}
+rotasSistema.get(
+  "/meta-de-vendas",
+  rota(async (_req, res) => {
+    res.json({ meta: await metaDeVendas() });
+  })
+);
+rotasSistema.put(
+  "/meta-de-vendas",
+  somenteAdmin,
+  rota(async (req, res) => {
+    const { meta } = validar(
+      z6.object({ meta: z6.coerce.number().int().min(1, "A meta \xE9 de pelo menos 1 aparelho").max(999) }),
+      req.body
+    );
+    await db.setting.upsert({
+      where: { key: CHAVE_META },
+      update: { value: String(meta) },
+      create: { key: CHAVE_META, value: String(meta) }
+    });
+    await registrarLog({ acao: "META_DE_VENDAS", entidade: "Setting", id: CHAVE_META, req });
+    res.json({ meta, message: `Meta de ${meta} aparelhos por dia, por vendedor.` });
   })
 );
 
@@ -6652,10 +6682,272 @@ rotasTrocas.delete(
   })
 );
 
-// server/vendas.ts
-import { Prisma as Prisma8 } from "@prisma/client";
+// server/metas.ts
 import { Router as Router15 } from "express";
 import { z as z14 } from "zod";
+var rotasMetas = Router15();
+rotasMetas.use(autenticar);
+var chaveDoVendedor = (nome) => nome.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().replace(/\s+/g, " ").toUpperCase();
+function pareceOMesmo(a, b) {
+  if (a === b) return false;
+  if (Math.min(a.length, b.length) < 4) return false;
+  if (Math.abs(a.length - b.length) > 1) return false;
+  let anterior = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i += 1) {
+    const atual = [i];
+    for (let j = 1; j <= b.length; j += 1) {
+      atual[j] = Math.min(
+        anterior[j] + 1,
+        atual[j - 1] + 1,
+        anterior[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
+      );
+    }
+    if (Math.min(...atual) > 1) return false;
+    anterior = atual;
+  }
+  return anterior[b.length] <= 1;
+}
+var filtros2 = z14.object({
+  /** Vazio nos dois = hoje. */
+  inicio: z14.coerce.date().optional(),
+  fim: z14.coerce.date().optional(),
+  unitId: z14.string().uuid().optional()
+});
+var nomeDaVenda = (v) => v.sellerName?.trim() || v.seller?.name?.trim() || "Sem vendedor";
+async function vendasDoPeriodo(q, unidade) {
+  const inicio = inicioDoDia(q.inicio ?? q.fim ?? /* @__PURE__ */ new Date());
+  const fim = fimDoDia(q.fim ?? q.inicio ?? /* @__PURE__ */ new Date());
+  const vendas = await db.sale.findMany({
+    where: {
+      status: "FINALIZADA",
+      saleDate: { gte: inicio, lte: fim },
+      ...unidade ? { unitId: unidade } : {}
+    },
+    select: {
+      code: true,
+      saleDate: true,
+      totalAmount: true,
+      customerName: true,
+      sellerName: true,
+      seller: { select: { name: true } },
+      unit: { select: { name: true } },
+      items: {
+        select: {
+          quantity: true,
+          unitPrice: true,
+          costPrice: true,
+          productName: true,
+          imei: true,
+          product: {
+            select: { name: true, capacity: true, color: true, category: { select: { name: true } } }
+          }
+        }
+      }
+    },
+    orderBy: { saleDate: "asc" }
+  });
+  const umDia = dataBR(inicio) === dataBR(fim);
+  return { vendas, inicio, fim, umDia, rotulo: umDia ? dataBR(inicio) : `${dataBR(inicio)} a ${dataBR(fim)}` };
+}
+rotasMetas.get(
+  "/",
+  exigir("relatorios"),
+  rota(async (req, res) => {
+    const q = validar(filtros2, semVazios(req.query));
+    const unidade = unidadePermitida(req.usuario, q.unitId);
+    const [{ vendas, umDia, rotulo }, meta] = await Promise.all([
+      vendasDoPeriodo(q, unidade),
+      metaDeVendas()
+    ]);
+    const porVendedor = /* @__PURE__ */ new Map();
+    for (const v of vendas) {
+      const nome = nomeDaVenda(v);
+      const chave = chaveDoVendedor(nome);
+      const dia = dataBR(v.saleDate);
+      const linha = porVendedor.get(chave) ?? {
+        nome,
+        grafias: /* @__PURE__ */ new Set(),
+        aparelhos: 0,
+        vendas: 0,
+        faturamento: 0,
+        lucro: 0,
+        dias: /* @__PURE__ */ new Map()
+      };
+      const pecas = v.items.reduce((s, i) => s + i.quantity, 0);
+      const valor = numero(v.totalAmount);
+      linha.grafias.add(nome);
+      linha.aparelhos += pecas;
+      linha.vendas += 1;
+      linha.faturamento += valor;
+      linha.lucro += v.items.reduce(
+        (s, i) => s + (numero(i.unitPrice) - numero(i.costPrice)) * i.quantity,
+        0
+      );
+      const doDia = linha.dias.get(dia) ?? { data: dia, aparelhos: 0, faturamento: 0 };
+      doDia.aparelhos += pecas;
+      doDia.faturamento += valor;
+      linha.dias.set(dia, doDia);
+      porVendedor.set(chave, linha);
+    }
+    const lista = [...porVendedor.entries()].map(([chave, l]) => {
+      const dias = [...l.dias.values()].map((d) => ({ ...d, bateu: d.aparelhos >= meta })).sort((a, b) => a.data.localeCompare(b.data));
+      const hoje = dias[dias.length - 1]?.aparelhos ?? 0;
+      const referencia = umDia ? hoje : l.aparelhos;
+      return {
+        chave,
+        // A grafia mais completa vai para a tela: "Gui Lemos" diz mais
+        // do que "LEMOS".
+        nome: [...l.grafias].sort((a, b) => b.length - a.length)[0],
+        grafias: [...l.grafias].sort(),
+        aparelhos: l.aparelhos,
+        vendas: l.vendas,
+        faturamento: l.faturamento,
+        lucro: l.lucro,
+        dias,
+        diasComVenda: dias.length,
+        diasBatidos: dias.filter((d) => d.bateu).length,
+        meta,
+        atingiu: umDia ? referencia >= meta : dias.every((d) => d.bateu),
+        faltam: umDia ? Math.max(0, meta - referencia) : 0,
+        progresso: meta > 0 ? Math.min(100, Math.round(referencia / meta * 100)) : 0
+      };
+    }).sort((a, b) => b.aparelhos - a.aparelhos);
+    const parecidos = [];
+    for (let i = 0; i < lista.length; i += 1) {
+      for (let j = i + 1; j < lista.length; j += 1) {
+        if (pareceOMesmo(lista[i].chave, lista[j].chave)) parecidos.push([lista[i].nome, lista[j].nome]);
+      }
+    }
+    res.json({
+      rotulo,
+      umDia,
+      meta,
+      vendedores: lista,
+      resumo: {
+        vendedores: lista.length,
+        bateram: lista.filter((l) => l.atingiu).length,
+        aparelhos: lista.reduce((s, l) => s + l.aparelhos, 0),
+        faturamento: lista.reduce((s, l) => s + l.faturamento, 0)
+      },
+      // O sistema não junta por conta própria: somar a venda de um na meta
+      // de outro é pior do que deixar separado.
+      parecidos
+    });
+  })
+);
+rotasMetas.get(
+  "/:chave",
+  exigir("relatorios"),
+  rota(async (req, res) => {
+    const q = validar(
+      filtros2.extend({ format: z14.enum(["json", "pdf", "xlsx", "csv"]).default("json") }),
+      semVazios(req.query)
+    );
+    const unidade = unidadePermitida(req.usuario, q.unitId);
+    const chave = chaveDoVendedor(decodeURIComponent(req.params.chave));
+    const [{ vendas, rotulo, umDia }, meta] = await Promise.all([
+      vendasDoPeriodo(q, unidade),
+      metaDeVendas()
+    ]);
+    const minhas = vendas.filter((v) => chaveDoVendedor(nomeDaVenda(v)) === chave);
+    const nome = minhas.length ? nomeDaVenda(minhas[0]) : chave;
+    const itens = minhas.flatMap(
+      (v) => v.items.map((i) => ({
+        data: dataBR(v.saleDate),
+        venda: v.code,
+        produto: i.product?.name ?? i.productName ?? "\u2014",
+        detalhes: [i.product?.capacity, i.product?.color].filter(Boolean).join(" \xB7 ") || "\u2014",
+        categoria: i.product?.category?.name ?? "\u2014",
+        imei: i.imei ?? "\u2014",
+        cliente: v.customerName ?? "Consumidor",
+        unidade: v.unit?.name ?? "\u2014",
+        quantidade: i.quantity,
+        valor: numero(i.unitPrice) * i.quantity,
+        lucro: (numero(i.unitPrice) - numero(i.costPrice)) * i.quantity
+      }))
+    );
+    const aparelhos = itens.reduce((s, i) => s + i.quantidade, 0);
+    const faturamento = itens.reduce((s, i) => s + i.valor, 0);
+    const lucro = itens.reduce((s, i) => s + i.lucro, 0);
+    const porDia = /* @__PURE__ */ new Map();
+    for (const i of itens) porDia.set(i.data, (porDia.get(i.data) ?? 0) + i.quantidade);
+    const diasBatidos = [...porDia.values()].filter((n) => n >= meta).length;
+    if (q.format === "json") {
+      res.json({
+        nome,
+        rotulo,
+        umDia,
+        meta,
+        itens,
+        dias: [...porDia.entries()].map(([data, n]) => ({ data, aparelhos: n, bateu: n >= meta })),
+        totais: {
+          aparelhos,
+          faturamento,
+          lucro,
+          vendas: new Set(itens.map((i) => i.venda)).size,
+          diasComVenda: porDia.size,
+          diasBatidos
+        }
+      });
+      return;
+    }
+    if (!itens.length) throw new AppError(`${nome} n\xE3o tem vendas em ${rotulo}.`, 404);
+    await exportar(res, q.format, {
+      title: `Vendas de ${nome}`,
+      subtitle: umDia ? `${rotulo} \xB7 ${aparelhos} de ${meta} aparelhos${aparelhos >= meta ? " \xB7 meta batida" : ` \xB7 faltam ${meta - aparelhos}`}` : `${rotulo} \xB7 ${aparelhos} aparelhos \xB7 bateu a meta em ${diasBatidos} de ${porDia.size} dia(s)`,
+      // Por dia: a meta é diária, então é o dia que precisa somar sozinho.
+      group: { key: "data", totals: ["quantidade", "valor", "lucro"] },
+      columns: [
+        { header: "Data", key: "data", width: 11 },
+        { header: "Venda", key: "venda", width: 12 },
+        { header: "Produto", key: "produto", width: 26 },
+        { header: "Detalhes", key: "detalhes", width: 15 },
+        { header: "IMEI", key: "imei", width: 17 },
+        { header: "Cliente", key: "cliente", width: 18 },
+        { header: "Qtd", key: "quantidade", width: 6, align: "right" },
+        { header: "Valor", key: "valor", width: 13, align: "right", format: decimal },
+        { header: "Lucro", key: "lucro", width: 13, align: "right", format: decimal }
+      ],
+      rows: itens,
+      summary: [
+        { label: "Aparelhos vendidos", value: String(aparelhos) },
+        { label: "Meta por dia", value: String(meta) },
+        { label: "Dias com venda", value: String(porDia.size) },
+        { label: "Dias em que bateu", value: String(diasBatidos) },
+        { label: "Vendas", value: String(new Set(itens.map((i) => i.venda)).size) },
+        { label: "Faturamento", value: reais(faturamento) },
+        { label: "Lucro gerado", value: reais(lucro) }
+      ]
+    });
+  })
+);
+rotasMetas.get(
+  "/lista/nomes",
+  rota(async (_req, res) => {
+    const vendas = await db.sale.findMany({
+      where: { status: "FINALIZADA", sellerName: { not: null } },
+      select: { sellerName: true },
+      distinct: ["sellerName"],
+      take: 300
+    });
+    const melhores = /* @__PURE__ */ new Map();
+    for (const v of vendas) {
+      const nome = v.sellerName?.trim();
+      if (!nome) continue;
+      const chave = chaveDoVendedor(nome);
+      const atual = melhores.get(chave);
+      if (!atual || atual === atual.toUpperCase() && nome !== nome.toUpperCase()) {
+        melhores.set(chave, nome);
+      }
+    }
+    res.json({ nomes: [...melhores.values()].sort((a, b) => a.localeCompare(b, "pt-BR")) });
+  })
+);
+
+// server/vendas.ts
+import { Prisma as Prisma8 } from "@prisma/client";
+import { Router as Router16 } from "express";
+import { z as z15 } from "zod";
 
 // server/recibo.ts
 import PDFDocument2 from "pdfkit";
@@ -6898,7 +7190,7 @@ function enviarRecibo(res, r) {
 }
 
 // server/vendas.ts
-var rotasVendas = Router15();
+var rotasVendas = Router16();
 rotasVendas.use(autenticar);
 var PAGAMENTOS2 = ["PIX", "DINHEIRO", "DEBITO", "CREDITO", "TRANSFERENCIA", "EM_ABERTO", "OUTRO"];
 var COM_TUDO3 = {
@@ -6910,20 +7202,20 @@ var COM_TUDO3 = {
   preSale: { select: { id: true, code: true } },
   payments: { orderBy: { amount: "desc" } }
 };
-var filtrosSchema2 = z14.object({
-  page: z14.coerce.number().int().min(1).optional(),
-  pageSize: z14.coerce.number().int().min(1).max(200).optional(),
-  search: z14.string().trim().optional(),
-  productId: z14.string().uuid().optional(),
-  categoryId: z14.string().uuid().optional(),
-  paymentMethod: z14.enum(PAGAMENTOS2).optional(),
-  sellerId: z14.string().uuid().optional(),
-  cashierId: z14.string().uuid().optional(),
-  unitId: z14.string().uuid().optional(),
-  startDate: z14.coerce.date().optional(),
-  endDate: z14.coerce.date().optional(),
-  sortBy: z14.string().optional(),
-  sortOrder: z14.enum(["asc", "desc"]).optional()
+var filtrosSchema2 = z15.object({
+  page: z15.coerce.number().int().min(1).optional(),
+  pageSize: z15.coerce.number().int().min(1).max(200).optional(),
+  search: z15.string().trim().optional(),
+  productId: z15.string().uuid().optional(),
+  categoryId: z15.string().uuid().optional(),
+  paymentMethod: z15.enum(PAGAMENTOS2).optional(),
+  sellerId: z15.string().uuid().optional(),
+  cashierId: z15.string().uuid().optional(),
+  unitId: z15.string().uuid().optional(),
+  startDate: z15.coerce.date().optional(),
+  endDate: z15.coerce.date().optional(),
+  sortBy: z15.string().optional(),
+  sortOrder: z15.enum(["asc", "desc"]).optional()
 });
 async function filtrarVendas(q, unidadeId) {
   const cond = [{ status: "FINALIZADA" }];
@@ -6994,39 +7286,39 @@ rotasVendas.get(
     res.json(limpar(venda));
   })
 );
-var vendaSchema = z14.object({
-  items: z14.array(
-    z14.object({
-      productId: z14.string().uuid("Selecione o produto"),
-      quantity: z14.coerce.number().int().min(1, "Quantidade m\xEDnima: 1"),
-      unitPrice: z14.coerce.number().min(0, "Informe o valor"),
-      imei: z14.string().trim().max(40).optional().nullable(),
-      serialNumber: z14.string().trim().max(60).optional().nullable()
+var vendaSchema = z15.object({
+  items: z15.array(
+    z15.object({
+      productId: z15.string().uuid("Selecione o produto"),
+      quantity: z15.coerce.number().int().min(1, "Quantidade m\xEDnima: 1"),
+      unitPrice: z15.coerce.number().min(0, "Informe o valor"),
+      imei: z15.string().trim().max(40).optional().nullable(),
+      serialNumber: z15.string().trim().max(60).optional().nullable()
     })
   ).min(1, "Inclua ao menos um produto"),
-  unitId: z14.string().uuid("Informe de qual unidade o produto saiu"),
-  paymentMethod: z14.enum(PAGAMENTOS2),
-  installments: z14.coerce.number().int().min(1).max(24).default(1),
+  unitId: z15.string().uuid("Informe de qual unidade o produto saiu"),
+  paymentMethod: z15.enum(PAGAMENTOS2),
+  installments: z15.coerce.number().int().min(1).max(24).default(1),
   /**
    * Pagamento dividido: parte no PIX, parte no cartão, e por aí.
    *
    * Vazio = a venda inteira em `paymentMethod`. A soma tem de fechar com
    * o total, e isso é conferido dentro da transação.
    */
-  payments: z14.array(
-    z14.object({
-      method: z14.enum(PAGAMENTOS2),
-      amount: z14.coerce.number().min(0.01, "Informe o valor desta forma"),
-      installments: z14.coerce.number().int().min(1).max(24).default(1),
-      notes: z14.string().trim().max(120).optional().nullable(),
+  payments: z15.array(
+    z15.object({
+      method: z15.enum(PAGAMENTOS2),
+      amount: z15.coerce.number().min(0.01, "Informe o valor desta forma"),
+      installments: z15.coerce.number().int().min(1).max(24).default(1),
+      notes: z15.string().trim().max(120).optional().nullable(),
       /** Taxa da maquininha, em %. Guardada com a venda. */
-      feePercent: z14.coerce.number().min(0).max(99.99).optional().nullable(),
+      feePercent: z15.coerce.number().min(0).max(99.99).optional().nullable(),
       /** Qual coluna da tabela de taxas vale: Visa/Master ou Elo/Amex. */
-      bandeira: z14.enum(["padrao", "elo"]).optional().nullable(),
+      bandeira: z15.enum(["padrao", "elo"]).optional().nullable(),
       /** Código de autorização do comprovante da maquininha. */
-      autorizacao: z14.string().trim().max(30).optional().nullable(),
+      autorizacao: z15.string().trim().max(30).optional().nullable(),
       /** Em qual conta caiu — usado no Pix, que tem mais de uma. */
-      destino: z14.string().trim().max(60).optional().nullable()
+      destino: z15.string().trim().max(60).optional().nullable()
     })
   ).max(6, "No m\xE1ximo 6 formas na mesma venda").optional(),
   /**
@@ -7036,28 +7328,28 @@ var vendaSchema = z14.object({
    * atrasa todo mundo. A pré-venda continua pedindo: lá o caixa precisa
    * saber de quem é o pedido.
    */
-  customerName: z14.string().trim().max(180).optional().nullable(),
-  customerPhone: z14.string().trim().max(30).optional().nullable(),
-  customerDocument: z14.string().trim().max(30).optional().nullable(),
-  customerId: z14.string().uuid().optional().nullable(),
+  customerName: z15.string().trim().max(180).optional().nullable(),
+  customerPhone: z15.string().trim().max(30).optional().nullable(),
+  customerDocument: z15.string().trim().max(30).optional().nullable(),
+  customerId: z15.string().uuid().optional().nullable(),
   /** Cobrado além do preço dos produtos — o repasse da taxa do cartão. */
-  acrescimo: z14.coerce.number().min(0).max(999999).optional().nullable(),
+  acrescimo: z15.coerce.number().min(0).max(999999).optional().nullable(),
   /** Libera vender abaixo do preço de atacado. */
-  chaveDeAcesso: z14.string().trim().max(60).optional().nullable(),
+  chaveDeAcesso: z15.string().trim().max(60).optional().nullable(),
   /**
    * Aparelho que o cliente deixou como parte do pagamento.
    *
    * Versão de balcão: só o que dá para anotar com o cliente na frente.
    * O aparelho vira uma forma de pagamento e o cliente paga a diferença.
    */
-  tradeIn: z14.object({
-    modelo: z14.string().trim().min(2, "Informe o modelo do aparelho").max(120),
-    cor: z14.string().trim().max(40).optional().nullable(),
-    armazenamento: z14.string().trim().max(20).optional().nullable(),
-    valorAvaliado: z14.coerce.number().min(0.01, "Informe quanto vale o aparelho do cliente")
+  tradeIn: z15.object({
+    modelo: z15.string().trim().min(2, "Informe o modelo do aparelho").max(120),
+    cor: z15.string().trim().max(40).optional().nullable(),
+    armazenamento: z15.string().trim().max(20).optional().nullable(),
+    valorAvaliado: z15.coerce.number().min(0.01, "Informe quanto vale o aparelho do cliente")
   }).optional().nullable(),
   /** Vendedor que atendeu, para a comissão. Vazio = o próprio caixa. */
-  sellerId: z14.string().uuid().optional().nullable(),
+  sellerId: z15.string().uuid().optional().nullable(),
   /**
    * Nome digitado no balcão.
    *
@@ -7065,9 +7357,9 @@ var vendaSchema = z14.object({
    * no sistema. Sem isto, a venda ficaria no nome do caixa e a comissão
    * apontaria para a pessoa errada.
    */
-  sellerName: z14.string().trim().max(120).optional().nullable(),
-  notes: z14.string().trim().max(1e3).optional().nullable(),
-  saleDate: z14.coerce.date().optional()
+  sellerName: z15.string().trim().max(120).optional().nullable(),
+  notes: z15.string().trim().max(1e3).optional().nullable(),
+  saleDate: z15.coerce.date().optional()
 });
 rotasVendas.post(
   "/",
@@ -7205,31 +7497,31 @@ rotasVendas.get(
     });
   })
 );
-var edicaoSchema = z14.object({
-  customerName: z14.string().trim().max(180).optional().nullable(),
-  customerPhone: z14.string().trim().max(30).optional().nullable(),
-  customerDocument: z14.string().trim().max(30).optional().nullable(),
-  sellerName: z14.string().trim().max(120).optional().nullable(),
-  notes: z14.string().trim().max(1e3).optional().nullable(),
-  saleDate: z14.coerce.date().optional(),
+var edicaoSchema = z15.object({
+  customerName: z15.string().trim().max(180).optional().nullable(),
+  customerPhone: z15.string().trim().max(30).optional().nullable(),
+  customerDocument: z15.string().trim().max(30).optional().nullable(),
+  sellerName: z15.string().trim().max(120).optional().nullable(),
+  notes: z15.string().trim().max(1e3).optional().nullable(),
+  saleDate: z15.coerce.date().optional(),
   /** Lista completa e definitiva dos itens. */
-  items: z14.array(
-    z14.object({
-      productId: z14.string().uuid(),
-      quantity: z14.coerce.number().int().min(1),
-      unitPrice: z14.coerce.number().min(0),
-      imei: z14.string().trim().max(40).optional().nullable(),
-      serialNumber: z14.string().trim().max(60).optional().nullable()
+  items: z15.array(
+    z15.object({
+      productId: z15.string().uuid(),
+      quantity: z15.coerce.number().int().min(1),
+      unitPrice: z15.coerce.number().min(0),
+      imei: z15.string().trim().max(40).optional().nullable(),
+      serialNumber: z15.string().trim().max(60).optional().nullable()
     })
   ).min(1, "A venda precisa de ao menos um produto").optional(),
-  paymentMethod: z14.enum(PAGAMENTOS2).optional(),
-  installments: z14.coerce.number().int().min(1).max(24).optional(),
+  paymentMethod: z15.enum(PAGAMENTOS2).optional(),
+  installments: z15.coerce.number().int().min(1).max(24).optional(),
   /** Lista completa e definitiva das formas de pagamento. */
-  payments: z14.array(
-    z14.object({
-      method: z14.enum([...PAGAMENTOS2, "TROCA"]),
-      amount: z14.coerce.number().min(0.01),
-      installments: z14.coerce.number().int().min(1).max(24).default(1)
+  payments: z15.array(
+    z15.object({
+      method: z15.enum([...PAGAMENTOS2, "TROCA"]),
+      amount: z15.coerce.number().min(0.01),
+      installments: z15.coerce.number().int().min(1).max(24).default(1)
     })
   ).max(6).optional()
 });
@@ -7455,6 +7747,7 @@ function createApp() {
   app2.use("/api/pre-sales", rotasPreVendas);
   app2.use("/api/trocas", rotasTrocas);
   app2.use("/api/seminovos", rotasSeminovos);
+  app2.use("/api/metas", rotasMetas);
   app2.use("/api/em-aberto", rotasEmAberto);
   app2.use("/api/cash", rotasCaixa);
   app2.use("/api/notifications", rotasNotificacoes);
