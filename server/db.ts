@@ -13,39 +13,6 @@ dotenv.config();
  */
 export const bancoConfigurado = Boolean(process.env.DATABASE_URL);
 
-/**
- * Como o servidor está falando com o banco — sem a senha.
- *
- * Serve para conferir de fora que a conexão é a certa. A Vercel não mostra
- * o valor de uma variável marcada como sensível, então sem isto a única
- * forma de saber por qual porta a loja está conectando seria esperar o
- * banco estourar de novo.
- */
-export function comoConectamos(): {
-  host: string | null;
-  porta: number | null;
-  modo: string;
-  limiteDeConexoes: string | null;
-} {
-  try {
-    const u = new URL(process.env.DATABASE_URL ?? '');
-    const porta = u.port ? Number(u.port) : null;
-    return {
-      host: u.hostname || null,
-      porta,
-      modo:
-        porta === 6543
-          ? 'transaction pooler'
-          : porta === 5432 && u.hostname.includes('pooler')
-            ? 'session pooler'
-            : 'conexão direta',
-      limiteDeConexoes: u.searchParams.get('connection_limit'),
-    };
-  } catch {
-    return { host: null, porta: null, modo: 'desconhecido', limiteDeConexoes: null };
-  }
-}
-
 if (!bancoConfigurado) {
   console.error(
     '[banco] DATABASE_URL não está definida. ' +
@@ -98,6 +65,41 @@ function prepararUrl(url: string): string {
     return endereco.toString();
   } catch {
     return url; // URL fora do padrão: usa como veio
+  }
+}
+
+/**
+ * Como o servidor está falando com o banco — sem a senha.
+ *
+ * Serve para conferir de fora que a conexão é a certa. A Vercel não mostra
+ * o valor de uma variável marcada como sensível, então sem isto a única
+ * forma de saber por qual porta a loja está conectando seria esperar o
+ * banco estourar de novo.
+ */
+export function comoConectamos(): {
+  host: string | null;
+  porta: number | null;
+  modo: string;
+  limiteDeConexoes: string | null;
+} {
+  try {
+    // A URL depois do ajuste, e não a que está guardada: é por esta que o
+    // servidor realmente conecta, e é o limite dela que vale.
+    const u = new URL(process.env.VERCEL ? prepararUrl(process.env.DATABASE_URL ?? '') : (process.env.DATABASE_URL ?? ''));
+    const porta = u.port ? Number(u.port) : null;
+    return {
+      host: u.hostname || null,
+      porta,
+      modo:
+        porta === 6543
+          ? 'transaction pooler'
+          : porta === 5432 && u.hostname.includes('pooler')
+            ? 'session pooler'
+            : 'conexão direta',
+      limiteDeConexoes: u.searchParams.get('connection_limit'),
+    };
+  } catch {
+    return { host: null, porta: null, modo: 'desconhecido', limiteDeConexoes: null };
   }
 }
 

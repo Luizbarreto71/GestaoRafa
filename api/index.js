@@ -195,20 +195,6 @@ import { PrismaClient } from "@prisma/client";
 import dotenv from "dotenv";
 dotenv.config();
 var bancoConfigurado = Boolean(process.env.DATABASE_URL);
-function comoConectamos() {
-  try {
-    const u = new URL(process.env.DATABASE_URL ?? "");
-    const porta = u.port ? Number(u.port) : null;
-    return {
-      host: u.hostname || null,
-      porta,
-      modo: porta === 6543 ? "transaction pooler" : porta === 5432 && u.hostname.includes("pooler") ? "session pooler" : "conex\xE3o direta",
-      limiteDeConexoes: u.searchParams.get("connection_limit")
-    };
-  } catch {
-    return { host: null, porta: null, modo: "desconhecido", limiteDeConexoes: null };
-  }
-}
 if (!bancoConfigurado) {
   console.error(
     "[banco] DATABASE_URL n\xE3o est\xE1 definida. Local: copie .env.example para .env. Na Vercel: Settings \u2192 Environment Variables."
@@ -231,6 +217,20 @@ function prepararUrl(url) {
     return endereco.toString();
   } catch {
     return url;
+  }
+}
+function comoConectamos() {
+  try {
+    const u = new URL(process.env.VERCEL ? prepararUrl(process.env.DATABASE_URL ?? "") : process.env.DATABASE_URL ?? "");
+    const porta = u.port ? Number(u.port) : null;
+    return {
+      host: u.hostname || null,
+      porta,
+      modo: porta === 6543 ? "transaction pooler" : porta === 5432 && u.hostname.includes("pooler") ? "session pooler" : "conex\xE3o direta",
+      limiteDeConexoes: u.searchParams.get("connection_limit")
+    };
+  } catch {
+    return { host: null, porta: null, modo: "desconhecido", limiteDeConexoes: null };
   }
 }
 function criarCliente() {
