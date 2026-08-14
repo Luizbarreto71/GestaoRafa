@@ -203,7 +203,8 @@ rotasSeminovos.get(
 
 // -------------------------------------------------------- Compra sem troca
 
-const compraSchema = z.object({
+/** Um aparelho da lista de compra. */
+const aparelhoComprado = z.object({
   modelo: z.string().trim().min(2, 'Informe o modelo do aparelho').max(120),
   marca: z.string().trim().max(60).optional().nullable(),
   armazenamento: z.string().trim().max(20).optional().nullable(),
@@ -219,10 +220,18 @@ const compraSchema = z.object({
   valorPago: z.coerce.number().min(0, 'Informe quanto a loja pagou'),
   /** Por quanto pretende vender. Pode ficar para depois. */
   salePrice: z.coerce.number().min(0).optional(),
-  unitId: z.string().uuid('Escolha a unidade onde o aparelho ficou'),
+  observacoes: z.string().trim().max(2000).optional().nullable(),
+});
+
+const compraSchema = aparelhoComprado.partial().extend({
+  /**
+   * A lista. Sem ela, valem os campos soltos — é como a tela mandava
+   * quando só dava para cadastrar um por vez.
+   */
+  aparelhos: z.array(aparelhoComprado).min(1).max(50).optional(),
+  unitId: z.string().uuid('Escolha a unidade onde os aparelhos ficaram'),
   /** De quem foi comprado, para achar o dono se aparecer problema. */
   vendedor: z.string().trim().max(180).optional().nullable(),
-  observacoes: z.string().trim().max(2000).optional().nullable(),
 });
 
 rotasSeminovos.post(
@@ -231,68 +240,107 @@ rotasSeminovos.post(
   rota(async (req, res) => {
     const dados = validar(compraSchema, req.body);
 
+    const lista = dados.aparelhos?.length
+      ? dados.aparelhos
+      : [
+          {
+            modelo: dados.modelo,
+            marca: dados.marca,
+            armazenamento: dados.armazenamento,
+            cor: dados.cor,
+            imei: dados.imei,
+            valorPago: dados.valorPago ?? 0,
+            salePrice: dados.salePrice,
+            observacoes: dados.observacoes,
+          },
+        ];
+
+    if (!lista[0]?.modelo) throw new AppError('Informe ao menos um aparelho.');
+
+    const comImei = lista.map((a) => a.imei).filter((v): v is string => Boolean(v));
+
     // O mesmo IMEI duas vezes é aparelho cadastrado em duplicidade — e
-    // duplicidade em estoque de usado vira peça fantasma no balanço.
-    if (dados.imei) {
-      const repetido = await db.product.findFirst({
-        where: { imei: dados.imei },
-        select: { name: true },
+    // duplicidade em estoque de usado vira peça fantasma no balanço. Na
+    // lista o deslize é fácil: copia-se a linha e esquece-se de trocar.
+    const repetidoNaLista = comImei.find((imei, i) => comImei.indexOf(imei) !== i);
+    if (repetidoNaLista) {
+      throw new AppError(`O IMEI ${repetidoNaLista} está em dois aparelhos da lista.`);
+    }
+
+    if (comImei.length) {
+      const jaExiste = await db.product.findFirst({
+        where: { imei: { in: comImei } },
+        select: { name: true, imei: true },
       });
-      if (repetido) {
-        throw new AppError(`Esse IMEI já está cadastrado em "${repetido.name}".`);
+      if (jaExiste) {
+        throw new AppError(`O IMEI ${jaExiste.imei} já está cadastrado em "${jaExiste.name}".`);
       }
     }
 
     const unidade = await db.unit.findUnique({ where: { id: dados.unitId }, select: { name: true } });
     if (!unidade) throw new AppError('Unidade não encontrada', 404);
 
-    const produto = await db.$transaction(async (tx) => {
-      const criado = await tx.product.create({
-        data: {
-          name: nomeDoAparelho(dados.modelo, dados.armazenamento),
-          brand: dados.marca ?? null,
-          model: dados.modelo,
-          color: dados.cor ?? null,
-          capacity: dados.armazenamento ?? null,
-          imei: dados.imei || null,
-          categoryId: await categoriaDosSeminovos(tx),
-          costPrice: new Prisma.Decimal(dados.valorPago),
-          salePrice: new Prisma.Decimal(dados.salePrice ?? 0),
-          seminovo: true,
-          seminovoOrigem: dados.vendedor?.trim()
-            ? `Comprado de ${dados.vendedor.trim()}`
-            : 'Compra direta',
-          notes: dados.observacoes ?? null,
-        },
-      });
+    const de = dados.vendedor?.trim();
+    const origem = de ? `Comprado de ${de}` : 'Compra direta';
 
-      await movimentar({
-        produtoId: criado.id,
-        produtoNome: criado.name,
-        unidadeId: dados.unitId,
-        tipo: 'ENTRADA',
-        motivo: 'COMPRA',
-        quantidade: 1,
-        custoUnitario: dados.valorPago,
-        observacao: dados.vendedor?.trim() ? `Comprado de ${dados.vendedor.trim()}` : 'Compra de seminovo',
-        usuarioId: req.usuario!.id,
-        tx,
-      } as never);
+    const criados = await db.$transaction(async (tx) => {
+      const categoriaId = await categoriaDosSeminovos(tx);
+      const feitos: { id: string; name: string }[] = [];
 
-      return criado;
+      for (const a of lista) {
+        const criado = await tx.product.create({
+          data: {
+            name: nomeDoAparelho(a.modelo!, a.armazenamento),
+            brand: a.marca ?? null,
+            model: a.modelo,
+            color: a.cor ?? null,
+            capacity: a.armazenamento ?? null,
+            imei: a.imei || null,
+            categoryId: categoriaId,
+            costPrice: new Prisma.Decimal(a.valorPago ?? 0),
+            salePrice: new Prisma.Decimal(a.salePrice ?? 0),
+            seminovo: true,
+            seminovoOrigem: origem,
+            notes: a.observacoes ?? null,
+          },
+        });
+
+        await movimentar({
+          produtoId: criado.id,
+          produtoNome: criado.name,
+          unidadeId: dados.unitId,
+          tipo: 'ENTRADA',
+          motivo: 'COMPRA',
+          quantidade: 1,
+          custoUnitario: a.valorPago ?? 0,
+          observacao: de ? `Comprado de ${de}` : 'Compra de seminovo',
+          usuarioId: req.usuario!.id,
+          tx,
+        } as never);
+
+        feitos.push({ id: criado.id, name: criado.name });
+      }
+
+      return feitos;
     });
+
+    const total = lista.reduce((s, a) => s + (a.valorPago ?? 0), 0);
 
     await registrarLog({
       acao: 'CRIAR_SEMINOVO',
       entidade: 'Product',
-      id: produto.id,
-      alteracoes: { nome: produto.name, pago: dados.valorPago },
+      id: criados[0]?.id,
+      alteracoes: { aparelhos: criados.length, pago: total },
       req,
     });
 
     res.status(201).json({
-      ...limpar(produto),
-      message: `${produto.name} cadastrado como seminovo na ${unidade.name}.`,
+      criados: criados.length,
+      produtos: criados,
+      message:
+        criados.length === 1
+          ? `${criados[0].name} cadastrado como seminovo na ${unidade.name}.`
+          : `${criados.length} aparelhos cadastrados na ${unidade.name} · R$ ${total.toFixed(2)} investidos.`,
     });
   }),
 );
