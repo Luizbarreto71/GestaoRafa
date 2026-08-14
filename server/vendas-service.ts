@@ -457,6 +457,30 @@ export async function registrarVenda(dados: DadosDaVenda) {
       });
     }
 
+    // Seminovo vendido sai da prateleira.
+    //
+    // Aparelho usado é peça única: quando sai, não volta. Deixá-lo na lista
+    // com saldo zero enche o estoque de item que não existe mais, e na hora
+    // de achar um modelo a pessoa tropeça no que já foi vendido. Produto
+    // novo continua na lista — ali o zero é temporário, o fornecedor
+    // repõe.
+    const seminovosVendidos = await tx.product.findMany({
+      where: {
+        id: { in: [...new Set(itensComCusto.map((i) => i.productId))] },
+        seminovo: true,
+        status: 'EM_ESTOQUE',
+      },
+      select: { id: true, stock: { select: { quantity: true } } },
+    });
+
+    const acabaram = seminovosVendidos
+      .filter((p) => p.stock.reduce((soma, l) => soma + l.quantity, 0) <= 0)
+      .map((p) => p.id);
+
+    if (acabaram.length) {
+      await tx.product.updateMany({ where: { id: { in: acabaram } }, data: { status: 'VENDIDO' } });
+    }
+
     // A troca anotada no balcão vira registro junto com a venda: se a
     // venda falhar, não sobra aparelho fantasma esperando dono.
     if (dados.trocaNova) {

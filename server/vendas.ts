@@ -324,6 +324,18 @@ rotasVendas.delete(
 
     await db.sale.update({ where: { id: venda.id }, data: { status: 'CANCELADA' } });
 
+    // O seminovo volta para a prateleira junto com a peça. Sem isto ele
+    // ficaria escondido da lista de estoque para sempre — devolvido no
+    // saldo, invisível para quem procura.
+    await db.product.updateMany({
+      where: {
+        id: { in: venda.items.map((i) => i.productId).filter((id): id is string => Boolean(id)) },
+        seminovo: true,
+        status: 'VENDIDO',
+      },
+      data: { status: 'EM_ESTOQUE' },
+    });
+
     await registrarLog({
       acao: 'CANCELAR_VENDA',
       entidade: 'Sale',

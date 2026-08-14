@@ -162,7 +162,13 @@ export async function filtrarProdutos(
   // os celulares, não os poucos que ficaram fora das subcategorias.
   if (q.categoryId) cond.push({ categoryId: { in: await comAsFilhas(q.categoryId) } });
   if (q.supplierId) cond.push({ supplierId: q.supplierId });
+  // Vendido some da lista por padrão. Seminovo é peça única: depois que
+  // sai não volta, e continuar na prateleira com saldo zero enche o
+  // estoque de item que não existe mais — na hora de achar um modelo a
+  // pessoa tropeça no que já foi vendido. Quem quiser revê-los pede
+  // status=VENDIDO.
   if (q.status) cond.push({ status: q.status });
+  else cond.push({ status: { not: 'VENDIDO' } });
   if (q.brand) cond.push({ brand: contem(q.brand) });
   if (q.model) cond.push({ model: contem(q.model) });
   // "__sem__" vem da aba "Sem condição" do estoque: é o único jeito de

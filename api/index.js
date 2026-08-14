@@ -2519,6 +2519,7 @@ async function filtrarProdutos(q, unidadeId) {
   if (q.categoryId) cond.push({ categoryId: { in: await comAsFilhas(q.categoryId) } });
   if (q.supplierId) cond.push({ supplierId: q.supplierId });
   if (q.status) cond.push({ status: q.status });
+  else cond.push({ status: { not: "VENDIDO" } });
   if (q.brand) cond.push({ brand: contem(q.brand) });
   if (q.model) cond.push({ model: contem(q.model) });
   if (q.condicao === "__sem__") cond.push({ OR: [{ condicao: null }, { condicao: "" }] });
@@ -5438,6 +5439,18 @@ async function registrarVenda(dados) {
         tx
       });
     }
+    const seminovosVendidos = await tx.product.findMany({
+      where: {
+        id: { in: [...new Set(itensComCusto.map((i) => i.productId))] },
+        seminovo: true,
+        status: "EM_ESTOQUE"
+      },
+      select: { id: true, stock: { select: { quantity: true } } }
+    });
+    const acabaram = seminovosVendidos.filter((p) => p.stock.reduce((soma, l) => soma + l.quantity, 0) <= 0).map((p) => p.id);
+    if (acabaram.length) {
+      await tx.product.updateMany({ where: { id: { in: acabaram } }, data: { status: "VENDIDO" } });
+    }
     if (dados.trocaNova) {
       const troca = await tx.tradeIn.create({
         data: {
@@ -7435,6 +7448,14 @@ rotasVendas.delete(
       });
     }
     await db.sale.update({ where: { id: venda.id }, data: { status: "CANCELADA" } });
+    await db.product.updateMany({
+      where: {
+        id: { in: venda.items.map((i) => i.productId).filter((id) => Boolean(id)) },
+        seminovo: true,
+        status: "VENDIDO"
+      },
+      data: { status: "EM_ESTOQUE" }
+    });
     await registrarLog({
       acao: "CANCELAR_VENDA",
       entidade: "Sale",
