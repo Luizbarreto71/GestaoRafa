@@ -2,7 +2,7 @@ import { PaymentMethod, Prisma } from '@prisma/client';
 import { seminovosDaTroca } from './seminovos';
 import { AppError, naoEncontrado } from './core';
 import { taxaDe, type TaxaDeCartao } from '../shared/taxas';
-import { taxasDoCartao } from './sistema';
+import { taxasDoCartao, unidadeDeVenda } from './sistema';
 import { db } from './db';
 import { disponivel, movimentar } from './estoque';
 import { notificar } from './notificacoes';
@@ -192,6 +192,18 @@ export async function registrarVenda(dados: DadosDaVenda) {
       throw new AppError('Para deixar valor em aberto, informe o telefone de quem vai pagar.');
     }
   }
+
+  /**
+   * A venda sai sempre da unidade configurada.
+   *
+   * A loja vende de um ponto só; as outras unidades são depósito. Aceitar
+   * outra origem aqui — ainda que só o administrador conseguisse pedir —
+   * tiraria peça de um estoque que ninguém confere no balcão, e o saldo da
+   * loja passaria o dia mentindo. Quem precisa da mercadoria aqui usa a
+   * transferência.
+   */
+  const fixa = await unidadeDeVenda();
+  if (fixa) dados = { ...dados, unitId: fixa.id };
 
   // Fora da transação de propósito. Cada consulta aqui dentro é uma ida ao
   // banco, e o relógio da transação corre desde a primeira: com o banco na

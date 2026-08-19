@@ -3,10 +3,9 @@ import { Button } from '@/components/ui/Button';
 import { Input, Select, Textarea } from '@/components/ui/Field';
 import { Modal } from '@/components/ui/Modal';
 import { useToast } from '@/contexts/ToastContext';
-import { useCreateSale } from '@/hooks/queries';
+import { useCreateSale, useUnidadeDeVenda } from '@/hooks/queries';
 import { cn } from '@/lib/cn';
 import { formatCurrency, PAYMENT_OPTIONS, toInputDate } from '@/lib/format';
-import { useAuth } from '@/contexts/AuthContext';
 import { useUnit } from '@/contexts/UnitContext';
 import type { Product } from '@/types';
 import { AlertTriangle, ShoppingCart } from 'lucide-react';
@@ -45,18 +44,14 @@ export function SaleModal({ open, onClose, product }: SaleModalProps) {
   const toast = useToast();
   const createSale = useCreateSale();
   const { unidades } = useUnit();
-  const { user } = useAuth();
 
-  /** Vendedor e gerente só vendem da própria unidade. */
-  const operaveis =
-    user?.role === 'ADMIN' ? unidades : unidades.filter((u) => u.id === user?.unitId);
+  /** A venda sai sempre da unidade configurada — aqui só se mostra qual. */
+  const { data: unidadeDeVenda } = useUnidadeDeVenda();
 
   useEffect(() => {
     if (!open || !product) return;
-    // Já começa na unidade que tem estoque livre, para poupar um clique.
-    const comEstoque = product.stock?.find((s) => (s.available ?? s.quantity) > 0);
     setForm({
-      unitId: comEstoque?.unitId ?? operaveis[0]?.id ?? '',
+      unitId: unidadeDeVenda?.unitId ?? '',
       customerName: '',
       customerPhone: '',
       quantity: '1',
@@ -198,24 +193,22 @@ export function SaleModal({ open, onClose, product }: SaleModalProps) {
           </div>
         </div>
 
-        <Select
-          label="Unidade da venda"
-          required
-          value={form.unitId}
-          onChange={(e) => set('unitId')(e.target.value)}
-          options={operaveis.map((u) => ({
-            value: u.id,
-            label: (() => {
-              const linha = product.stock?.find((s) => s.unitId === u.id);
-              const livre = linha?.available ?? linha?.quantity ?? 0;
-              const reservadas = linha?.reserved ?? 0;
-              return `${u.name} — ${livre} disponível${reservadas ? ` (${reservadas} na loja)` : ''}`;
-            })(),
-          }))}
-          placeholder="Selecione…"
-          error={errors.unitId}
-          hint="De qual loja o produto está saindo"
-        />
+        {/* A loja vende de um ponto só: as outras unidades são depósito.
+            Mostrar em vez de perguntar tira um campo de errar — e vender de
+            um estoque que ninguém confere no balcão faria o saldo da loja
+            mentir o dia inteiro. */}
+        <div>
+          <p className="label-base">Sai do estoque de</p>
+          <p className="flex items-center justify-between gap-2 rounded-lg bg-slate-50 px-3 py-2.5 text-sm dark:bg-navy-800">
+            <span className="font-semibold text-navy-900 dark:text-slate-100">
+              {unidadeDeVenda?.name ?? unidades.find((u) => u.id === form.unitId)?.name ?? 'carregando…'}
+            </span>
+            <span className={cn('text-xs font-semibold', saldoNaUnidade > 0 ? 'text-success' : 'text-danger')}>
+              {saldoNaUnidade} disponível
+            </span>
+          </p>
+          {errors.unitId && <p className="mt-1 text-xs font-medium text-danger">{errors.unitId}</p>}
+        </div>
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Input

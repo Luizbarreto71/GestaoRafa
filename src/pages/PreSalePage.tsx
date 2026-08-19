@@ -10,7 +10,7 @@ import { Modal } from '@/components/ui/Modal';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/contexts/ToastContext';
 import { useUnit } from '@/contexts/UnitContext';
-import { useCriarPreVenda, useDesistirPreVenda, usePreVendas, useTrocas } from '@/hooks/queries';
+import { useCriarPreVenda, useDesistirPreVenda, usePreVendas, useTrocas, useUnidadeDeVenda } from '@/hooks/queries';
 import { cn } from '@/lib/cn';
 import { formatCurrency, formatDateTime, PAYMENT_OPTIONS, PRE_SALE_LABEL } from '@/lib/format';
 import type { ItemVenda, PreSale, PreSaleStatus, Troca } from '@/types';
@@ -203,6 +203,7 @@ const Linha = ({ rotulo, valor }: { rotulo: string; valor: string }) => (
 function FormularioDePreVenda({ aberto, aoFechar }: { aberto: boolean; aoFechar: () => void }) {
   const { user } = useAuth();
   const { unidades } = useUnit();
+  const { data: unidadeDeVenda } = useUnidadeDeVenda();
   const toast = useToast();
   const criar = useCriarPreVenda();
 
@@ -219,7 +220,9 @@ function FormularioDePreVenda({ aberto, aoFechar }: { aberto: boolean; aoFechar:
     notes: '',
   });
 
-  const unidadeEscolhida = form.unitId || unidades[0]?.id || '';
+  // A pré-venda aponta para a mesma unidade de onde a venda vai sair,
+  // senão o vendedor veria o saldo de um estoque e o caixa baixaria de outro.
+  const unidadeEscolhida = unidadeDeVenda?.unitId || form.unitId || unidades[0]?.id || '';
 
   // Só trocas que ainda não estão em outro pedido.
   const { data: trocasLivres } = useTrocas({ livres: 'true' });
@@ -410,13 +413,14 @@ function FormularioDePreVenda({ aberto, aoFechar }: { aberto: boolean; aoFechar:
               value={form.installments}
               onChange={(e) => setForm((f) => ({ ...f, installments: e.target.value }))}
             />
-            <Select
-              label="Unidade"
-              value={unidadeEscolhida}
-              onChange={(e) => setForm((f) => ({ ...f, unitId: e.target.value }))}
-              options={unidades.map((u) => ({ value: u.id, label: u.name }))}
-              hint="De onde o produto sai"
-            />
+            {/* A loja vende de um ponto só: mostrar basta, e escolher seria
+                mais um campo para errar. Muda em Configurações. */}
+            <div>
+              <p className="label-base">Sai do estoque de</p>
+              <p className="flex h-[42px] items-center rounded-lg bg-slate-50 px-3 text-sm font-semibold text-navy-900 dark:bg-navy-800 dark:text-slate-100">
+                {unidadeDeVenda?.name ?? unidades.find((u) => u.id === unidadeEscolhida)?.name ?? 'carregando…'}
+              </p>
+            </div>
           </div>
         </div>
 

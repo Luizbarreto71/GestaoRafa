@@ -5398,6 +5398,8 @@ async function registrarVenda(dados) {
       throw new AppError("Para deixar valor em aberto, informe o telefone de quem vai pagar.");
     }
   }
+  const fixa = await unidadeDeVenda();
+  if (fixa) dados = { ...dados, unitId: fixa.id };
   const [unidade, tabela, turno, vendedorCadastrado] = await Promise.all([
     db.unit.findUnique({ where: { id: dados.unitId } }),
     taxasDoCartao(),
