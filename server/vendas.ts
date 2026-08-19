@@ -211,6 +211,21 @@ const vendaSchema = z.object({
       armazenamento: z.string().trim().max(20).optional().nullable(),
       valorAvaliado: z.coerce.number().min(0.01, 'Informe quanto vale o aparelho do cliente'),
     })
+    // Uma troca pode trazer mais de um aparelho: o cliente às vezes
+    // entrega dois para cobrir a compra. O que abate é a soma.
+    .array()
+    .max(6)
+    .or(
+      z
+        .object({
+          modelo: z.string().trim().min(2, 'Informe o modelo do aparelho').max(120),
+          cor: z.string().trim().max(40).optional().nullable(),
+          armazenamento: z.string().trim().max(20).optional().nullable(),
+          valorAvaliado: z.coerce.number().min(0.01, 'Informe quanto vale o aparelho do cliente'),
+        })
+        // A tela antiga mandava um objeto só: vira lista de um.
+        .transform((t) => [t]),
+    )
     .optional()
     .nullable(),
   /** Vendedor que atendeu, para a comissão. Vazio = o próprio caixa. */

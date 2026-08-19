@@ -72,12 +72,14 @@ export interface DadosDaVenda {
    * vale. O cadastro completo, com IMEI e Anatel, fica para quando o
    * aparelho for para a prateleira.
    */
-  trocaNova?: {
-    modelo: string;
-    cor?: string | null;
-    armazenamento?: string | null;
-    valorAvaliado: number;
-  } | null;
+  trocaNova?:
+    | {
+        modelo: string;
+        cor?: string | null;
+        armazenamento?: string | null;
+        valorAvaliado: number;
+      }[]
+    | null;
   customerName?: string | null;
   customerPhone?: string | null;
   customerDocument?: string | null;
@@ -316,7 +318,12 @@ export async function registrarVenda(dados: DadosDaVenda) {
     // A taxa do crédito vem da tabela lida acima: assim o líquido fica
     // certo mesmo na venda rápida, em que ninguém abre a calculadora.
 
-    const daTroca = new Prisma.Decimal(dados.trocaNova?.valorAvaliado ?? dados.trocaValor ?? 0);
+    // A troca vale a soma dos aparelhos entregues.
+    const daTroca = new Prisma.Decimal(
+      dados.trocaNova?.length
+        ? dados.trocaNova.reduce((s, a) => s + a.valorAvaliado, 0)
+        : (dados.trocaValor ?? 0),
+    );
     // O que o cliente entrega em dinheiro: o resto vem no aparelho.
     const aReceber = total.minus(daTroca);
 
@@ -483,14 +490,21 @@ export async function registrarVenda(dados: DadosDaVenda) {
 
     // A troca anotada no balcão vira registro junto com a venda: se a
     // venda falhar, não sobra aparelho fantasma esperando dono.
-    if (dados.trocaNova) {
+    if (dados.trocaNova?.length) {
+      const entregues = dados.trocaNova;
+      const primeiro = entregues[0];
+
       const troca = await tx.tradeIn.create({
         data: {
           code: await proximoCodigo('troca', 'TR', tx),
           status: 'ACEITA',
-          modelo: dados.trocaNova.modelo,
-          cor: dados.trocaNova.cor ?? null,
-          armazenamento: dados.trocaNova.armazenamento ?? null,
+          // Resumo do negócio; a verdade de cada peça está em `aparelhos`.
+          modelo:
+            entregues.length === 1
+              ? primeiro.modelo
+              : `${primeiro.modelo} + ${entregues.length - 1} aparelho${entregues.length > 2 ? 's' : ''}`,
+          cor: entregues.length === 1 ? (primeiro.cor ?? null) : null,
+          armazenamento: entregues.length === 1 ? (primeiro.armazenamento ?? null) : null,
           valorAvaliado: daTroca,
           valorSaida: total,
           customerName: nome ?? 'Consumidor',
@@ -500,18 +514,16 @@ export async function registrarVenda(dados: DadosDaVenda) {
           unitId: dados.unitId,
           saleId: venda.id,
           defeitos: [],
-          // A peça também vira linha da troca: é dela que nasce o seminovo.
+          // Cada peça vira uma linha: é dela que nasce o seminovo.
           aparelhos: {
-            create: [
-              {
-                ordem: 0,
-                modelo: dados.trocaNova.modelo,
-                cor: dados.trocaNova.cor ?? null,
-                armazenamento: dados.trocaNova.armazenamento ?? null,
-                valorAvaliado: daTroca,
-                defeitos: [],
-              },
-            ],
+            create: entregues.map((a, i) => ({
+              ordem: i,
+              modelo: a.modelo,
+              cor: a.cor ?? null,
+              armazenamento: a.armazenamento ?? null,
+              valorAvaliado: new Prisma.Decimal(a.valorAvaliado),
+              defeitos: [],
+            })),
           },
         },
       });

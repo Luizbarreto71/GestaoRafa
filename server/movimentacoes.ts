@@ -183,10 +183,21 @@ rotasMovimentacoes.post(
 // ------------------------------------------------------------- Transferência
 
 const transferenciaSchema = z.object({
-  productId: z.string().uuid('Selecione o produto'),
+  /** Um por produto. A tela antiga mandava um só, nos campos soltos. */
+  itens: z
+    .array(
+      z.object({
+        productId: z.string().uuid('Selecione o produto'),
+        quantity: z.coerce.number().int().min(1, 'A quantidade deve ser no mínimo 1'),
+      }),
+    )
+    .min(1)
+    .max(50)
+    .optional(),
+  productId: z.string().uuid('Selecione o produto').optional(),
+  quantity: z.coerce.number().int().min(1, 'A quantidade deve ser no mínimo 1').optional(),
   originUnitId: z.string().uuid('Selecione a unidade de origem'),
   destinationUnitId: z.string().uuid('Selecione a unidade de destino'),
-  quantity: z.coerce.number().int().min(1, 'A quantidade deve ser no mínimo 1'),
   date: z.coerce.date().optional(),
   notes: z.string().trim().max(1000).optional().nullable(),
 });
@@ -199,29 +210,57 @@ rotasMovimentacoes.post(
     // Quem não é admin só transfere a partir da própria unidade.
     exigirAcessoNaUnidade(req.usuario, dados.originUnitId);
 
-    const r = await transferir({
-      produtoId: dados.productId,
-      origemId: dados.originUnitId,
-      destinoId: dados.destinationUnitId,
-      quantidade: dados.quantity,
-      observacao: dados.notes,
-      usuarioId: req.usuario?.id,
-      usuarioNome: req.usuario?.nome,
-    });
+    const itens = dados.itens?.length
+      ? dados.itens
+      : dados.productId
+        ? [{ productId: dados.productId, quantity: dados.quantity ?? 1 }]
+        : [];
 
-    await registrarLog({
-      acao: 'TRANSFERENCIA',
-      entidade: 'StockTransfer',
-      id: r.transferencia.id,
-      req,
-    });
+    if (!itens.length) throw new AppError('Escolha ao menos um produto para transferir.');
+
+    // O mesmo produto duas vezes na mesma remessa soma sem ninguém ver, e
+    // o saldo de origem é conferido linha por linha — passaria mais do que
+    // existe.
+    const ids = itens.map((i) => i.productId);
+    const repetido = ids.find((id, i) => ids.indexOf(id) !== i);
+    if (repetido) throw new AppError('O mesmo produto foi escolhido duas vezes. Junte na mesma linha.');
+
+    const feitas: Awaited<ReturnType<typeof transferir>>[] = [];
+    for (const item of itens) {
+      feitas.push(
+        await transferir({
+          produtoId: item.productId,
+          origemId: dados.originUnitId,
+          destinoId: dados.destinationUnitId,
+          quantidade: item.quantity,
+          observacao: dados.notes,
+          usuarioId: req.usuario?.id,
+          usuarioNome: req.usuario?.nome,
+        }),
+      );
+    }
+
+    for (const r of feitas) {
+      await registrarLog({
+        acao: 'TRANSFERENCIA',
+        entidade: 'StockTransfer',
+        id: r.transferencia.id,
+        req,
+      });
+    }
+
+    const primeira = feitas[0];
+    const pecas = itens.reduce((s, i) => s + i.quantity, 0);
 
     res.status(201).json(
       limpar({
-        transfer: r.transferencia,
+        transfer: primeira.transferencia,
+        transfers: feitas.map((r) => r.transferencia),
         message:
-          `${dados.quantity} un. de ${r.produto.name} transferidas da ${r.origem.name} para a ${r.destino.name}. ` +
-          `${r.origem.name}: ${r.saida.antes} → ${r.saida.depois} · ${r.destino.name}: ${r.entrada.antes} → ${r.entrada.depois}`,
+          feitas.length === 1
+            ? `${itens[0].quantity} un. de ${primeira.produto.name} transferidas da ${primeira.origem.name} para a ${primeira.destino.name}. ` +
+              `${primeira.origem.name}: ${primeira.saida.antes} → ${primeira.saida.depois} · ${primeira.destino.name}: ${primeira.entrada.antes} → ${primeira.entrada.depois}`
+            : `${feitas.length} produtos · ${pecas} peça(s) transferidas da ${primeira.origem.name} para a ${primeira.destino.name}.`,
       }),
     );
   }),

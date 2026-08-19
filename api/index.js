@@ -2054,10 +2054,17 @@ rotasMovimentacoes.post(
   })
 );
 var transferenciaSchema = z4.object({
-  productId: z4.string().uuid("Selecione o produto"),
+  /** Um por produto. A tela antiga mandava um só, nos campos soltos. */
+  itens: z4.array(
+    z4.object({
+      productId: z4.string().uuid("Selecione o produto"),
+      quantity: z4.coerce.number().int().min(1, "A quantidade deve ser no m\xEDnimo 1")
+    })
+  ).min(1).max(50).optional(),
+  productId: z4.string().uuid("Selecione o produto").optional(),
+  quantity: z4.coerce.number().int().min(1, "A quantidade deve ser no m\xEDnimo 1").optional(),
   originUnitId: z4.string().uuid("Selecione a unidade de origem"),
   destinationUnitId: z4.string().uuid("Selecione a unidade de destino"),
-  quantity: z4.coerce.number().int().min(1, "A quantidade deve ser no m\xEDnimo 1"),
   date: z4.coerce.date().optional(),
   notes: z4.string().trim().max(1e3).optional().nullable()
 });
@@ -2067,25 +2074,40 @@ rotasMovimentacoes.post(
   rota(async (req, res) => {
     const dados = validar(transferenciaSchema, req.body);
     exigirAcessoNaUnidade(req.usuario, dados.originUnitId);
-    const r = await transferir({
-      produtoId: dados.productId,
-      origemId: dados.originUnitId,
-      destinoId: dados.destinationUnitId,
-      quantidade: dados.quantity,
-      observacao: dados.notes,
-      usuarioId: req.usuario?.id,
-      usuarioNome: req.usuario?.nome
-    });
-    await registrarLog({
-      acao: "TRANSFERENCIA",
-      entidade: "StockTransfer",
-      id: r.transferencia.id,
-      req
-    });
+    const itens = dados.itens?.length ? dados.itens : dados.productId ? [{ productId: dados.productId, quantity: dados.quantity ?? 1 }] : [];
+    if (!itens.length) throw new AppError("Escolha ao menos um produto para transferir.");
+    const ids = itens.map((i) => i.productId);
+    const repetido = ids.find((id, i) => ids.indexOf(id) !== i);
+    if (repetido) throw new AppError("O mesmo produto foi escolhido duas vezes. Junte na mesma linha.");
+    const feitas = [];
+    for (const item of itens) {
+      feitas.push(
+        await transferir({
+          produtoId: item.productId,
+          origemId: dados.originUnitId,
+          destinoId: dados.destinationUnitId,
+          quantidade: item.quantity,
+          observacao: dados.notes,
+          usuarioId: req.usuario?.id,
+          usuarioNome: req.usuario?.nome
+        })
+      );
+    }
+    for (const r of feitas) {
+      await registrarLog({
+        acao: "TRANSFERENCIA",
+        entidade: "StockTransfer",
+        id: r.transferencia.id,
+        req
+      });
+    }
+    const primeira = feitas[0];
+    const pecas = itens.reduce((s, i) => s + i.quantity, 0);
     res.status(201).json(
       limpar({
-        transfer: r.transferencia,
-        message: `${dados.quantity} un. de ${r.produto.name} transferidas da ${r.origem.name} para a ${r.destino.name}. ${r.origem.name}: ${r.saida.antes} \u2192 ${r.saida.depois} \xB7 ${r.destino.name}: ${r.entrada.antes} \u2192 ${r.entrada.depois}`
+        transfer: primeira.transferencia,
+        transfers: feitas.map((r) => r.transferencia),
+        message: feitas.length === 1 ? `${itens[0].quantity} un. de ${primeira.produto.name} transferidas da ${primeira.origem.name} para a ${primeira.destino.name}. ${primeira.origem.name}: ${primeira.saida.antes} \u2192 ${primeira.saida.depois} \xB7 ${primeira.destino.name}: ${primeira.entrada.antes} \u2192 ${primeira.entrada.depois}` : `${feitas.length} produtos \xB7 ${pecas} pe\xE7a(s) transferidas da ${primeira.origem.name} para a ${primeira.destino.name}.`
       })
     );
   })
@@ -5320,7 +5342,9 @@ async function registrarVenda(dados) {
       (soma, i) => soma.add(i.costPrice.mul(i.quantity)),
       new Prisma4.Decimal(0)
     );
-    const daTroca = new Prisma4.Decimal(dados.trocaNova?.valorAvaliado ?? dados.trocaValor ?? 0);
+    const daTroca = new Prisma4.Decimal(
+      dados.trocaNova?.length ? dados.trocaNova.reduce((s, a) => s + a.valorAvaliado, 0) : dados.trocaValor ?? 0
+    );
     const aReceber = total.minus(daTroca);
     const emDinheiro = dados.pagamentos?.length ? dados.pagamentos.map((p) => ({
       method: p.method,
@@ -5451,14 +5475,17 @@ async function registrarVenda(dados) {
     if (acabaram.length) {
       await tx.product.updateMany({ where: { id: { in: acabaram } }, data: { status: "VENDIDO" } });
     }
-    if (dados.trocaNova) {
+    if (dados.trocaNova?.length) {
+      const entregues = dados.trocaNova;
+      const primeiro = entregues[0];
       const troca = await tx.tradeIn.create({
         data: {
           code: await proximoCodigo("troca", "TR", tx),
           status: "ACEITA",
-          modelo: dados.trocaNova.modelo,
-          cor: dados.trocaNova.cor ?? null,
-          armazenamento: dados.trocaNova.armazenamento ?? null,
+          // Resumo do negócio; a verdade de cada peça está em `aparelhos`.
+          modelo: entregues.length === 1 ? primeiro.modelo : `${primeiro.modelo} + ${entregues.length - 1} aparelho${entregues.length > 2 ? "s" : ""}`,
+          cor: entregues.length === 1 ? primeiro.cor ?? null : null,
+          armazenamento: entregues.length === 1 ? primeiro.armazenamento ?? null : null,
           valorAvaliado: daTroca,
           valorSaida: total,
           customerName: nome ?? "Consumidor",
@@ -5468,18 +5495,16 @@ async function registrarVenda(dados) {
           unitId: dados.unitId,
           saleId: venda.id,
           defeitos: [],
-          // A peça também vira linha da troca: é dela que nasce o seminovo.
+          // Cada peça vira uma linha: é dela que nasce o seminovo.
           aparelhos: {
-            create: [
-              {
-                ordem: 0,
-                modelo: dados.trocaNova.modelo,
-                cor: dados.trocaNova.cor ?? null,
-                armazenamento: dados.trocaNova.armazenamento ?? null,
-                valorAvaliado: daTroca,
-                defeitos: []
-              }
-            ]
+            create: entregues.map((a, i) => ({
+              ordem: i,
+              modelo: a.modelo,
+              cor: a.cor ?? null,
+              armazenamento: a.armazenamento ?? null,
+              valorAvaliado: new Prisma4.Decimal(a.valorAvaliado),
+              defeitos: []
+            }))
           }
         }
       });
@@ -7360,7 +7385,14 @@ var vendaSchema = z15.object({
     cor: z15.string().trim().max(40).optional().nullable(),
     armazenamento: z15.string().trim().max(20).optional().nullable(),
     valorAvaliado: z15.coerce.number().min(0.01, "Informe quanto vale o aparelho do cliente")
-  }).optional().nullable(),
+  }).array().max(6).or(
+    z15.object({
+      modelo: z15.string().trim().min(2, "Informe o modelo do aparelho").max(120),
+      cor: z15.string().trim().max(40).optional().nullable(),
+      armazenamento: z15.string().trim().max(20).optional().nullable(),
+      valorAvaliado: z15.coerce.number().min(0.01, "Informe quanto vale o aparelho do cliente")
+    }).transform((t) => [t])
+  ).optional().nullable(),
   /** Vendedor que atendeu, para a comissão. Vazio = o próprio caixa. */
   sellerId: z15.string().uuid().optional().nullable(),
   /**

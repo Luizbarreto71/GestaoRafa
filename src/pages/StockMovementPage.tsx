@@ -29,6 +29,7 @@ import {
   Package,
   Search,
   ShieldCheck,
+  Trash2,
 } from 'lucide-react';
 import { useMemo, useState, type FormEvent } from 'react';
 
@@ -463,12 +464,14 @@ function FormularioSaida() {
 
 // ------------------------------------------------------------ Transferência
 
+/** Um produto escolhido para a remessa. */
+type ItemDaRemessa = { produto: Product; quantidade: string };
+
 function FormularioTransferencia() {
-  const [produto, setProduto] = useState<Product | null>(null);
+  const [itens, setItens] = useState<ItemDaRemessa[]>([]);
   const [form, setForm] = useState({
     originUnitId: '',
     destinationUnitId: '',
-    quantity: '1',
     date: toInputDate(new Date()),
     notes: '',
   });
@@ -480,27 +483,48 @@ function FormularioTransferencia() {
 
   const origem = form.originUnitId || operaveis[0]?.id || '';
   const destino = form.destinationUnitId;
-  const saldoOrigem = produto?.stock?.find((s) => s.unitId === origem)?.quantity ?? 0;
-  const saldoDestino = produto?.stock?.find((s) => s.unitId === destino)?.quantity ?? 0;
-  const quantidade = Number(form.quantity) || 0;
+
+  const saldoNaOrigem = (p: Product) => p.stock?.find((s) => s.unitId === origem)?.quantity ?? 0;
+  const pecas = itens.reduce((s, i) => s + (Number(i.quantidade) || 0), 0);
+
+  /** O que impede a remessa de sair, ou nada. */
+  const problema = (() => {
+    if (!itens.length) return null;
+    for (const i of itens) {
+      const qtd = Number(i.quantidade) || 0;
+      if (qtd < 1) return `Informe a quantidade de ${i.produto.name}.`;
+      if (qtd > saldoNaOrigem(i.produto)) {
+        return `${i.produto.name}: só há ${saldoNaOrigem(i.produto)} un. na origem.`;
+      }
+    }
+    return null;
+  })();
+
+  function acrescentar(p: Product | null) {
+    if (!p) return;
+    if (itens.some((i) => i.produto.id === p.id)) {
+      return toast.warning('Esse produto já está na remessa', 'Ajuste a quantidade na linha dele.');
+    }
+    setItens((atual) => [...atual, { produto: p, quantidade: '1' }]);
+  }
 
   async function enviar(e: FormEvent) {
     e.preventDefault();
-    if (!produto) return toast.warning('Escolha o produto');
+    if (!itens.length) return toast.warning('Escolha ao menos um produto');
     if (!destino) return toast.warning('Escolha a unidade de destino');
     if (origem === destino) return toast.warning('Origem e destino precisam ser diferentes');
+    if (problema) return toast.warning('Confira a remessa', problema);
 
     try {
       const r = await transferir.mutateAsync({
-        productId: produto.id,
         originUnitId: origem,
         destinationUnitId: destino,
-        quantity: quantidade,
+        itens: itens.map((i) => ({ productId: i.produto.id, quantity: Number(i.quantidade) || 0 })),
         notes: form.notes.trim() || null,
       });
       toast.success('Transferência concluída', r.message);
-      setProduto(null);
-      setForm((f) => ({ ...f, quantity: '1', notes: '' }));
+      setItens([]);
+      setForm((f) => ({ ...f, notes: '' }));
     } catch (erro) {
       toast.error('Não foi possível transferir', erro instanceof Error ? erro.message : undefined);
     }
@@ -510,20 +534,17 @@ function FormularioTransferencia() {
     <Card>
       <CardHeader
         title="🔄 Transferir estoque"
-        subtitle="O produto sai de uma unidade e entra na outra na mesma hora"
+        subtitle="Escolha o que vai na remessa: sai de uma unidade e entra na outra na mesma hora"
       />
       <CardBody>
         <form onSubmit={enviar} className="space-y-4">
-          <EscolherProduto produto={produto} aoEscolher={setProduto} />
-
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Select
               label="De (origem)"
               required
               value={origem}
               onChange={(e) => setForm((f) => ({ ...f, originUnitId: e.target.value }))}
               options={operaveis.map((u) => ({ value: u.id, label: u.name }))}
-              hint={produto ? `Disponível: ${saldoOrigem}` : undefined}
             />
             <Select
               label="Para (destino)"
@@ -533,34 +554,86 @@ function FormularioTransferencia() {
               options={unidades.filter((u) => u.id !== origem).map((u) => ({ value: u.id, label: u.name }))}
               placeholder="Selecione…"
             />
-            <Input
-              label="Quantidade"
-              required
-              type="number"
-              min={1}
-              max={saldoOrigem || undefined}
-              value={form.quantity}
-              onChange={(e) => setForm((f) => ({ ...f, quantity: e.target.value }))}
-              error={produto && quantidade > saldoOrigem ? `Só há ${saldoOrigem} un. na origem` : undefined}
-            />
           </div>
 
-          {/* Prévia do resultado, para conferir antes de confirmar */}
-          {produto && destino && quantidade > 0 && quantidade <= saldoOrigem && (
-            <div className="flex flex-wrap items-center gap-3 rounded-lg border border-accent/25 bg-accent/5 px-4 py-3 text-sm">
+          {/* A busca não some depois de escolher: quem manda cinco aparelhos
+              escolhe um atrás do outro. */}
+          <EscolherProduto produto={null} aoEscolher={acrescentar} />
+
+          {itens.length > 0 && (
+            <div className="overflow-hidden rounded-lg border border-slate-200 dark:border-navy-700">
+              <div className="flex items-center justify-between bg-slate-50 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:bg-navy-800">
+                <span>
+                  {itens.length} produto(s) · {pecas} peça(s)
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setItens([])}
+                  className="font-semibold text-danger hover:underline"
+                >
+                  Limpar
+                </button>
+              </div>
+
+              {itens.map((item, i) => {
+                const saldo = saldoNaOrigem(item.produto);
+                const qtd = Number(item.quantidade) || 0;
+                const demais = qtd > saldo;
+
+                return (
+                  <div
+                    key={item.produto.id}
+                    className="flex flex-wrap items-center gap-3 border-t border-slate-100 px-3 py-2.5 dark:border-navy-800"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-semibold text-navy-900 dark:text-slate-100">
+                        {item.produto.name}
+                      </p>
+                      <p className={cn('text-xs', demais ? 'font-semibold text-danger' : 'text-slate-500')}>
+                        {demais ? `Só há ${saldo} un. na origem` : `Disponível na origem: ${saldo}`}
+                      </p>
+                    </div>
+
+                    <input
+                      type="number"
+                      min={1}
+                      max={saldo || undefined}
+                      value={item.quantidade}
+                      onChange={(e) =>
+                        setItens((atual) =>
+                          atual.map((x, n) => (n === i ? { ...x, quantidade: e.target.value } : x)),
+                        )
+                      }
+                      aria-label={`Quantidade de ${item.produto.name}`}
+                      className={cn(
+                        'h-10 w-20 rounded-lg border px-2 text-center text-sm dark:bg-navy-900',
+                        demais ? 'border-danger' : 'border-slate-200 dark:border-navy-700',
+                      )}
+                    />
+
+                    <button
+                      type="button"
+                      onClick={() => setItens((atual) => atual.filter((_, n) => n !== i))}
+                      className="rounded-lg p-2 text-danger transition hover:bg-danger-bg dark:hover:bg-danger/15"
+                      aria-label={`Tirar ${item.produto.name} da remessa`}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {itens.length > 0 && destino && !problema && (
+            <div className="flex flex-wrap items-center gap-2 rounded-lg border border-accent/25 bg-accent/5 px-4 py-3 text-sm">
               <span className="font-semibold text-navy-900 dark:text-slate-100">Depois de confirmar:</span>
               <span className="text-slate-600 dark:text-slate-400">
-                {unidades.find((u) => u.id === origem)?.name}:{' '}
-                <strong className="text-danger">
-                  {saldoOrigem} → {saldoOrigem - quantidade}
-                </strong>
+                {pecas} peça(s) saem da {unidades.find((u) => u.id === origem)?.name}
               </span>
               <ArrowLeftRight className="h-4 w-4 text-accent" />
               <span className="text-slate-600 dark:text-slate-400">
-                {unidades.find((u) => u.id === destino)?.name}:{' '}
-                <strong className="text-success">
-                  {saldoDestino} → {saldoDestino + quantidade}
-                </strong>
+                entram na {unidades.find((u) => u.id === destino)?.name}
               </span>
             </div>
           )}
@@ -584,9 +657,10 @@ function FormularioTransferencia() {
           <Button
             type="submit"
             loading={transferir.isPending}
+            disabled={!itens.length || Boolean(problema)}
             icon={<ArrowLeftRight className="h-4 w-4" />}
           >
-            Confirmar transferência
+            {itens.length > 1 ? `Transferir ${itens.length} produtos` : 'Confirmar transferência'}
           </Button>
         </form>
       </CardBody>

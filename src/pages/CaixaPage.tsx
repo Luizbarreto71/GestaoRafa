@@ -10,6 +10,7 @@ import { PedirChave, type AbaixoDoMinimo } from '@/components/vendas/PedirChave'
 import { ReciboDaVenda } from '@/components/vendas/ReciboDaVenda';
 import {
   TrocaNoBalcao,
+  totalDaTroca,
   trocaParaApi,
   trocaVazia,
   type TrocaDeBalcao,
@@ -680,7 +681,7 @@ function VendaDireta() {
   const unidade = unidadeDeVenda?.unitId ?? '';
   const totalDosProdutos = totalDosItens(itens);
   // O aparelho do cliente é forma de pagamento: o que sobra é o que ele paga.
-  const daTroca = comTroca ? Number(troca.valorAvaliado) || 0 : 0;
+  const daTroca = comTroca ? totalDaTroca(troca) : 0;
   const total = Math.max(0, totalDosProdutos - daTroca);
 
   /**
@@ -727,7 +728,22 @@ function VendaDireta() {
     }
 
     if (comTroca) {
-      if (!troca.modelo.trim()) return toast.warning('Informe o modelo do aparelho da troca');
+      // Aponta qual linha está incompleta: com três aparelhos na tela,
+      // "informe o modelo" sem dizer qual manda a caixa procurar.
+      const semModelo = troca.findIndex((a) => !a.modelo.trim());
+      if (semModelo >= 0) {
+        return toast.warning(
+          troca.length > 1 ? `Aparelho ${semModelo + 1} da troca` : 'Troca',
+          'Informe o modelo do aparelho.',
+        );
+      }
+      const semValor = troca.findIndex((a) => !(Number(a.valorAvaliado) || 0));
+      if (semValor >= 0) {
+        return toast.warning(
+          troca.length > 1 ? `Aparelho ${semValor + 1}: ${troca[semValor].modelo}` : 'Troca',
+          'Informe quanto vale o aparelho do cliente.',
+        );
+      }
       if (daTroca <= 0) return toast.warning('Informe quanto vale o aparelho do cliente');
       if (daTroca > totalDosProdutos) {
         return toast.warning(

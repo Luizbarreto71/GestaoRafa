@@ -2,42 +2,54 @@ import { Input } from '@/components/ui/Field';
 import { cn } from '@/lib/cn';
 import { formatCurrency } from '@/lib/format';
 import { ARMAZENAMENTOS } from '@shared/trocas';
-import { Repeat2, X } from 'lucide-react';
+import { Plus, Repeat2, Trash2, X } from 'lucide-react';
 
-export type TrocaDeBalcao = {
+/** Um aparelho recebido na troca, como a caixa anota. */
+export type AparelhoDeBalcao = {
   modelo: string;
   cor: string;
   armazenamento: string;
   valorAvaliado: string;
 };
 
-export const trocaVazia = (): TrocaDeBalcao => ({
+/** A troca inteira: o cliente pode entregar mais de um aparelho. */
+export type TrocaDeBalcao = AparelhoDeBalcao[];
+
+export const aparelhoVazio = (): AparelhoDeBalcao => ({
   modelo: '',
   cor: '',
   armazenamento: '',
   valorAvaliado: '',
 });
 
+export const trocaVazia = (): TrocaDeBalcao => [aparelhoVazio()];
+
+/** Quanto a troca abate da compra. */
+export const totalDaTroca = (t: TrocaDeBalcao) =>
+  t.reduce((soma, a) => soma + (Number(a.valorAvaliado) || 0), 0);
+
 /** O que a API espera. Null quando não há aparelho na negociação. */
 export function trocaParaApi(ligada: boolean, t: TrocaDeBalcao) {
-  const valor = Number(t.valorAvaliado) || 0;
-  if (!ligada || !t.modelo.trim() || valor <= 0) return null;
+  if (!ligada) return null;
 
-  return {
-    modelo: t.modelo.trim(),
-    cor: t.cor.trim() || null,
-    armazenamento: t.armazenamento.trim() || null,
-    valorAvaliado: valor,
-  };
+  const validos = t.filter((a) => a.modelo.trim() && (Number(a.valorAvaliado) || 0) > 0);
+  if (!validos.length) return null;
+
+  return validos.map((a) => ({
+    modelo: a.modelo.trim(),
+    cor: a.cor.trim() || null,
+    armazenamento: a.armazenamento.trim() || null,
+    valorAvaliado: Number(a.valorAvaliado) || 0,
+  }));
 }
 
 /**
- * Aparelho recebido como parte do pagamento, anotado no balcão.
+ * Aparelhos recebidos como parte do pagamento, anotados no balcão.
  *
  * Bem mais curto que a avaliação do vendedor: com o cliente na frente e
- * fila atrás, a caixa anota o que identifica o aparelho e quanto vale. O
- * IMEI, a consulta da Anatel e as fotos ficam para o cadastro no estoque —
- * cobrar isso aqui travaria o caixa.
+ * fila atrás, a caixa anota o que identifica cada aparelho e quanto vale.
+ * O IMEI, a consulta da Anatel e as fotos ficam para o cadastro no estoque
+ * — cobrar isso aqui travaria o caixa.
  */
 export function TrocaNoBalcao({
   ligada,
@@ -52,12 +64,12 @@ export function TrocaNoBalcao({
   aoMudar: (t: TrocaDeBalcao) => void;
   totalDosProdutos: number;
 }) {
-  const avaliado = Number(troca.valorAvaliado) || 0;
+  const avaliado = totalDaTroca(troca);
   const aPagar = Math.max(0, totalDosProdutos - avaliado);
   const passou = avaliado > totalDosProdutos;
 
-  const alterar = (campo: keyof TrocaDeBalcao, valor: string) =>
-    aoMudar({ ...troca, [campo]: valor });
+  const alterar = (i: number, campo: keyof AparelhoDeBalcao, valor: string) =>
+    aoMudar(troca.map((a, n) => (n === i ? { ...a, [campo]: valor } : a)));
 
   if (!ligada) {
     return (
@@ -77,7 +89,7 @@ export function TrocaNoBalcao({
       <div className="mb-2 flex items-center justify-between">
         <p className="flex items-center gap-1.5 text-sm font-bold text-navy-900 dark:text-slate-100">
           <Repeat2 className="h-4 w-4 text-accent" />
-          Aparelho na troca
+          {troca.length === 1 ? 'Aparelho na troca' : `${troca.length} aparelhos na troca`}
         </p>
         <button
           type="button"
@@ -92,48 +104,88 @@ export function TrocaNoBalcao({
         </button>
       </div>
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
-        <Input
-          label="Modelo"
-          required
-          value={troca.modelo}
-          onChange={(e) => alterar('modelo', e.target.value)}
-          placeholder="iPhone 12, Redmi Note 13…"
-          wrapperClassName="sm:col-span-2"
-        />
-        <div>
-          <Input
-            label="GB"
-            value={troca.armazenamento}
-            onChange={(e) => alterar('armazenamento', e.target.value)}
-            placeholder="128GB"
-            list="gigas-balcao"
-          />
-          <datalist id="gigas-balcao">
-            {ARMAZENAMENTOS.map((g) => (
-              <option key={g} value={g} />
-            ))}
-          </datalist>
-        </div>
-        <Input
-          label="Cor"
-          value={troca.cor}
-          onChange={(e) => alterar('cor', e.target.value)}
-          placeholder="Preto"
-        />
-      </div>
+      <div className="space-y-2">
+        {troca.map((aparelho, i) => (
+          <div
+            key={i}
+            className={cn(
+              troca.length > 1 && 'rounded-lg border border-accent/30 bg-white/60 p-2.5 dark:bg-navy-900/40',
+            )}
+          >
+            {troca.length > 1 && (
+              <div className="mb-1.5 flex items-center justify-between">
+                <span className="text-xs font-bold text-slate-400">{i + 1}</span>
+                <button
+                  type="button"
+                  onClick={() => aoMudar(troca.filter((_, n) => n !== i))}
+                  className="rounded p-1 text-danger transition hover:bg-danger-bg dark:hover:bg-danger/15"
+                  aria-label={`Tirar o aparelho ${i + 1}`}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            )}
 
-      <div className="mt-3">
-        <Input
-          label="Quanto vale o aparelho dele"
-          type="number"
-          min={0}
-          step="0.01"
-          required
-          value={troca.valorAvaliado}
-          onChange={(e) => alterar('valorAvaliado', e.target.value)}
-          hint="Vira forma de pagamento — o cliente paga só a diferença"
-        />
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
+              <Input
+                label="Modelo"
+                required
+                value={aparelho.modelo}
+                onChange={(e) => alterar(i, 'modelo', e.target.value)}
+                placeholder="iPhone 12, Redmi Note 13…"
+                wrapperClassName="sm:col-span-2"
+                autoFocus={i > 0}
+              />
+              <div>
+                <Input
+                  label="GB"
+                  value={aparelho.armazenamento}
+                  onChange={(e) => alterar(i, 'armazenamento', e.target.value)}
+                  placeholder="128GB"
+                  list="gigas-balcao"
+                />
+              </div>
+              <Input
+                label="Cor"
+                value={aparelho.cor}
+                onChange={(e) => alterar(i, 'cor', e.target.value)}
+                placeholder="Preto"
+              />
+            </div>
+
+            <div className="mt-2">
+              <Input
+                label="Quanto vale o aparelho dele"
+                type="number"
+                min={0}
+                step="0.01"
+                required
+                value={aparelho.valorAvaliado}
+                onChange={(e) => alterar(i, 'valorAvaliado', e.target.value)}
+                hint={troca.length === 1 ? 'Vira forma de pagamento — o cliente paga só a diferença' : undefined}
+              />
+            </div>
+          </div>
+        ))}
+
+        <datalist id="gigas-balcao">
+          {ARMAZENAMENTOS.map((g) => (
+            <option key={g} value={g} />
+          ))}
+        </datalist>
+
+        {/* Até seis: mais que isso não é troca de balcão, é compra de lote,
+            e essa tem caminho próprio pela aba Seminovos. */}
+        {troca.length < 6 && (
+          <button
+            type="button"
+            onClick={() => aoMudar([...troca, aparelhoVazio()])}
+            className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-accent/50 px-3 py-2 text-sm font-semibold text-accent transition hover:bg-accent/10"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Ele deixou mais um aparelho
+          </button>
+        )}
       </div>
 
       {/* A conta que o cliente quer ouvir, feita à vista de todos. */}
@@ -148,7 +200,9 @@ export function TrocaNoBalcao({
           <span>{formatCurrency(totalDosProdutos)}</span>
         </p>
         <p className={cn('mt-1 flex justify-between text-sm', passou && 'text-warning')}>
-          <span className={passou ? '' : 'text-slate-300'}>Troca do cliente</span>
+          <span className={passou ? '' : 'text-slate-300'}>
+            {troca.length === 1 ? 'Troca do cliente' : `Troca do cliente · ${troca.length} aparelhos`}
+          </span>
           <span className={passou ? '' : 'text-success-soft'}>− {formatCurrency(avaliado)}</span>
         </p>
         <p
