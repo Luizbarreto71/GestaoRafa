@@ -476,10 +476,13 @@ function FormularioTransferencia() {
     notes: '',
   });
 
+  const [levandoTudo, setLevandoTudo] = useState(false);
+
   const toast = useToast();
   const { unidades } = useUnit();
   const operaveis = useUnidadesOperaveis();
   const transferir = useMovimentarEstoque('transferir');
+  const transferirTudo = useMovimentarEstoque('transferirTudo');
 
   const origem = form.originUnitId || operaveis[0]?.id || '';
   const destino = form.destinationUnitId;
@@ -559,6 +562,21 @@ function FormularioTransferencia() {
           {/* A busca não some depois de escolher: quem manda cinco aparelhos
               escolhe um atrás do outro. */}
           <EscolherProduto produto={null} aoEscolher={acrescentar} />
+
+          {/* Esvaziar uma unidade inteira é rotina quando a mercadoria fica
+              no escritório e vai para a loja. Escolher sessenta produtos um
+              a um para isso seria trabalho de digitação, não de estoque. */}
+          {destino && origem !== destino && (
+            <button
+              type="button"
+              onClick={() => setLevandoTudo(true)}
+              className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-600 transition hover:border-accent hover:text-accent dark:border-navy-600 dark:text-slate-400"
+            >
+              <ArrowLeftRight className="h-4 w-4" />
+              Levar TUDO da {unidades.find((u) => u.id === origem)?.name} para a{' '}
+              {unidades.find((u) => u.id === destino)?.name}
+            </button>
+          )}
 
           {itens.length > 0 && (
             <div className="overflow-hidden rounded-lg border border-slate-200 dark:border-navy-700">
@@ -664,6 +682,34 @@ function FormularioTransferencia() {
           </Button>
         </form>
       </CardBody>
+
+      <ConfirmDialog
+        open={levandoTudo}
+        title="Levar tudo para a outra unidade"
+        message={
+          `Todo o estoque da ${unidades.find((u) => u.id === origem)?.name} vai para a ` +
+          `${unidades.find((u) => u.id === destino)?.name} de uma vez. O que estiver separado numa ` +
+          `retirada fica onde está. Dá para desfazer depois, cancelando cada transferência.`
+        }
+        confirmLabel="Levar tudo"
+        cancelLabel="Voltar"
+        loading={transferirTudo.isPending}
+        onCancel={() => setLevandoTudo(false)}
+        onConfirm={async () => {
+          try {
+            const r = await transferirTudo.mutateAsync({
+              originUnitId: origem,
+              destinationUnitId: destino,
+              notes: form.notes.trim() || null,
+            });
+            toast.success('Remessa concluída', r.message);
+            setItens([]);
+            setLevandoTudo(false);
+          } catch (erro) {
+            toast.error('Não foi possível transferir', erro instanceof Error ? erro.message : undefined);
+          }
+        }}
+      />
     </Card>
   );
 }

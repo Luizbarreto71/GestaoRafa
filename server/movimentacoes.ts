@@ -266,6 +266,169 @@ rotasMovimentacoes.post(
   }),
 );
 
+/**
+ * Leva tudo de uma unidade para outra.
+ *
+ * Existe porque a alternativa é escolher sessenta produtos um a um. Feito
+ * em lote de propósito: transferir peça por peça seriam centenas de idas
+ * ao banco, e a função da nuvem desiste antes do fim.
+ */
+rotasMovimentacoes.post(
+  '/transferencia-total',
+  exigir('estoque.movimentar'),
+  rota(async (req, res) => {
+    const dados = validar(
+      z.object({
+        originUnitId: z.string().uuid('Selecione a unidade de origem'),
+        destinationUnitId: z.string().uuid('Selecione a unidade de destino'),
+        notes: z.string().trim().max(1000).optional().nullable(),
+      }),
+      req.body,
+    );
+
+    if (dados.originUnitId === dados.destinationUnitId) {
+      throw new AppError('A unidade de origem e a de destino precisam ser diferentes.');
+    }
+    exigirAcessoNaUnidade(req.usuario, dados.originUnitId);
+
+    const [origem, destino] = await Promise.all([
+      db.unit.findUnique({ where: { id: dados.originUnitId }, select: { name: true } }),
+      db.unit.findUnique({ where: { id: dados.destinationUnitId }, select: { name: true } }),
+    ]);
+    if (!origem || !destino) throw new AppError('Unidade não encontrada', 404);
+
+    const resultado = await db.$transaction(async (tx) => {
+      const naOrigem = await tx.stock.findMany({
+        where: { unitId: dados.originUnitId, quantity: { gt: 0 } },
+        select: { productId: true, quantity: true, product: { select: { name: true } } },
+      });
+
+      if (!naOrigem.length) return { movidos: 0, pecas: 0, reservados: [] as string[] };
+
+      // O que está separado numa retirada não pode viajar: alguém já
+      // contou com aquela peça na loja.
+      const reservas = await tx.stockWithdrawal.groupBy({
+        by: ['productId'],
+        where: { unitId: dados.originUnitId, status: 'PENDENTE' },
+        _sum: { quantity: true },
+      });
+      const reservado = new Map(reservas.map((r) => [r.productId, r._sum.quantity ?? 0]));
+
+      const vao = naOrigem
+        .map((l) => ({
+          productId: l.productId,
+          nome: l.product.name,
+          tinha: l.quantity,
+          leva: l.quantity - (reservado.get(l.productId) ?? 0),
+        }))
+        .filter((l) => l.leva > 0);
+
+      const ficaram = naOrigem
+        .filter((l) => (reservado.get(l.productId) ?? 0) > 0)
+        .map((l) => l.product.name);
+
+      if (!vao.length) return { movidos: 0, pecas: 0, reservados: ficaram };
+
+      const ids = vao.map((l) => l.productId);
+      const noDestino = new Map(
+        (
+          await tx.stock.findMany({
+            where: { unitId: dados.destinationUnitId, productId: { in: ids } },
+            select: { productId: true, quantity: true },
+          })
+        ).map((l) => [l.productId, l.quantity]),
+      );
+
+      // Tudo em poucas consultas: uma por operação, não uma por produto.
+      for (const l of vao) {
+        await tx.stock.update({
+          where: { productId_unitId: { productId: l.productId, unitId: dados.originUnitId } },
+          data: { quantity: l.tinha - l.leva },
+        });
+        await tx.stock.upsert({
+          where: { productId_unitId: { productId: l.productId, unitId: dados.destinationUnitId } },
+          update: { quantity: (noDestino.get(l.productId) ?? 0) + l.leva },
+          create: { productId: l.productId, unitId: dados.destinationUnitId, quantity: l.leva },
+        });
+      }
+
+      const observacao =
+        `Remessa total da ${origem.name} para a ${destino.name}` + (dados.notes ? ` · ${dados.notes}` : '');
+
+      await tx.stockMovement.createMany({
+        data: vao.flatMap((l) => [
+          {
+            type: 'TRANSFERENCIA' as const,
+            reason: 'TRANSFERENCIA' as const,
+            quantity: l.leva,
+            previousQuantity: l.tinha,
+            newQuantity: l.tinha - l.leva,
+            productId: l.productId,
+            productName: l.nome,
+            unitId: dados.originUnitId,
+            originUnitId: dados.originUnitId,
+            destinationUnitId: dados.destinationUnitId,
+            notes: observacao,
+            userId: req.usuario?.id ?? null,
+          },
+          {
+            type: 'TRANSFERENCIA' as const,
+            reason: 'TRANSFERENCIA' as const,
+            quantity: l.leva,
+            previousQuantity: noDestino.get(l.productId) ?? 0,
+            newQuantity: (noDestino.get(l.productId) ?? 0) + l.leva,
+            productId: l.productId,
+            productName: l.nome,
+            unitId: dados.destinationUnitId,
+            originUnitId: dados.originUnitId,
+            destinationUnitId: dados.destinationUnitId,
+            notes: observacao,
+            userId: req.usuario?.id ?? null,
+          },
+        ]),
+      });
+
+      await tx.stockTransfer.createMany({
+        data: vao.map((l) => ({
+          productId: l.productId,
+          originUnitId: dados.originUnitId,
+          destinationUnitId: dados.destinationUnitId,
+          quantity: l.leva,
+          status: 'RECEBIDA' as const,
+          receivedAt: new Date(),
+          notes: observacao,
+          requestedById: req.usuario?.id ?? null,
+          receivedById: req.usuario?.id ?? null,
+        })),
+      });
+
+      return {
+        movidos: vao.length,
+        pecas: vao.reduce((s, l) => s + l.leva, 0),
+        reservados: ficaram,
+      };
+    });
+
+    await registrarLog({
+      acao: 'TRANSFERENCIA_TOTAL',
+      entidade: 'Unit',
+      id: dados.originUnitId,
+      alteracoes: { de: origem.name, para: destino.name, ...resultado },
+      req,
+    });
+
+    res.status(201).json({
+      ...resultado,
+      message: resultado.movidos
+        ? `${resultado.movidos} produto(s) · ${resultado.pecas} peça(s) da ${origem.name} para a ${destino.name}.` +
+          (resultado.reservados.length
+            ? ` ${resultado.reservados.length} item(ns) ficaram: estão separados numa retirada.`
+            : '')
+        : `A ${origem.name} não tem estoque para transferir.`,
+    });
+  }),
+);
+
 const filtroTransferencias = z.object({
   page: z.coerce.number().int().min(1).optional(),
   pageSize: z.coerce.number().int().min(1).max(200).optional(),

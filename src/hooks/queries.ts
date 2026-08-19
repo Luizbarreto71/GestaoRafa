@@ -444,7 +444,9 @@ export function useRetirada(acao: 'criar' | 'aprovar' | 'cancelar') {
 }
 
 /** Entrada, saída, transferência e ajuste — todas mexem no estoque. */
-export function useMovimentarEstoque(acao: 'entrada' | 'saida' | 'transferir' | 'ajustar') {
+export function useMovimentarEstoque(
+  acao: 'entrada' | 'saida' | 'transferir' | 'transferirTudo' | 'ajustar',
+) {
   const queryClient = useQueryClient();
 
   return useMutation<{ message: string; antes?: number; depois?: number }, Error, Record<string, unknown>>({

@@ -126,6 +126,15 @@ export const movementService = {
   transferir: (data: Record<string, unknown>) =>
     api.post<{ message: string }>('/movements/transferencia', data).then((r) => r.data),
 
+  /** Leva tudo o que uma unidade tem para outra, de uma vez. */
+  transferirTudo: (data: Record<string, unknown>) =>
+    api
+      .post<{ message: string; movidos: number; pecas: number; reservados: string[] }>(
+        '/movements/transferencia-total',
+        data,
+      )
+      .then((r) => r.data),
+
   ajustar: (data: Record<string, unknown>) =>
     api.post<{ message: string }>('/movements/ajuste', data).then((r) => r.data),
 
