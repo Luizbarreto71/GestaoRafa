@@ -5,7 +5,8 @@ import { autenticar, somenteAdmin } from './auth';
 import { AppError, contem, limpar, naoEncontrado, ordenar, paginacao, paginado, rota, validar, semVazios } from './core';
 import { db, registrarLog } from './db';
 import { exigir } from './permissoes';
-import { comAsFilhas, estoqueBaixo, movimentar, saldosDoProduto } from './estoque';
+import { comAsFilhas, estoqueBaixo, movimentar, saldo, saldosDoProduto } from './estoque';
+import { unidadeDeVenda } from './sistema';
 import { exigirAcessoNaUnidade, unidadePermitida } from './unidades';
 
 /** Cadastro, busca, edição, ajuste de estoque e exclusão de produtos. */
@@ -450,12 +451,7 @@ rotasProdutos.put(
   '/:id',
   exigir('produtos.editar'),
   rota(async (req, res) => {
-    // `quantity` é ignorada de propósito: mexer no estoque é papel da tela
-    // de Movimentação, que registra unidade, motivo e responsável.
-    const { photos, reason, quantity: _ignorada, unitId: _tambem, ...dados } = validar(
-      alterarSchema,
-      req.body,
-    );
+    const { photos, reason, quantity, unitId, ...dados } = validar(alterarSchema, req.body);
 
     const atual = await db.product.findUnique({ where: { id: req.params.id }, include: COM_RELACOES });
     if (!atual) throw naoEncontrado('Produto');
@@ -486,14 +482,62 @@ rotasProdutos.put(
       });
     });
 
+    /**
+     * Mudou a quantidade no cadastro? Vira um ajuste de estoque.
+     *
+     * Antes o campo era descartado em silêncio: quem corrigia uma contagem
+     * salvava, via "produto atualizado" e o número continuava o mesmo. O
+     * ajuste entra como movimentação — com unidade, motivo e responsável —
+     * porque estoque que muda sem deixar rastro é estoque que ninguém
+     * consegue conferir depois.
+     */
+    let ajuste: { antes: number; depois: number; unidade: string } | null = null;
+
+    if (quantity !== undefined) {
+      const unidade = unitId ?? req.usuario?.unidadeId ?? (await unidadeDeVenda())?.id;
+      if (!unidade) throw new AppError('Escolha a unidade onde a quantidade será corrigida.');
+
+      const antes = await saldo(produto.id, unidade);
+      const diferenca = quantity - antes;
+
+      if (diferenca !== 0) {
+        const nomeDaUnidade =
+          (await db.unit.findUnique({ where: { id: unidade }, select: { name: true } }))?.name ?? 'unidade';
+
+        await movimentar({
+          produtoId: produto.id,
+          produtoNome: produto.name,
+          unidadeId: unidade,
+          tipo: diferenca > 0 ? 'ENTRADA' : 'SAIDA',
+          motivo: 'AJUSTE',
+          quantidade: Math.abs(diferenca),
+          observacao: reason?.trim() || `Quantidade corrigida no cadastro: ${antes} → ${quantity}`,
+          usuarioId: req.usuario?.id,
+          usuarioNome: req.usuario?.nome,
+        });
+
+        ajuste = { antes, depois: quantity, unidade: nomeDaUnidade };
+      }
+    }
+
     await registrarLog({
       acao: 'UPDATE',
       entidade: 'Product',
       id: produto.id,
-      alteracoes: { motivo: reason },
+      alteracoes: { motivo: reason, ...(ajuste ? { estoque: ajuste } : {}) },
       req,
     });
-    res.json(formatar(produto));
+
+    const completo = ajuste
+      ? await db.product.findUnique({ where: { id: produto.id }, include: COM_RELACOES })
+      : produto;
+
+    res.json({
+      ...formatar(completo!),
+      ...(ajuste
+        ? { message: `Estoque da ${ajuste.unidade}: ${ajuste.antes} → ${ajuste.depois}.` }
+        : {}),
+    });
   }),
 );
 

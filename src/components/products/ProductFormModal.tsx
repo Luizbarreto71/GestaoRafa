@@ -72,6 +72,16 @@ export function ProductFormModal({ open, onClose, product }: ProductFormModalPro
 
     if (product) {
       setCategoriaId(product.categoryId);
+
+      // A prateleira que está sendo conferida: a do filtro em que a pessoa
+      // está, a do próprio usuário, ou a primeira que tem peça. Mostrar o
+      // total de todas as unidades num campo editável faria a correção de
+      // uma prateleira virar o número de todas.
+      const daPessoa = unidadeId ?? user?.unitId ?? null;
+      const comEstoque = product.stock?.find((x) => x.quantity > 0)?.unitId;
+      const escolhida = daPessoa ?? comEstoque ?? product.stock?.[0]?.unitId ?? unidades[0]?.id ?? '';
+      setUnidadeDestino(escolhida);
+
       setValores({
         ...VAZIO,
         nome: product.name,
@@ -83,7 +93,7 @@ export function ProductFormModal({ open, onClose, product }: ProductFormModalPro
         imei: product.imei ?? '',
         serie: product.serialNumber ?? '',
         codigo: product.barcode ?? '',
-        quantidade: String(product.quantity),
+        quantidade: String(product.stock?.find((x) => x.unitId === escolhida)?.quantity ?? product.quantity),
         minimo: String(product.minQuantity),
         custo: String(product.costPrice),
         venda: String(product.salePrice),
@@ -192,8 +202,9 @@ export function ProductFormModal({ open, onClose, product }: ProductFormModalPro
       notes: seVisivel('observacoes', valores.observacoes),
       supplierId: mostra('fornecedor') ? valores.fornecedor || null : null,
       quantity: Number(valores.quantidade) || 0,
-      // Só no cadastro: a edição não mexe em estoque, tem tela própria.
-      unitId: editando ? undefined : unidadeDestino || undefined,
+      // Também na edição: corrigir a contagem aqui vira um ajuste de
+      // estoque, e ajuste sem unidade não diz de qual prateleira é.
+      unitId: unidadeDestino || undefined,
       minQuantity: mostra('minimo') ? Number(valores.minimo) || 0 : 1,
       costPrice: Number(valores.custo) || 0,
       salePrice: Number(valores.venda) || 0,
@@ -367,6 +378,8 @@ export function ProductFormModal({ open, onClose, product }: ProductFormModalPro
 
   const salvando = criarProduto.isPending || atualizarProduto.isPending;
   const quantidadeInformada = Number(valores.quantidade) || 0;
+  const saldoAtualNaUnidade =
+    product?.stock?.find((x) => x.unitId === unidadeDestino)?.quantity ?? 0;
 
   return (
     <>
@@ -415,19 +428,37 @@ export function ProductFormModal({ open, onClose, product }: ProductFormModalPro
               }
             />
 
-            {/* Com uma unidade só não há escolha a fazer. Na edição o estoque
-                não se mexe por aqui: quem move é a tela de movimentação. */}
-            {!editando && unidades.length > 1 && (
+            {/* Com uma unidade só não há escolha a fazer. Na edição, a
+                quantidade corrige a contagem de uma prateleira — e sem
+                dizer qual, o ajuste não significa nada. */}
+            {unidades.length > 1 && (
               <Select
-                label="Entra no estoque de"
+                label={editando ? 'Quantidade é a de qual estoque' : 'Entra no estoque de'}
                 required
                 value={unidadeDestino}
-                onChange={(e) => setUnidadeDestino(e.target.value)}
-                options={unidades.map((u) => ({ value: u.id, label: u.name }))}
+                onChange={(e) => {
+                  setUnidadeDestino(e.target.value);
+                  // Trocar de prateleira troca o número: senão a contagem
+                  // de uma unidade seria salva como a da outra.
+                  if (editando && product) {
+                    const saldoLa = product.stock?.find((x) => x.unitId === e.target.value)?.quantity ?? 0;
+                    definir('quantidade')(String(saldoLa));
+                  }
+                }}
+                options={unidades.map((u) => ({
+                  value: u.id,
+                  label: editando
+                    ? `${u.name} — ${product?.stock?.find((x) => x.unitId === u.id)?.quantity ?? 0} hoje`
+                    : u.name,
+                }))}
                 hint={
-                  quantidadeInformada > 0
-                    ? `${quantidadeInformada} un. entram nesta unidade`
-                    : 'Sem quantidade, nada entra em lugar nenhum'
+                  editando
+                    ? saldoAtualNaUnidade !== quantidadeInformada
+                      ? `Vai ajustar de ${saldoAtualNaUnidade} para ${quantidadeInformada}`
+                      : 'Mude a quantidade para corrigir a contagem'
+                    : quantidadeInformada > 0
+                      ? `${quantidadeInformada} un. entram nesta unidade`
+                      : 'Sem quantidade, nada entra em lugar nenhum'
                 }
               />
             )}
